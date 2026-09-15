@@ -1,0 +1,59 @@
+# Django & Core
+Django>=5.2,<5.3
+djangorestframework>=3.16,<3.17
+django-cors-headers>=4.7,<5
+drf-spectacular>=0.28,<0.29
+dj-database-url>=2.3,<3
+psycopg[binary]>=3.2,<4
+
+# Authentication & Security
+PyJWT[crypto]>=2.10,<3
+
+# Async & Background Tasks
+redis>=5.2,<7
+celery[redis]>=5.5,<6
+
+# Event Streaming
+confluent-kafka>=2.8,<4
+
+# Storage & Media
+cloudinary>=1.42,<2
+
+# Monitoring & Observability
+sentry-sdk[django]>=2.20,<3
+
+# Production Server
+gunicorn>=23,<24
+uvicorn[standard]>=0.34,<1
+whitenoise>=6.9,<7
+
+# AI Providers
+openai>=1.40,<2
+anthropic>=0.35,<1
+google-generativeai>=0.8,<1
+cohere>=5.0,<6
+
+# Vector Database (Supabase pgvector)
+pgvector>=0.3.6,<0.4
+
+# Payments (Stripe)
+stripe>=8.0,<9
+
+# Document Processing
+python-docx>=1.1,<2
+pypdf>=4.0,<5
+markdown>=3.6,<4
+weasyprint>=61,<62
+pydyf==0.8.0
+
+# Image Processing
+Pillow>=10.0,<11
+
+# Utilities
+python-multipart>=0.0.9,<1
+httpx>=0.27,<1
+tenacity>=8.2,<9
+structlog>=24.0,<25
+
+# AI Provider (placeholder)
+# Add your AI provider SDK here
