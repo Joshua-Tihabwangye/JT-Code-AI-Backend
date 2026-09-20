@@ -1,4 +1,5 @@
 from config.settings.base import *  # noqa: F403
+from config.settings.validation import validate_settings
 
 DEBUG = False
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
@@ -13,7 +14,7 @@ SUPABASE_JWT_SECRET = 'test-jwt-secret'
 SUPABASE_JWT_AUDIENCE = 'authenticated'
 SUPABASE_JWT_ISSUER = ''
 SUPABASE_URL = ''
-SUPABASE_WEBHOOK_SIGNING_SECRET = env('SUPABASE_WEBHOOK_SIGNING_SECRET', '')
+SUPABASE_WEBHOOK_SIGNING_SECRET = env('SUPABASE_WEBHOOK_SIGNING_SECRET', '')  # noqa: F405
 
 # Deterministic, offline embedding provider for the test suite. The pgvector
 # store itself is Postgres-only and unavailable on the SQLite test database.
@@ -21,3 +22,5 @@ RAG_EMBEDDING_PROVIDER = 'echo'
 
 # Deterministic offline chat backend for the test suite (no SDK/key required).
 AI_PROVIDER = 'echo'
+
+validate_settings('test')

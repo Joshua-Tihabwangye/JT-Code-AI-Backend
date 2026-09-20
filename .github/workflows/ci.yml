@@ -39,3 +39,6 @@ jobs:
       - run: ruff format --check .
       - run: python manage.py makemigrations --check --dry-run --settings=config.settings.test
       - run: pytest --cov=apps --cov=config
+      - run: bandit -r . --exclude tests/ -x --quiet 2>/dev/null || true
+      - run: pip install safety
+      - run: safety check --full-report 2>/dev/null || true
