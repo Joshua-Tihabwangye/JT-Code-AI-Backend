@@ -16,6 +16,7 @@ class Provider(models.Model):
         REPLICATE = 'replicate', 'Replicate'
         HUGGINGFACE = 'huggingface', 'HuggingFace'
         OLLAMA = 'ollama', 'Ollama (Local)'
+        ECHO = 'echo', 'Echo (Development)'
         CUSTOM = 'custom', 'Custom'
 
     class Status(models.TextChoices):
@@ -124,11 +125,7 @@ class ModelPolicy(models.Model):
     routing_strategy = models.CharField(
         max_length=30, choices=RoutingStrategy.choices, default=RoutingStrategy.BALANCED
     )
-    primary_model = models.ForeignKey(
-        Model,
-        on_delete=models.PROTECT,
-        related_name='primary_policies'
-    )
+    primary_model = models.ForeignKey(Model, on_delete=models.PROTECT, related_name='primary_policies')
     fallback_models = models.ManyToManyField(Model, related_name='fallback_policies', blank=True)
     fallback_policy = models.CharField(
         max_length=20, choices=FallbackPolicy.choices, default=FallbackPolicy.CHEAPER
@@ -228,10 +225,7 @@ class Prompt(models.Model):
     tags = models.JSONField(default=list, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
-        'identity.User',
-        on_delete=models.SET_NULL,
-        related_name='created_prompts',
-        null=True
+        'identity.User', on_delete=models.SET_NULL, related_name='created_prompts', null=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -276,10 +270,7 @@ class Evaluation(models.Model):
     run_id = models.CharField(max_length=100, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
-        'identity.User',
-        on_delete=models.SET_NULL,
-        related_name='created_evaluations',
-        null=True
+        'identity.User', on_delete=models.SET_NULL, related_name='created_evaluations', null=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

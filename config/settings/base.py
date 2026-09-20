@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'apps.governance',
     'apps.integrations',
     'apps.ai_gateway',
+    'apps.agents',
     'apps.documents',
     'apps.conversions',
 ]
@@ -214,6 +215,9 @@ AI_GATEWAY_DEFAULT_POLICY = env('AI_GATEWAY_DEFAULT_POLICY', 'balanced')
 AI_GATEWAY_MAX_COST_USD = env_float('AI_GATEWAY_MAX_COST_USD', 10.0)
 AI_GATEWAY_MAX_LATENCY_MS = int(env('AI_GATEWAY_MAX_LATENCY_MS', '30000'))
 AI_GATEWAY_FALLBACK_ENABLED = env_bool('AI_GATEWAY_FALLBACK_ENABLED', True)
+
+# Agent Runtime
+AGENT_MAX_ITERATIONS = int(env('AGENT_MAX_ITERATIONS', '6'))
 
 # Billing
 BILLING_CREDIT_VALUE_USD = env_float('BILLING_CREDIT_VALUE_USD', 0.01)

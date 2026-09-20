@@ -183,6 +183,7 @@ See `.env.example` for all available variables. Key variables:
 | `RAG_EMBEDDING_PROVIDER` | `openai`, `gemini` or `echo` (offline dev/test) | No (default: openai) |
 | `RAG_EMBEDDING_MODEL` | Embedding model name for OpenAI | No |
 | `OPENAI_API_KEY` / `GEMINI_API_KEY` | Embedding provider credential (server-side) | No |
+| `AGENT_MAX_ITERATIONS` | Max model turns per `SEARCH_RESEARCH` agent run | No (default: 6) |
 
 ## Key Features
 
@@ -200,6 +201,20 @@ See `.env.example` for all available variables. Key variables:
 - Domain events written to `OutboxEvent` in same DB transaction
 - Celery Beat publishes outbox events to Kafka every 2 seconds
 - Consumers should use idempotent handlers and commit offsets after processing
+
+### AI Gateway & AI Job Execution
+- `POST /api/v1/completion/` accepts `task_type`, `messages`, `model_id`/`policy_slug` and returns a queued `Job`; the job is executed internally by Celery (`apps.jobs.executor`), superseding the n8n placeholder for `GENERAL_QUESTION` and `RAG_QUERY`.
+- Normalized provider adapters in `apps/ai_gateway/adapters.py` (OpenAI / Gemini / deterministic `echo` when `AI_PROVIDER=echo`); routing and fallback driven by `ModelPolicy` in `apps/ai_gateway/service.py`.
+- Every generation records a `ModelRun` with token usage, estimated USD cost, latency and fallback metadata; completion/failure emit `jobs.job.completed` / `jobs.job.failed` outbox events.
+- Data migration seeds default providers (`google-gemini`, `openai`, `echo`), models and `GENERAL_QUESTION`/`RAG_QUERY` policies plus a `SEARCH_RESEARCH` policy for the agent runtime; add/override providers and policies via the admin or seed data.
+- ``RAG_QUERY`` jobs answer grounded questions: tenant-scoped pgvector retrieval is injected as context for the model, and results include `sources` + `grounded`.
+
+### Agent Runtime (LangGraph)
+- `SEARCH_RESEARCH` jobs run a multi-step ReAct agent (`apps.agents.runtime.run_agent`) over a state graph (`call_model` → route → `execute_tools` → `call_model`) until the model stops calling tools or `AGENT_MAX_ITERATIONS` is reached.
+- Tools are registered in `apps/agents/tools.py` (`knowledge.search` org-scoped pgvector search, `system.now`, `identity.whoami`); `default_agent_tools()` and per-job tool whitelists control what a run may call.
+- The agent calls the model through the AI gateway (`generate_completion` + `ModelPolicy`), so routing, fallback and `ModelRun` metering apply per agent turn too.
+- `iter_agent` streams intermediate state updates (then a final `summary` event) and is the base for future SSE streaming; `run_agent` drains it into a summary `AgentRun` (final answer, `invoked_tools`, `model_runs`, token usage).
+- Results include the answer, invoked tool names, serialized transcript and a `grounded` flag (true when `knowledge.search` was invoked).
 
 ### Agentic RAG (Supabase pgvector)
 - Vector store is Supabase PostgreSQL (pgvector); the `knowledge.0003_add_pgvector_embeddings` migration enables the `vector` extension and an HNSW cosine index on PostgreSQL (no-op on SQLite).

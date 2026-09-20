@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -19,9 +21,12 @@ from apps.ai_gateway.serializers import (
     PromptSerializer,
     ProviderSerializer,
 )
+from apps.ai_gateway.service import ModelSelectionError, select_model
 from apps.core.throttling import BurstThrottle, EmbeddingThrottle
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
+from apps.jobs.models import Job, WorkflowRun
+from apps.jobs.tasks import execute_job_task
 
 
 class ProviderViewSet(viewsets.ReadOnlyModelViewSet):
@@ -40,8 +45,7 @@ class ModelViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = Model.objects.filter(
-            status__in=[Model.Status.ACTIVE, Model.Status.BETA],
-            provider__status=Provider.Status.ACTIVE
+            status__in=[Model.Status.ACTIVE, Model.Status.BETA], provider__status=Provider.Status.ACTIVE
         ).select_related('provider')
 
         # Filter by modality
@@ -87,18 +91,19 @@ class ModelPolicyViewSet(viewsets.ModelViewSet):
         if not task_type:
             return Response({'detail': 'task_type parameter required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        policy = ModelPolicy.objects.filter(
-            task_type=task_type,
-            is_active=True,
-            is_default=True
-        ).select_related('primary_model', 'primary_model__provider').first()
+        policy = (
+            ModelPolicy.objects.filter(task_type=task_type, is_active=True, is_default=True)
+            .select_related('primary_model', 'primary_model__provider')
+            .first()
+        )
 
         if not policy:
             # Fallback to any active policy for task type
-            policy = ModelPolicy.objects.filter(
-                task_type=task_type,
-                is_active=True
-            ).select_related('primary_model', 'primary_model__provider').first()
+            policy = (
+                ModelPolicy.objects.filter(task_type=task_type, is_active=True)
+                .select_related('primary_model', 'primary_model__provider')
+                .first()
+            )
 
         if not policy:
             return Response({'detail': 'No policy found for task type'}, status=status.HTTP_404_NOT_FOUND)
@@ -115,10 +120,11 @@ class ModelRunViewSet(viewsets.ReadOnlyModelViewSet):
         user_orgs = self.request.user.organizations.values_list('id', flat=True)
         # Model runs are linked to jobs which have organization
         from apps.jobs.models import Job
+
         job_ids = Job.objects.filter(organization_id__in=user_orgs).values_list('id', flat=True)
-        return ModelRun.objects.filter(
-            Q(job_id__in=job_ids) | Q(request_id__in=[])
-        ).select_related('provider', 'model', 'policy')
+        return ModelRun.objects.filter(Q(job_id__in=job_ids) | Q(request_id__in=[])).select_related(
+            'provider', 'model', 'policy'
+        )
 
 
 class PromptViewSet(viewsets.ModelViewSet):
@@ -184,7 +190,7 @@ class EvaluationViewSet(viewsets.ModelViewSet):
                 'dataset_name': evaluation.dataset_name,
                 'dataset_version': evaluation.dataset_version,
             },
-            headers={'trace_id': f'eval-{evaluation.id}'}
+            headers={'trace_id': f'eval-{evaluation.id}'},
         )
 
         return Response({'detail': 'Evaluation started'})
@@ -192,6 +198,7 @@ class EvaluationViewSet(viewsets.ModelViewSet):
 
 class CompletionView(APIView):
     """AI completion endpoint - routes to appropriate model based on policy"""
+
     permission_classes = [IsAuthenticated]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
@@ -208,40 +215,25 @@ class CompletionView(APIView):
         if not messages:
             return Response({'detail': 'messages required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Determine model to use
-        if model_id:
-            try:
-                model = Model.objects.get(id=model_id, status__in=[Model.Status.ACTIVE, Model.Status.BETA])
-            except Model.DoesNotExist:
-                return Response({'detail': 'Model not found'}, status=status.HTTP_404_NOT_FOUND)
-        else:
-            # Use policy routing
-            if policy_slug:
-                try:
-                    policy = ModelPolicy.objects.get(slug=policy_slug, is_active=True)
-                except ModelPolicy.DoesNotExist:
-                    return Response({'detail': 'Policy not found'}, status=status.HTTP_404_NOT_FOUND)
-            else:
-                policy = ModelPolicy.objects.filter(
-                    task_type=task_type,
-                    is_active=True,
-                    is_default=True
-                ).first()
+        try:
+            model, policy = select_model(
+                task_type=task_type,
+                model_id=model_id,
+                policy_slug=policy_slug,
+            )
+        except ModelSelectionError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_404_NOT_FOUND)
 
-            if not policy:
-                return Response({'detail': 'No policy found for task type'}, status=status.HTTP_404_NOT_FOUND)
-
-            model = policy.primary_model
-
-        # Create job for completion
-        from apps.jobs.models import Job
         job = Job.objects.create(
             owner=request.user,
             organization=request.user.organizations.first(),
             task_type=task_type,
+            trace_id=getattr(request, 'trace_id', '') or f'job-{uuid.uuid4().hex}',
             input_payload={
                 'messages': messages,
                 'model': model.name,
+                'model_id': str(model.id) if model_id else None,
+                'policy_slug': policy_slug,
                 'temperature': temperature,
                 'max_tokens': max_tokens,
                 'tools': tools,
@@ -249,22 +241,45 @@ class CompletionView(APIView):
             },
         )
 
-        # Reserve credits and enqueue
         from apps.jobs.views import JobViewSet
-        viewset = JobViewSet()
-        viewset._reserve_credits(job)
-        viewset._enqueue_job(job)
 
-        return Response({
-            'job_id': str(job.id),
-            'request_id': str(job.request_id),
-            'status': 'queued',
-            'model': model.name,
-        }, status=status.HTTP_202_ACCEPTED)
+        viewset = JobViewSet()
+        viewset.request = request
+        viewset._reserve_credits(job)
+
+        WorkflowRun.objects.create(
+            job=job,
+            n8n_workflow_id='ai-agent',
+            input_payload=job.input_payload,
+        )
+        enqueue_outbox_event(
+            topic='ai_gateway.job.created',
+            event_key=str(job.request_id),
+            payload={
+                'job_id': str(job.id),
+                'request_id': str(job.request_id),
+                'task_type': job.task_type,
+                'model': model.name,
+                'policy': policy.slug if policy else None,
+            },
+            headers={'trace_id': job.trace_id},
+        )
+        execute_job_task.delay(str(job.id))
+
+        return Response(
+            {
+                'job_id': str(job.id),
+                'request_id': str(job.request_id),
+                'status': 'queued',
+                'model': model.name,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class EmbeddingView(APIView):
     """Generate embeddings for text"""
+
     permission_classes = [IsAuthenticated]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
@@ -284,17 +299,18 @@ class EmbeddingView(APIView):
             model = Model.objects.filter(
                 modality=Model.Modality.EMBEDDING,
                 status=Model.Status.ACTIVE,
-                provider__status=Provider.Status.ACTIVE
+                provider__status=Provider.Status.ACTIVE,
             ).first()
 
         if not model:
             return Response(
-            {'detail': 'No embedding model available'},
-            status=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
+                {'detail': 'No embedding model available'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         # Create job for embedding
         from apps.jobs.models import Job
+
         job = Job.objects.create(
             owner=request.user,
             organization=request.user.organizations.first(),
@@ -306,19 +322,24 @@ class EmbeddingView(APIView):
         )
 
         from apps.jobs.views import JobViewSet
+
         viewset = JobViewSet()
         viewset._reserve_credits(job)
         viewset._enqueue_job(job)
 
-        return Response({
-            'job_id': str(job.id),
-            'request_id': str(job.request_id),
-            'status': 'queued',
-        }, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {
+                'job_id': str(job.id),
+                'request_id': str(job.request_id),
+                'status': 'queued',
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class AIModelsView(APIView):
     """List available models for current user's plan"""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
@@ -328,19 +349,25 @@ class AIModelsView(APIView):
 
         # Get user's plan
         from apps.billing.models import Subscription
-        subscription = Subscription.objects.filter(
-            organization__in=user_orgs,
-            status__in=[Subscription.Status.ACTIVE, Subscription.Status.TRIALING]
-        ).select_related('plan').first()
+
+        subscription = (
+            Subscription.objects.filter(
+                organization__in=user_orgs,
+                status__in=[Subscription.Status.ACTIVE, Subscription.Status.TRIALING],
+            )
+            .select_related('plan')
+            .first()
+        )
 
         # Filter models based on plan
         # This would check plan entitlements for custom models, etc.
         models = Model.objects.filter(
-            status__in=[Model.Status.ACTIVE, Model.Status.BETA],
-            provider__status=Provider.Status.ACTIVE
+            status__in=[Model.Status.ACTIVE, Model.Status.BETA], provider__status=Provider.Status.ACTIVE
         ).select_related('provider')
 
-        return Response({
-            'models': ModelListSerializer(models, many=True).data,
-            'plan': subscription.plan.name if subscription else 'free',
-        })
+        return Response(
+            {
+                'models': ModelListSerializer(models, many=True).data,
+                'plan': subscription.plan.name if subscription else 'free',
+            }
+        )

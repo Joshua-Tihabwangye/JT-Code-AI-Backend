@@ -18,3 +18,6 @@ SUPABASE_WEBHOOK_SIGNING_SECRET = env('SUPABASE_WEBHOOK_SIGNING_SECRET', '')
 # Deterministic, offline embedding provider for the test suite. The pgvector
 # store itself is Postgres-only and unavailable on the SQLite test database.
 RAG_EMBEDDING_PROVIDER = 'echo'
+
+# Deterministic offline chat backend for the test suite (no SDK/key required).
+AI_PROVIDER = 'echo'
