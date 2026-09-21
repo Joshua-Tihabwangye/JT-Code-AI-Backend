@@ -49,8 +49,12 @@ Canonical list (defaults in code, values in `.env.example`). Groups:
 **Authentication (Supabase):** `SUPABASE_URL`, `SUPABASE_JWT_SECRET`,
 `SUPABASE_JWT_AUDIENCE`, `SUPABASE_JWT_ISSUER`, `SUPABASE_WEBHOOK_SIGNING_SECRET`
 
-**Storage (assets):** `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
-`CLOUDINARY_API_SECRET`, `CLOUDINARY_UPLOAD_FOLDER`, `CLOUDINARY_MAX_UPLOAD_BYTES`
+**Storage (assets):** current runtime code still uses `CLOUDINARY_CLOUD_NAME`,
+`CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `CLOUDINARY_UPLOAD_FOLDER`,
+`CLOUDINARY_MAX_UPLOAD_BYTES`. ADR-002 freezes ImageKit as the approved target;
+`IMAGEKIT_PUBLIC_KEY`, `IMAGEKIT_PRIVATE_KEY` and `IMAGEKIT_ENDPOINT_URL` are
+documented in `.env.example` for Phase 11 migration work, but they are not yet
+runtime settings in Phase 0-3.
 
 **Redis/Celery:** `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 
@@ -144,8 +148,10 @@ Admin/schema/docs: `/admin/`, `/api/schema/`, `/api/docs/`.
 | Integration | Direction | Owner code |
 |-------------|-----------|------------|
 | Supabase Auth | verify JWT/JWKS, user webhook | `apps.identity` |
-| Supabase PostgreSQL (pgvector) | primary DB + vector store | `config` / `apps.knowledge` |
-| Cloudinary | asset bytes (ADR-002 deprecated, Phase 11 removal) | `apps.assets` |
+| Supabase PostgreSQL | primary relational database | `config.settings` |
+| Supabase PostgreSQL pgvector | active vector store; ADR-003 supersedes Pinecone | `apps.knowledge` |
+| Cloudinary | asset bytes, deprecated-active until Phase 11 | `apps.assets` |
+| ImageKit | approved target for asset bytes/CDN, not runtime-active yet | `apps.assets` |
 | Redis | cache + Celery transport | `config.settings` |
 | Kafka | outbox-published events | `apps.events` |
 | Celery / Celery Beat | background jobs + schedule | `config/celery.py` |

@@ -31,6 +31,16 @@ PostgreSQL instance the product already uses.
   dedicated vector database necessary again, a new ADR supersedes this one and
   Phase 10 must be re-run through the adapter boundary.
 
+### Backlog reconciliation
+
+The original Phase 0 backlog item names "Pinecone Agentic RAG architecture".
+This accepted ADR is the architecture freeze for the current repository: it
+intentionally replaces that target with Supabase PostgreSQL + pgvector. The
+Phase 0 exit criterion is therefore satisfied by documenting the decision,
+making the implementation matrix show `supabase_postgresql_pgvector` as active,
+and treating Pinecone as out of scope unless a future superseding ADR restores
+it.
+
 ## Consequences
 
 - **Positive:** single operational database; transactional integrity between
