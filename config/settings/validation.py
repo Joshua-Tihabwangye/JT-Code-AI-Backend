@@ -37,12 +37,21 @@ _PLACEHOLDER_SECRETS: tuple[str, ...] = (
 _REQUIRED_STRICT = (
     'DJANGO_SECRET_KEY',
     'DJANGO_ALLOWED_HOSTS',
+    'CORS_ALLOWED_ORIGINS',
+    'CSRF_TRUSTED_ORIGINS',
     'DATABASE_URL',
     'SUPABASE_URL',
     'SUPABASE_JWT_SECRET',
     'SUPABASE_JWT_ISSUER',
     'SUPABASE_JWT_AUDIENCE',
     'SUPABASE_WEBHOOK_SIGNING_SECRET',
+    'REDIS_URL',
+    'CELERY_BROKER_URL',
+    'CELERY_RESULT_BACKEND',
+    'KAFKA_BOOTSTRAP_SERVERS',
+    'CLOUDINARY_CLOUD_NAME',
+    'CLOUDINARY_API_KEY',
+    'CLOUDINARY_API_SECRET',
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
 )
@@ -56,6 +65,16 @@ _SECRET_ENV = (
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET',
     'CLOUDINARY_API_SECRET',
+    'IMAGEKIT_PRIVATE_KEY',
+    'EMAIL_HOST_PASSWORD',
+    'OPENAI_API_KEY',
+    'GEMINI_API_KEY',
+)
+
+_BOOL_ENV = (
+    'DJANGO_DEBUG',
+    'AI_GATEWAY_FALLBACK_ENABLED',
+    'PGVECTOR_ENABLED',
 )
 
 _INT_ENV = (
@@ -148,6 +167,14 @@ def _check_origin(problems: list[str], name: str) -> None:
             problems.append(f'{name} entry {origin!r} is not a valid origin URL.')
 
 
+def _check_bool(problems: list[str], name: str) -> None:
+    value = _val(name)
+    if value is None or value == '':
+        return
+    if value.lower() not in {'1', '0', 'true', 'false', 'yes', 'no', 'on', 'off'}:
+        problems.append(f'{name} must be a boolean value, got {value!r}.')
+
+
 def _check_placeholder(problems: list[str], name: str) -> None:
     value = _val(name)
     if value and any(placeholder in value.lower() for placeholder in _PLACEHOLDER_SECRETS):
@@ -172,6 +199,8 @@ def validate_environment(profile: str) -> list[str]:
         value = _val(name)
         if value and not _RATE_RE.match(value):
             problems.append(f'{name} does not match <count>/<period>, got {value!r}.')
+    for name in _BOOL_ENV:
+        _check_bool(problems, name)
     for name in _URL_ENV:
         _check_origin(problems, name)
 
@@ -199,6 +228,8 @@ def validate_environment(profile: str) -> list[str]:
     database_url = _val('DATABASE_URL', '')
     if database_url and not database_url.startswith(('postgres://', 'postgresql://')):
         problems.append('DATABASE_URL must be a PostgreSQL connection string.')
+    if profile == 'production' and database_url and 'sslmode=require' not in database_url:
+        problems.append('DATABASE_URL must include sslmode=require in production.')
 
     supabase_url = _val('SUPABASE_URL', '')
     issuer = _val('SUPABASE_JWT_ISSUER', '')
