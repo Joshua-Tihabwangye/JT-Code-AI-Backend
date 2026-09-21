@@ -19,55 +19,76 @@ from apps.conversations.serializers import (
 from apps.conversations.tasks import process_chat_request
 from apps.core.throttling import BurstThrottle, ChatThrottle
 from apps.events.outbox import add_outbox_event
+from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
-    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
     def get_queryset(self):
-        return Conversation.objects.filter(owner=self.request.user).order_by('-updated_at')
+        return tenant_scoped_queryset(
+            Conversation.objects.filter(owner=self.request.user),
+            self.request.user,
+        ).order_by("-updated_at")
+
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+        serializer.save(owner=self.request.user, organization=primary_organization_for_user(self.request.user))
+
 
 class ChatRequestViewSet(viewsets.GenericViewSet):
     serializer_class = ChatRequestSerializer
     throttle_classes = [ChatThrottle, BurstThrottle]
+
     def get_queryset(self):
-        return ChatRequest.objects.filter(owner=self.request.user).select_related('conversation')
+        return tenant_scoped_queryset(
+            ChatRequest.objects.filter(owner=self.request.user),
+            self.request.user,
+        ).select_related("conversation")
 
     def create(self, request: Request) -> Response:
         serializer = ChatRequestCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        conversation = Conversation.objects.filter(
-            id=serializer.validated_data['conversationId'], owner=request.user
+        conversation = tenant_scoped_queryset(
+            Conversation.objects.filter(id=serializer.validated_data["conversationId"], owner=request.user),
+            request.user,
         ).first()
         if not conversation:
-            return Response({'detail': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
-        idempotency_key = request.headers.get('Idempotency-Key')
+            return Response({"detail": "Conversation not found."}, status=status.HTTP_404_NOT_FOUND)
+        idempotency_key = request.headers.get("Idempotency-Key")
         if not idempotency_key:
             return Response(
-            {'detail': 'Idempotency-Key header is required.'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+                {"detail": "Idempotency-Key header is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             with transaction.atomic():
                 chat_request = ChatRequest.objects.create(
                     owner=request.user,
+                    organization=conversation.organization,
                     conversation=conversation,
                     idempotency_key=idempotency_key,
-                    input_text=serializer.validated_data['chatInput'],
-                    timezone=serializer.validated_data.get('timezone', ''),
-                    locale=serializer.validated_data.get('locale', ''),
-                    trace_id=getattr(request, 'trace_id', ''),
+                    input_text=serializer.validated_data["chatInput"],
+                    timezone=serializer.validated_data.get("timezone", ""),
+                    locale=serializer.validated_data.get("locale", ""),
+                    trace_id=getattr(request, "trace_id", ""),
                 )
                 Message.objects.create(
-                    conversation=conversation, role=Message.Role.USER,
+                    conversation=conversation,
+                    organization=conversation.organization,
+                    role=Message.Role.USER,
                     content=chat_request.input_text,
                 )
-                add_outbox_event('chat.request.accepted', str(chat_request.id), {
-                    'requestId': str(chat_request.id), 'conversationId': str(conversation.id),
-                    'userId': str(request.user.id), 'traceId': chat_request.trace_id,
-                })
+                add_outbox_event(
+                    "chat.request.accepted",
+                    str(chat_request.id),
+                    {
+                        "requestId": str(chat_request.id),
+                        "conversationId": str(conversation.id),
+                        "userId": str(request.user.id),
+                        "traceId": chat_request.trace_id,
+                    },
+                )
                 transaction.on_commit(lambda: process_chat_request.delay(str(chat_request.id)))
         except IntegrityError:
             chat_request = ChatRequest.objects.get(owner=request.user, idempotency_key=idempotency_key)
@@ -77,7 +98,7 @@ class ChatRequestViewSet(viewsets.GenericViewSet):
         item = self.get_object()
         return Response(ChatRequestSerializer(item).data)
 
-    @action(detail=True, methods=['get'], url_path='stream')
+    @action(detail=True, methods=["get"], url_path="stream")
     def stream(self, request: Request, pk=None):
         item = self.get_object()
         request_id = str(item.id)
@@ -93,29 +114,33 @@ class ChatRequestViewSet(viewsets.GenericViewSet):
                     yield 'event: failed\ndata: {"message":"Request not found."}\n\n'
                     return
                 if current.status != last_status or current.status in {
-                    ChatRequest.Status.COMPLETED, ChatRequest.Status.FAILED
+                    ChatRequest.Status.COMPLETED,
+                    ChatRequest.Status.FAILED,
                 }:
                     data = ChatRequestSerializer(current).data
                     event = (
-                        'completed' if current.status == ChatRequest.Status.COMPLETED
-                        else 'failed' if current.status == ChatRequest.Status.FAILED
-                        else 'status'
+                        "completed"
+                        if current.status == ChatRequest.Status.COMPLETED
+                        else "failed"
+                        if current.status == ChatRequest.Status.FAILED
+                        else "status"
                     )
-                    if event == 'failed' and current.error_code == 'AI_PROVIDER_NOT_CONFIGURED':
-                        data['message'] = 'JT-Code AI provider is not configured.'
-                    yield f'event: {event}\ndata: {json.dumps(data)}\n\n'
+                    if event == "failed" and current.error_code == "AI_PROVIDER_NOT_CONFIGURED":
+                        data["message"] = "JT-Code AI provider is not configured."
+                    yield f"event: {event}\ndata: {json.dumps(data)}\n\n"
                     last_status = current.status
                 if current.status in {
-                        ChatRequest.Status.COMPLETED, ChatRequest.Status.FAILED,
-                        ChatRequest.Status.CANCELLED
-                    }:
+                    ChatRequest.Status.COMPLETED,
+                    ChatRequest.Status.FAILED,
+                    ChatRequest.Status.CANCELLED,
+                }:
                     return
-                yield 'event: heartbeat\ndata: {}\n\n'
+                yield "event: heartbeat\ndata: {}\n\n"
                 time.sleep(1)
             payload = '{"message":"Streaming window expired; poll the request endpoint."}'
-            yield f'event: failed\ndata: {payload}\n\n'
+            yield f"event: failed\ndata: {payload}\n\n"
 
-        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
-        response['Cache-Control'] = 'no-cache'
-        response['X-Accel-Buffering'] = 'no'
+        response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
         return response

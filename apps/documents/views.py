@@ -21,21 +21,22 @@ from apps.documents.serializers import (
     DocumentSerializer,
 )
 from apps.events.outbox import add_outbox_event
+from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
 
-RENDER_ROOT = Path(settings.BASE_DIR) / 'rendered_documents'
+RENDER_ROOT = Path(settings.BASE_DIR) / "rendered_documents"
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = DocumentSerializer
-    lookup_field = 'id'
-    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    lookup_field = "id"
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        return Document.objects.filter(owner=self.request.user)
+        return tenant_scoped_queryset(Document.objects.filter(owner=self.request.user), self.request.user)
 
     def get_serializer_class(self):
-        if self.action == 'create':
+        if self.action == "create":
             return DocumentCreateSerializer
         return DocumentSerializer
 
@@ -44,23 +45,23 @@ class DocumentViewSet(viewsets.ModelViewSet):
         create_serializer.is_valid(raise_exception=True)
         document = create_serializer.save(
             owner=request.user,
-            organization=request.user.organizations.first(),
+            organization=primary_organization_for_user(request.user),
         )
         return Response(DocumentSerializer(document).data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
         serializer.save(
             owner=self.request.user,
-            organization=self.request.user.organizations.first(),
+            organization=primary_organization_for_user(self.request.user),
         )
 
     def perform_update(self, serializer):
         instance = serializer.save()
         instance.version += 1
         instance.status = Document.Status.DRAFT
-        instance.download_url = ''
+        instance.download_url = ""
         instance.page_count = None
-        instance.save(update_fields=['version', 'status', 'download_url', 'page_count', 'updated_at'])
+        instance.save(update_fields=["version", "status", "download_url", "page_count", "updated_at"])
 
     def perform_destroy(self, instance):
         if instance.download_url:
@@ -69,41 +70,41 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     def _remove_local_render(self, instance: Document) -> None:
         if RENDER_ROOT.exists():
-            for path in RENDER_ROOT.glob(f'{instance.id}.*'):
+            for path in RENDER_ROOT.glob(f"{instance.id}.*"):
                 path.unlink(missing_ok=True)
 
     def _save_render(self, instance: Document, content: bytes, fmt: str) -> str:
-        url = upload_bytes_to_cloudinary(content, f'jt-code/documents/{instance.id}', resource_type='raw')
+        url = upload_bytes_to_cloudinary(content, f"jt-code/documents/{instance.id}", resource_type="raw")
         if url:
             return url
         RENDER_ROOT.mkdir(parents=True, exist_ok=True)
-        path = RENDER_ROOT / f'{instance.id}.{fmt}'
-        with open(path, 'wb') as fh:
+        path = RENDER_ROOT / f"{instance.id}.{fmt}"
+        with open(path, "wb") as fh:
             fh.write(content)
         from django.urls import reverse
 
         return f"{reverse('document-download', kwargs={'id': instance.id})}?fmt={fmt}"
 
-    @action(detail=True, methods=['post'], throttle_classes=[ConversionThrottle, BurstThrottle])
+    @action(detail=True, methods=["post"], throttle_classes=[ConversionThrottle, BurstThrottle])
     def render(self, request: Request, id=None):
         document = self.get_object()
         serializer = DocumentRenderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        fmt = serializer.validated_data['format']
-        requested_version = serializer.validated_data.get('version')
+        fmt = serializer.validated_data["format"]
+        requested_version = serializer.validated_data.get("version")
         if requested_version and requested_version != document.version:
             return Response(
-                {'detail': 'Document version conflict; refresh and retry.'},
+                {"detail": "Document version conflict; refresh and retry."},
                 status=status.HTTP_409_CONFLICT,
             )
 
         document.status = Document.Status.RENDERING
-        document.error_message = ''
-        document.save(update_fields=['status', 'error_message', 'updated_at'])
+        document.error_message = ""
+        document.save(update_fields=["status", "error_message", "updated_at"])
 
         try:
-            if fmt == 'pdf':
+            if fmt == "pdf":
                 content = render_pdf(document)
                 from pypdf import PdfReader
 
@@ -114,13 +115,18 @@ class DocumentViewSet(viewsets.ModelViewSet):
         except Exception as exc:
             document.status = Document.Status.FAILED
             document.error_message = str(exc)[:500]
-            document.save(update_fields=['status', 'error_message', 'updated_at'])
-            add_outbox_event('document.render.failed', str(document.id), {
-                'documentId': str(document.id), 'userId': str(document.owner_id),
-                'error': document.error_message,
-            })
+            document.save(update_fields=["status", "error_message", "updated_at"])
+            add_outbox_event(
+                "document.render.failed",
+                str(document.id),
+                {
+                    "documentId": str(document.id),
+                    "userId": str(document.owner_id),
+                    "error": document.error_message,
+                },
+            )
             return Response(
-                {'detail': 'Document rendering failed.'},
+                {"detail": "Document rendering failed."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -128,31 +134,43 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document.status = Document.Status.READY
         document.download_url = download_url
         document.page_count = pages
-        document.save(update_fields=['status', 'download_url', 'page_count', 'updated_at'])
+        document.save(update_fields=["status", "download_url", "page_count", "updated_at"])
 
-        add_outbox_event('document.render.completed', str(document.id), {
-            'documentId': str(document.id), 'userId': str(document.owner_id),
-            'format': fmt, 'pages': pages, 'downloadUrl': download_url,
-        })
+        add_outbox_event(
+            "document.render.completed",
+            str(document.id),
+            {
+                "documentId": str(document.id),
+                "userId": str(document.owner_id),
+                "format": fmt,
+                "pages": pages,
+                "downloadUrl": download_url,
+            },
+        )
 
-        return Response({
-            'id': str(document.id),
-            'status': document.status,
-            'format': fmt,
-            'pages': pages,
-            'download_url': download_url,
-        })
+        return Response(
+            {
+                "id": str(document.id),
+                "status": document.status,
+                "format": fmt,
+                "pages": pages,
+                "download_url": download_url,
+            }
+        )
 
 
-@api_view(['GET'])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def document_download(request: Request, id: uuid.UUID) -> FileResponse:
     """Serves locally rendered documents when Cloudinary is not configured."""
-    fmt = request.GET.get('fmt', 'pdf')
-    if fmt not in {'pdf', 'docx'}:
+    fmt = request.GET.get("fmt", "pdf")
+    if fmt not in {"pdf", "docx"}:
         raise Http404
-    document = Document.objects.filter(id=id, owner=request.user).first()
+    document = tenant_scoped_queryset(
+        Document.objects.filter(id=id, owner=request.user),
+        request.user,
+    ).first()
     if not document or not document.download_url:
         raise Http404
-    path = RENDER_ROOT / f'{id}.{fmt}'
-    return FileResponse(open(path, 'rb'), as_attachment=True, filename=f'{document.title}.{fmt}')
+    path = RENDER_ROOT / f"{id}.{fmt}"
+    return FileResponse(open(path, "rb"), as_attachment=True, filename=f"{document.title}.{fmt}")
