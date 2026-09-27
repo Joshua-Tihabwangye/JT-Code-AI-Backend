@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from django.core.management import call_command
 from django.db import connection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -55,3 +56,49 @@ def test_analytics_migration_uses_postgresql_view_syntax_and_reader_grants():
     assert 'connection.vendor == "postgresql"' in views_migration
     assert "jt_code_analytics_reader" in grants_migration
     assert "GRANT SELECT" in grants_migration
+
+
+@pytest.mark.django_db
+def test_restore_drill_fixture_populates_every_canonical_table():
+    from apps.assets.models import Asset
+    from apps.billing.models import CreditLedger
+    from apps.conversations.models import Conversation
+    from apps.governance.models import AuditEvent
+    from apps.identity.models import Organization, User
+    from apps.jobs.models import Job
+
+    call_command("seed_restore_drill_fixture")
+
+    assert User.objects.filter(supabase_user_id="restore-drill-user").exists()
+    assert Organization.objects.filter(slug="restore-drill").exists()
+    assert Conversation.objects.filter(title="Restore drill conversation").exists()
+    assert Job.objects.filter(idempotency_key="restore-drill-job").exists()
+    assert Asset.objects.filter(imagekit_file_id="restore-drill-asset").exists()
+    assert CreditLedger.objects.filter(idempotency_key="restore-drill-ledger").exists()
+    assert AuditEvent.objects.filter(action="restore_drill.seeded").exists()
+
+
+def test_phase3_backfill_migration_covers_all_legacy_tenant_models():
+    migration = (
+        PROJECT_ROOT / "apps/governance/migrations/0006_backfill_legacy_tenant_rows.py"
+    ).read_text(encoding="utf-8")
+
+    for model_name in (
+        "Asset",
+        "Conversation",
+        "Message",
+        "ChatRequest",
+        "Document",
+        "ConversionJob",
+        "Job",
+    ):
+        assert f"{model_name} = apps.get_model" in migration
+    assert "Recovered" in migration
+    assert "organization_id__isnull=True" in migration
+
+
+def test_ci_restore_drill_requires_nonempty_source_data():
+    ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "seed_restore_drill_fixture" in ci
+    assert "--require-source-data" in ci

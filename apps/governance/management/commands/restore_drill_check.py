@@ -49,6 +49,11 @@ class Command(BaseCommand):
         parser.add_argument("--prepare-test-db", action="store_true", help="Run migrations first.")
         parser.add_argument("--restore-database-url", help="Disposable PostgreSQL database to overwrite.")
         parser.add_argument(
+            "--require-source-data",
+            action="store_true",
+            help="Fail unless every canonical table contains at least one source row.",
+        )
+        parser.add_argument(
             "--confirm-restore-target",
             action="store_true",
             help="Required acknowledgement before pg_restore overwrites the target database.",
@@ -65,7 +70,9 @@ class Command(BaseCommand):
         }
         target = options["restore_database_url"]
         if target:
-            report["restore"] = self._restore_and_compare(target, options["confirm_restore_target"])
+            report["restore"] = self._restore_and_compare(
+                target, options["confirm_restore_target"], options["require_source_data"]
+            )
         failures = [
             f"{section}.{name}: {detail}"
             for section, checks in report.items()
@@ -120,7 +127,9 @@ class Command(BaseCommand):
                 checks[f"no_table_select_{table_name}"] = not bool(cursor.fetchone()[0])
         return checks
 
-    def _restore_and_compare(self, target_url: str, confirmed: bool) -> dict[str, bool | str]:
+    def _restore_and_compare(
+        self, target_url: str, confirmed: bool, require_source_data: bool
+    ) -> dict[str, bool | str]:
         if connection.vendor != "postgresql":
             return {"postgresql_required": "Restore execution requires PostgreSQL."}
         if not confirmed:
@@ -143,6 +152,9 @@ class Command(BaseCommand):
             target_counts = self._row_counts(target_url)
             target_access = self._target_analytics_access(target_url)
         checks: dict[str, bool | str] = {"executed": True}
+        if require_source_data:
+            for table_name, count in source_counts.items():
+                checks[f"source_has_rows_{table_name}"] = count > 0
         for table_name, count in source_counts.items():
             checks[f"row_count_{table_name}"] = target_counts.get(table_name) == count
         checks.update(target_access)
