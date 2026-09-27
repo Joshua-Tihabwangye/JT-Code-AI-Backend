@@ -16,13 +16,16 @@ IMAGEKIT_API_URL = "https://api.imagekit.io/v1"
 
 
 def imagekit_is_configured() -> bool:
-    return all(
-        (
-            settings.IMAGEKIT_PUBLIC_KEY,
-            settings.IMAGEKIT_PRIVATE_KEY,
-            settings.IMAGEKIT_ENDPOINT_URL,
+    return (
+        all(
+            (
+                settings.IMAGEKIT_PUBLIC_KEY,
+                settings.IMAGEKIT_PRIVATE_KEY,
+                settings.IMAGEKIT_ENDPOINT_URL,
+            )
         )
-    ) and settings.IMAGEKIT_PRIVATE_KEY != "replace_me"
+        and settings.IMAGEKIT_PRIVATE_KEY != "replace_me"
+    )
 
 
 def sanitize_file_name(file_name: str) -> str:

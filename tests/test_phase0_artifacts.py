@@ -107,7 +107,13 @@ def test_matrix_rejects_a_non_accepted_adr(monkeypatch, tmp_path, capsys):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\nversion = '0.0.0'\n")
     (bad / "ADR-999-bad.md").write_text(
         "# ADR-999: bad\n\n**Status:** Draft\n\n**Date:** 2026-01-01\n\n"
-        "## Context\n" + "x" * 300 + "\n\n## Decision\n" + "y" * 300 + "\n\n## Consequences\n" + "z" * 300 + "\n",
+        "## Context\n"
+        + "x" * 300
+        + "\n\n## Decision\n"
+        + "y" * 300
+        + "\n\n## Consequences\n"
+        + "z" * 300
+        + "\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
@@ -135,7 +141,9 @@ def test_matrix_rejects_an_adr_without_a_valid_date_or_verification(monkeypatch,
 # ---------------------------------------------------------------------------
 # Inventory documents
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("name", ("INVENTORY.md", "SECURITY.md", "SLOs.md", "BACKUP_RESTORE_RUNBOOK.md", "ARCHITECTURE.md"))
+@pytest.mark.parametrize(
+    "name", ("INVENTORY.md", "SECURITY.md", "SLOs.md", "BACKUP_RESTORE_RUNBOOK.md", "ARCHITECTURE.md")
+)
 def test_inventory_document_exists(name: str):
     assert (DOCS_DIR / name).is_file(), f"docs/{name} is missing"
 
@@ -228,7 +236,9 @@ def test_matrix_packages_reconcile_both_manifests(capsys):
     packages = report["packages"]
     for required in ("django", "djangorestframework", "psycopg", "pyjwt", "pgvector", "celery", "weasyprint"):
         entry = packages[required]
-        assert entry["pyproject"] == "yes", f"{required} is missing from pyproject.toml (Docker image would lack it)"
+        assert entry["pyproject"] == "yes", (
+            f"{required} is missing from pyproject.toml (Docker image would lack it)"
+        )
         assert entry["requirements"] == "yes", f"{required} is missing from requirements.txt"
 
 

@@ -311,9 +311,8 @@ def _scan_source(include_tests: bool = False) -> ScanResult:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     result.imports.setdefault(alias.name.split(".")[0], set()).add(str(path))
-            elif isinstance(node, ast.ImportFrom):
-                if node.level == 0 and node.module:
-                    result.imports.setdefault(node.module.split(".")[0], set()).add(str(path))
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                result.imports.setdefault(node.module.split(".")[0], set()).add(str(path))
 
     settings_files = sorted((PROJECT_ROOT / "config" / "settings").glob("*.py"))
     env_pattern = re.compile(
@@ -467,7 +466,9 @@ def _classify_integrations(
             problems.append(
                 {
                     "integration": spec.key,
-                    "problem": "distribution is declared but nothing imports it; wire it or drop the dependency",
+                    "problem": (
+                        "distribution is declared but nothing imports it; wire it or drop the dependency"
+                    ),
                 }
             )
 
@@ -492,7 +493,8 @@ def _classify_integrations(
         problems.append(
             {
                 "integration": f"unclassified:{module}",
-                "problem": "third-party import with no entry in INTEGRATIONS: " + ", ".join(sorted(files)[:3]),
+                "problem": "third-party import with no entry in INTEGRATIONS: "
+                + ", ".join(sorted(files)[:3]),
             }
         )
     return rows, problems
@@ -616,11 +618,16 @@ def _admission_problems(adr_rows: list[dict[str, str]]) -> list[dict[str, str]]:
             problems.append(
                 {
                     "integration": row["id"],
-                    "problem": "invalid ADR id/title/date or missing required Context/Decision/Consequences/Verification section",
+                    "problem": (
+                        "invalid ADR id/title/date or missing required "
+                        "Context/Decision/Consequences/Verification section"
+                    ),
                 }
             )
         if row["status"].lower() not in accepted:
-            problems.append({"integration": row["id"], "problem": f"status is {row['status']!r}, expected Accepted"})
+            problems.append(
+                {"integration": row["id"], "problem": f"status is {row['status']!r}, expected Accepted"}
+            )
     identifiers = [row["id"] for row in adr_rows]
     duplicates = sorted({identifier for identifier in identifiers if identifiers.count(identifier) > 1})
     for identifier in duplicates:
@@ -631,7 +638,9 @@ def _admission_problems(adr_rows: list[dict[str, str]]) -> list[dict[str, str]]:
         index_text = index.read_text(encoding="utf-8")
         for row in adr_rows:
             if row["id"] not in index_text:
-                problems.append({"integration": row["id"], "problem": "missing from docs/adr/README.md index"})
+                problems.append(
+                    {"integration": row["id"], "problem": "missing from docs/adr/README.md index"}
+                )
     return problems
 
 
@@ -648,7 +657,10 @@ class Command(BaseCommand):
         parser.add_argument(
             "--strict",
             action="store_true",
-            help="Exit non-zero when the matrix finds drift (retired integrations, unclassified imports, dependency drift).",
+            help=(
+                "Exit non-zero when the matrix finds drift (retired integrations, "
+                "unclassified imports, dependency drift)."
+            ),
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -693,7 +705,10 @@ class Command(BaseCommand):
     def _write_markdown(self, report: dict[str, Any]) -> None:
         w = self.stdout.write
         w("# JT-Code implementation matrix (generated)\n\n")
-        w(f"Generated from settings `{report['generated_from']}`, {report['source_files_scanned']} source files scanned.\n\n")
+        w(
+            f"Generated from settings `{report['generated_from']}`, "
+            f"{report['source_files_scanned']} source files scanned.\n\n"
+        )
 
         problems = report["problems"]
         w("## Verification\n\n")
@@ -702,8 +717,11 @@ class Command(BaseCommand):
             for problem in problems:
                 w(f"- `{problem['integration']}`: {problem['problem']}\n")
         else:
-            w("No drift detected: no retired integration is referenced, every third-party import is classified,\n"
-              "and the two dependency manifests agree.\n")
+            w(
+                "No drift detected: no retired integration is referenced, every third-party "
+                "import is classified,\n"
+                "and the two dependency manifests agree.\n"
+            )
         w("\n")
 
         w("## Models\n\n")
@@ -712,7 +730,8 @@ class Command(BaseCommand):
         for row in report["models"]:
             w(
                 f"| {row['app']} | {row['model']} | `{row['table']}` | {row['field_count']} | "
-                f"{row['indexes']} | {row['migration_count']} | {'yes' if row['has_organization'] else 'no'} |\n"
+                f"{row['indexes']} | {row['migration_count']} | "
+                f"{'yes' if row['has_organization'] else 'no'} |\n"
             )
 
         w("\n## Endpoints\n\n| Path | Name |\n|------|------|\n")
@@ -740,4 +759,7 @@ class Command(BaseCommand):
         w("\n## Architecture decisions\n\n")
         w("| ID | Title | Status | Date | Well formed |\n|----|-------|--------|------|-------------|\n")
         for row in report["architecture_decisions"]:
-            w(f"| {row['id']} | {row['title']} | {row['status']} | {row['date']} | {'yes' if row['verified'] else 'NO'} |\n")
+            w(
+                f"| {row['id']} | {row['title']} | {row['status']} | {row['date']} | "
+                f"{'yes' if row['verified'] else 'NO'} |\n"
+            )

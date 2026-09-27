@@ -113,7 +113,7 @@ Router-based (list/detail/actions) and explicit paths:
   `evaluations/`, `completion/`, `embeddings/`, `available-models/`,
   `images/generations/`, `images/edits/`, `images/understand/`,
   `images/<id>/download/`
-- **core:** `health/live/`, `health/ready/`, `monitoring/n8n-error/`
+- **core:** `health/live/`, `health/startup/`, `health/ready/`, `monitoring/n8n-error/`
 
 Admin/schema/docs: `/admin/`, `/api/schema/`, `/api/docs/`.
 

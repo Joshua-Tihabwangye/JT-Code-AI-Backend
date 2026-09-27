@@ -60,13 +60,18 @@ class ReadyView(APIView):
             checks["celery_broker"] = _check(
                 "celery_broker", lambda: current_app.connection_for_read().ensure_connection(max_retries=0)
             )
+
             def kafka() -> None:
                 from confluent_kafka.admin import AdminClient
+
                 AdminClient({"bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS}).list_topics(timeout=2)
+
             checks["kafka"] = _check("kafka", kafka)
         ready = all(value == "ok" for value in checks.values())
         logger.info("readiness probe completed", extra={"ready": ready, "checks": checks})
-        return Response({"status": "ok" if ready else "degraded", "checks": checks}, status=200 if ready else 503)
+        return Response(
+            {"status": "ok" if ready else "degraded", "checks": checks}, status=200 if ready else 503
+        )
 
 
 class N8nSentryRelayView(APIView):
@@ -82,7 +87,9 @@ class N8nSentryRelayView(APIView):
         payload = request.data if isinstance(request.data, dict) else {}
         with sentry_sdk.push_scope() as scope:
             scope.set_tag("source", "n8n")
-            scope.set_context("n8n", {k: payload.get(k) for k in ("workflowId", "executionId", "step", "errorCode")})
+            scope.set_context(
+                "n8n", {k: payload.get(k) for k in ("workflowId", "executionId", "step", "errorCode")}
+            )
             sentry_sdk.capture_message(str(payload.get("message", "n8n workflow failure")), level="error")
         logger.error("n8n reported workflow failure", extra={"workflow_id": payload.get("workflowId")})
         return Response(status=status.HTTP_202_ACCEPTED)

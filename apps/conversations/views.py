@@ -33,7 +33,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
         ).order_by("-updated_at")
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user, organization=primary_organization_for_user(self.request.user))
+        serializer.save(
+            owner=self.request.user, organization=primary_organization_for_user(self.request.user)
+        )
 
 
 class ChatRequestViewSet(viewsets.GenericViewSet):

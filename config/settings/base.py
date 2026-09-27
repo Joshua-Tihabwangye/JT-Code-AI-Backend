@@ -98,12 +98,43 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {
-    "default": dj_database_url.config(
-        conn_max_age=int(env("DATABASE_CONN_MAX_AGE", "60")),
-        conn_health_checks=True,
-    )
-}
+
+def runtime_connection_settings(
+    *, development: bool = False
+) -> tuple[dict[str, Any], dict[str, Any], str, str, str]:
+    """Build stateful connection settings for a named environment profile.
+
+    Base settings deliberately contain no localhost/default deployment wiring;
+    each profile must opt into its own development convenience values.
+    """
+    database_default = f"sqlite:///{BASE_DIR / 'db.sqlite3'}" if development else ""
+    redis_default = "redis://localhost:6379/0" if development else ""
+    broker_default = "redis://localhost:6379/1" if development else ""
+    result_default = "redis://localhost:6379/2" if development else ""
+    redis_url = env("REDIS_URL", redis_default)
+    broker_url = env("CELERY_BROKER_URL", broker_default)
+    result_url = env("CELERY_RESULT_BACKEND", result_default)
+    database = {
+        "default": dj_database_url.config(
+            default=env("DATABASE_URL", database_default),
+            conn_max_age=int(env("DATABASE_CONN_MAX_AGE", "60")),
+            conn_health_checks=True,
+        )
+    }
+    caches = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": redis_url,
+            "TIMEOUT": 300,
+            "OPTIONS": {"socket_connect_timeout": 3, "socket_timeout": 3},
+            "KEY_PREFIX": "jt-code",
+        }
+    }
+    return database, caches, redis_url, broker_url, result_url
+
+
+# A profile must replace these through ``runtime_connection_settings``.
+DATABASES: dict[str, Any] = {}
 
 AUTH_USER_MODEL = "identity.User"
 AUTH_PASSWORD_VALIDATORS: list[dict[str, Any]] = []
@@ -120,23 +151,14 @@ STORAGES = {
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
 
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = False
 
-REDIS_URL = env("REDIS_URL", "redis://localhost:6379/0")
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": REDIS_URL,
-        "TIMEOUT": 300,
-        "OPTIONS": {"socket_connect_timeout": 3, "socket_timeout": 3},
-        "KEY_PREFIX": "jt-code",
-    }
-}
-
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", "redis://localhost:6379/1")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+CACHES: dict[str, Any] = {}
+REDIS_URL = ""
+CELERY_BROKER_URL = ""
+CELERY_RESULT_BACKEND = ""
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TRACK_STARTED = True
@@ -183,26 +205,26 @@ SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
 IMAGEKIT_PUBLIC_KEY = env("IMAGEKIT_PUBLIC_KEY")
 IMAGEKIT_PRIVATE_KEY = env("IMAGEKIT_PRIVATE_KEY")
 IMAGEKIT_ENDPOINT_URL = env("IMAGEKIT_ENDPOINT_URL")
-IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code/development")
+IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code")
 IMAGEKIT_MAX_UPLOAD_BYTES = int(env("IMAGEKIT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS = int(env("IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "300"))
 
-KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
 KAFKA_CLIENT_ID = env("KAFKA_CLIENT_ID", "jt-code-api")
-KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL")
 KAFKA_SASL_MECHANISM = env("KAFKA_SASL_MECHANISM")
 KAFKA_SASL_USERNAME = env("KAFKA_SASL_USERNAME")
 KAFKA_SASL_PASSWORD = env("KAFKA_SASL_PASSWORD")
-KAFKA_TOPIC_PREFIX = env("KAFKA_TOPIC_PREFIX", "jt-code.dev")
+KAFKA_TOPIC_PREFIX = env("KAFKA_TOPIC_PREFIX", "jt-code")
 
 AI_PROVIDER = env("AI_PROVIDER", "disabled")
 N8N_SENTRY_RELAY_SECRET = env("N8N_SENTRY_RELAY_SECRET")
 
 # n8n Integration
-N8N_BASE_URL = env("N8N_BASE_URL", "http://localhost:5678")
+N8N_BASE_URL = env("N8N_BASE_URL")
 N8N_API_KEY = env("N8N_API_KEY")
 N8N_WEBHOOK_SECRET = env("N8N_WEBHOOK_SECRET")
-N8N_CALLBACK_BASE_URL = env("N8N_CALLBACK_BASE_URL", "http://localhost:8000/api/v1")
+N8N_CALLBACK_BASE_URL = env("N8N_CALLBACK_BASE_URL")
 N8N_WORKFLOW_PREFIX = env("N8N_WORKFLOW_PREFIX", "jt-code")
 
 # AI Gateway
@@ -295,3 +317,6 @@ if SENTRY_DSN:
         send_default_pii=False,
         max_request_body_size="never",
     )
+
+if os.getenv("DJANGO_SETTINGS_MODULE") == "config.settings.base":
+    raise ImproperlyConfigured("config.settings.base is shared settings, not a deployable profile.")

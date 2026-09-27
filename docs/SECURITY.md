@@ -34,7 +34,7 @@ Django → PostgreSQL, Django → services (Redis/Celery/Kafka/n8n/Stripe/Sentry
 | T06 Webhook forgery | Fake Supabase/n8n/Stripe callbacks | Phase 1–2 HMAC/signature verification for Supabase, Stripe and n8n callbacks |
 | T07 Prompt injection via RAG/docs | Injected instructions in ingested content | Phase 10 tool allowlist and LLM gating; record safety events |
 | T08 Supply chain | Malicious dependency | Phase 1 gated dependency scanning and reviewed version ranges |
-| T09 Exposure of health/telemetry internals | `/health/ready` returns internals | Phase 1 readiness reports only ok/failed per check, never stack traces |
+| T09 Exposure of health/telemetry internals | `/api/v1/health/ready/` returns internals | Phase 1 readiness reports only ok/failed per check, never stack traces |
 
 Data-loss/DR concerns are covered by the Phase 3 backup/PITR procedures.
 
@@ -52,5 +52,5 @@ Data-loss/DR concerns are covered by the Phase 3 backup/PITR procedures.
 | Recovery time objective (RTO) | 4 h |
 | Recovery point objective (RPO) | 1 h (PITR) |
 
-Measurement baseline: Sentry traces + `/health/*` probes; dashboards and
+Measurement baseline: Sentry traces + `/api/v1/health/*` probes; dashboards and
 OpenTelemetry come in Phase 15.

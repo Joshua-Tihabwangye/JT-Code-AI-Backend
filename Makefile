@@ -103,16 +103,18 @@ format:
 	ruff format .
 
 typecheck:
-	mypy .
+	mypy
 
 check: lint format typecheck test
 
 ci-local:
 	ruff check .
 	ruff format --check .
-	python manage.py makemigrations --check --dry-run --settings=config.settings.test
+	mypy
+	python manage.py makemigrations --check --dry-run --settings=config.settings.ci
+	python manage.py migrate --noinput --settings=config.settings.ci
 	pytest --cov=apps --cov=config
-	detect-secrets scan --all-files --exclude-files '(^\.env\.example$$|^JT-Code_.*\.(pdf|docx)$$)'
+	detect-secrets-hook --baseline .secrets.baseline $$(git ls-files)
 	bandit -q -r apps config manage.py --exclude tests
 	pip-audit --strict
 

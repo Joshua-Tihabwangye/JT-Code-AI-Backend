@@ -10,7 +10,11 @@ class Conversation(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="conversations"
     )
     organization = models.ForeignKey(
-        "identity.Organization", on_delete=models.SET_NULL, null=True, blank=True, related_name="conversations"
+        "identity.Organization",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversations",
     )
     title = models.CharField(max_length=255, default="New conversation")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -54,7 +58,11 @@ class ChatRequest(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="chat_requests"
     )
     organization = models.ForeignKey(
-        "identity.Organization", on_delete=models.SET_NULL, null=True, blank=True, related_name="chat_requests"
+        "identity.Organization",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_requests",
     )
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="requests")
     idempotency_key = models.CharField(max_length=255)

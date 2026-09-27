@@ -1,7 +1,7 @@
 import uuid
 
 from django.conf import settings
-from django.contrib.auth.models import AbstractUser, BaseUserManager, Group, Permission
+from django.contrib.auth.models import AbstractUser, Permission
 from django.db import models
 
 
@@ -97,9 +97,7 @@ class Role(models.Model):
 class UserRole(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="roles")
     role = models.ForeignKey(Role, on_delete=models.CASCADE)
-    organization = models.ForeignKey(
-        Organization, on_delete=models.CASCADE, null=True, blank=True
-    )
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, null=True, blank=True)
     assigned_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -110,11 +108,11 @@ class UserRole(models.Model):
 
 
 class UserPermission(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="explicit_permissions")
-    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
-    organization = models.ForeignKey(
-        Organization, on_delete=models.CASCADE, null=True, blank=True
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="explicit_permissions"
     )
+    permission = models.ForeignKey(Permission, on_delete=models.CASCADE)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, null=True, blank=True)
     granted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

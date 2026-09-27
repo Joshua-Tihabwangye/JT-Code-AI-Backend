@@ -224,8 +224,9 @@ See `.env.example` for all available variables. Key variables:
 - Embedding providers are adapters in `apps/knowledge/embeddings.py` (OpenAI / Gemini / deterministic `echo` for offline work).
 
 ### Health Checks
-- `/health/live/` - Liveness probe (always returns OK if process running)
-- `/health/ready/` - Readiness probe (checks DB + Redis connectivity)
+- `/api/v1/health/live/` - Liveness probe (always returns OK if process is running)
+- `/api/v1/health/startup/` - Startup probe (Django application loaded)
+- `/api/v1/health/ready/` - Readiness probe (database, Redis, Celery broker and Kafka in deployable profiles)
 
 ### API Documentation
 - OpenAPI schema at `/api/schema/`

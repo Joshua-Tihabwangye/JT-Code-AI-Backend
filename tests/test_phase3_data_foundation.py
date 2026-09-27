@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from django.db import connection
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ANALYTICS_VIEWS = (
     "analytics_job_summary",

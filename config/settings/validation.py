@@ -18,38 +18,99 @@ _PLACEHOLDER_SECRETS = (
     "placeholder",
 )
 _REQUIRED_STRICT = (
-    "DJANGO_SECRET_KEY", "DJANGO_ALLOWED_HOSTS", "CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS",
-    "DATABASE_URL", "SUPABASE_URL", "SUPABASE_JWT_SECRET", "SUPABASE_JWT_ISSUER",
-    "SUPABASE_JWT_AUDIENCE", "SUPABASE_WEBHOOK_SIGNING_SECRET", "REDIS_URL", "CELERY_BROKER_URL",
-    "CELERY_RESULT_BACKEND", "KAFKA_BOOTSTRAP_SERVERS", "KAFKA_SECURITY_PROTOCOL",
-    "KAFKA_SASL_MECHANISM", "KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD", "IMAGEKIT_PUBLIC_KEY",
-    "IMAGEKIT_PRIVATE_KEY", "IMAGEKIT_ENDPOINT_URL", "N8N_BASE_URL", "N8N_API_KEY",
-    "N8N_WEBHOOK_SECRET", "N8N_SENTRY_RELAY_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
-    "SENTRY_DSN", "SENTRY_ENVIRONMENT",
+    "DJANGO_SECRET_KEY",
+    "DJANGO_ALLOWED_HOSTS",
+    "CORS_ALLOWED_ORIGINS",
+    "CSRF_TRUSTED_ORIGINS",
+    "DATABASE_URL",
+    "SUPABASE_URL",
+    "SUPABASE_JWT_SECRET",
+    "SUPABASE_JWT_ISSUER",
+    "SUPABASE_JWT_AUDIENCE",
+    "SUPABASE_WEBHOOK_SIGNING_SECRET",
+    "REDIS_URL",
+    "CELERY_BROKER_URL",
+    "CELERY_RESULT_BACKEND",
+    "KAFKA_BOOTSTRAP_SERVERS",
+    "KAFKA_SECURITY_PROTOCOL",
+    "KAFKA_SASL_MECHANISM",
+    "KAFKA_SASL_USERNAME",
+    "KAFKA_SASL_PASSWORD",
+    "IMAGEKIT_PUBLIC_KEY",
+    "IMAGEKIT_PRIVATE_KEY",
+    "IMAGEKIT_ENDPOINT_URL",
+    "N8N_BASE_URL",
+    "N8N_API_KEY",
+    "N8N_WEBHOOK_SECRET",
+    "N8N_SENTRY_RELAY_SECRET",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "SENTRY_DSN",
+    "SENTRY_ENVIRONMENT",
 )
 _SECRET_ENV = (
-    "DJANGO_SECRET_KEY", "SUPABASE_JWT_SECRET", "SUPABASE_WEBHOOK_SIGNING_SECRET",
-    "N8N_SENTRY_RELAY_SECRET", "N8N_API_KEY", "N8N_WEBHOOK_SECRET", "KAFKA_SASL_PASSWORD",
-    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "IMAGEKIT_PRIVATE_KEY", "OPENAI_API_KEY",
-    "GEMINI_API_KEY", "SENTRY_DSN",
+    "DJANGO_SECRET_KEY",
+    "SUPABASE_JWT_SECRET",
+    "SUPABASE_WEBHOOK_SIGNING_SECRET",
+    "N8N_SENTRY_RELAY_SECRET",
+    "N8N_API_KEY",
+    "N8N_WEBHOOK_SECRET",
+    "KAFKA_SASL_PASSWORD",
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "IMAGEKIT_PRIVATE_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "SENTRY_DSN",
 )
-_BOOL_ENV = ("DJANGO_DEBUG", "AI_GATEWAY_FALLBACK_ENABLED", "PGVECTOR_ENABLED", "HEALTHCHECK_EXTERNAL_DEPENDENCIES")
+_BOOL_ENV = (
+    "DJANGO_DEBUG",
+    "AI_GATEWAY_FALLBACK_ENABLED",
+    "PGVECTOR_ENABLED",
+    "HEALTHCHECK_EXTERNAL_DEPENDENCIES",
+)
 _INT_ENV = (
-    "AGENT_MAX_ITERATIONS", "AI_GATEWAY_MAX_LATENCY_MS", "IMAGEKIT_MAX_UPLOAD_BYTES",
-    "IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "DATABASE_CONN_MAX_AGE", "VECTOR_EMBEDDING_DIMENSIONS",
-    "RAG_CHUNK_SIZE", "RAG_CHUNK_OVERLAP", "RAG_TOP_K", "RAG_RERANK_TOP_K", "RAG_MAX_EXTRACTED_BYTES",
-    "AUDIT_EVENT_RETENTION_DAYS", "SAFETY_EVENT_RETENTION_DAYS", "WEBHOOK_MAX_RETRIES", "WEBHOOK_RETRY_BASE_DELAY",
+    "AGENT_MAX_ITERATIONS",
+    "AI_GATEWAY_MAX_LATENCY_MS",
+    "IMAGEKIT_MAX_UPLOAD_BYTES",
+    "IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS",
+    "DATABASE_CONN_MAX_AGE",
+    "VECTOR_EMBEDDING_DIMENSIONS",
+    "RAG_CHUNK_SIZE",
+    "RAG_CHUNK_OVERLAP",
+    "RAG_TOP_K",
+    "RAG_RERANK_TOP_K",
+    "RAG_MAX_EXTRACTED_BYTES",
+    "AUDIT_EVENT_RETENTION_DAYS",
+    "SAFETY_EVENT_RETENTION_DAYS",
+    "WEBHOOK_MAX_RETRIES",
+    "WEBHOOK_RETRY_BASE_DELAY",
 )
 _FLOAT_ENV = (
-    "AI_GATEWAY_MAX_COST_USD", "BILLING_CREDIT_VALUE_USD", "BILLING_FX_BUFFER", "BILLING_MARGIN_MULTIPLIER",
-    "VECTOR_MIN_SIMILARITY", "RAG_SIMILARITY_THRESHOLD", "RAG_URL_FETCH_TIMEOUT_SECONDS",
-    "SENTRY_TRACES_SAMPLE_RATE", "SENTRY_PROFILES_SAMPLE_RATE",
+    "AI_GATEWAY_MAX_COST_USD",
+    "BILLING_CREDIT_VALUE_USD",
+    "BILLING_FX_BUFFER",
+    "BILLING_MARGIN_MULTIPLIER",
+    "VECTOR_MIN_SIMILARITY",
+    "RAG_SIMILARITY_THRESHOLD",
+    "RAG_URL_FETCH_TIMEOUT_SECONDS",
+    "SENTRY_TRACES_SAMPLE_RATE",
+    "SENTRY_PROFILES_SAMPLE_RATE",
 )
 _FRACTION_ENV = {
-    "VECTOR_MIN_SIMILARITY": (0.0, 1.0), "RAG_SIMILARITY_THRESHOLD": (0.0, 1.0),
-    "SENTRY_TRACES_SAMPLE_RATE": (0.0, 1.0), "SENTRY_PROFILES_SAMPLE_RATE": (0.0, 1.0),
+    "VECTOR_MIN_SIMILARITY": (0.0, 1.0),
+    "RAG_SIMILARITY_THRESHOLD": (0.0, 1.0),
+    "SENTRY_TRACES_SAMPLE_RATE": (0.0, 1.0),
+    "SENTRY_PROFILES_SAMPLE_RATE": (0.0, 1.0),
 }
-_THROTTLE_ENV = ("THROTTLE_CHAT", "THROTTLE_IMAGES", "THROTTLE_EMBEDDINGS", "THROTTLE_CONVERSIONS", "THROTTLE_RESEARCH", "THROTTLE_BURST")
+_THROTTLE_ENV = (
+    "THROTTLE_CHAT",
+    "THROTTLE_IMAGES",
+    "THROTTLE_EMBEDDINGS",
+    "THROTTLE_CONVERSIONS",
+    "THROTTLE_RESEARCH",
+    "THROTTLE_BURST",
+)
 _URL_LIST_ENV = ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS")
 
 
@@ -103,8 +164,10 @@ def _check_secret(problems: list[str], name: str) -> None:
     value = _val(name)
     if value and any(marker in value.lower() for marker in _PLACEHOLDER_SECRETS):
         problems.append(f"{name} still contains a placeholder value; refusing to start.")
-    if name == "DJANGO_SECRET_KEY" and value and len(value) < 32:
-        problems.append("DJANGO_SECRET_KEY must be at least 32 characters long.")
+    if name == "DJANGO_SECRET_KEY" and value and (len(value) < 50 or len(set(value)) < 5):
+        problems.append(
+            "DJANGO_SECRET_KEY must be at least 50 characters with at least five distinct characters."
+        )
 
 
 def _check_tls_url(problems: list[str], name: str) -> None:
@@ -157,7 +220,9 @@ def validate_environment(profile: str) -> list[str]:
         problems.append("DATABASE_URL must be a PostgreSQL connection string.")
     sslmode = parse_qs(database.query).get("sslmode", [""])[0].lower()
     if database_url and sslmode not in {"require", "verify-ca", "verify-full"}:
-        problems.append("DATABASE_URL must set sslmode to require, verify-ca, or verify-full in deployable environments.")
+        problems.append(
+            "DATABASE_URL must set sslmode to require, verify-ca, or verify-full in deployable environments."
+        )
 
     for name in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
         _check_tls_url(problems, name)
@@ -178,5 +243,9 @@ def validate_environment(profile: str) -> list[str]:
 
 def validate_settings(profile: str) -> None:
     from django.core.exceptions import ImproperlyConfigured
+
     if problems := validate_environment(profile):
-        raise ImproperlyConfigured(f"Invalid configuration for profile {profile!r}:\n" + "\n".join(f"  - {item}" for item in problems))
+        raise ImproperlyConfigured(
+            f"Invalid configuration for profile {profile!r}:\n"
+            + "\n".join(f"  - {item}" for item in problems)
+        )
