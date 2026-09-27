@@ -219,16 +219,18 @@ def test_matrix_migration_counts_are_per_app(capsys):
     assert counts["governance"] >= 4
 
 
-def test_matrix_env_vars_cover_every_settings_accessor(capsys):
+def test_matrix_env_vars_cover_every_runtime_accessor(capsys):
+    from apps.core.management.commands.inventory_matrix import _environment_name, _iter_source_files
+
     report = _matrix(capsys)
-    env_vars = set(report["env_vars"])
-    accessor = re.compile(
-        r"(?:os\.getenv|env_bool|env_float|env_int|env_list|env)\(\s*['\"]([A-Z0-9_]+)['\"]"
-    )
     from_source: set[str] = set()
-    for path in (PROJECT_ROOT / "config" / "settings").glob("*.py"):
-        from_source.update(accessor.findall(path.read_text(encoding="utf-8")))
-    assert env_vars == from_source
+    for path in _iter_source_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        from_source.update(name for node in ast.walk(tree) if (name := _environment_name(node)))
+    assert set(report["env_vars"]) == from_source
+    assert set(report["env_var_sources"]) == from_source
+    assert "DJANGO_SETTINGS_MODULE" in report["env_vars"]
+    assert "manage.py" in report["env_var_sources"]["DJANGO_SETTINGS_MODULE"]
 
 
 def test_matrix_packages_reconcile_both_manifests(capsys):

@@ -3,6 +3,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl libmagic1 && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml ./
+COPY apps ./apps
+COPY config ./config
+COPY manage.py ./
 RUN pip install --upgrade pip && pip install .
 COPY . .
 RUN useradd --create-home --uid 10001 app && chown -R app:app /app

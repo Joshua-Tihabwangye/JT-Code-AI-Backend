@@ -18,6 +18,10 @@ class RequestContextFilter(logging.Filter):
 class JSONFormatter(logging.Formatter):
     """Render logs as one JSON object per line without request-body data."""
 
+    _SAFE_EXTRA_FIELDS = frozenset(
+        {"method", "path", "status_code", "duration_ms", "dependency", "ready", "checks", "workflow_id"}
+    )
+
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -27,6 +31,9 @@ class JSONFormatter(logging.Formatter):
             "request_id": getattr(record, "request_id", request_id_var.get()),
             "trace_id": getattr(record, "trace_id", trace_id_var.get()),
         }
+        for name in self._SAFE_EXTRA_FIELDS:
+            if hasattr(record, name):
+                payload[name] = getattr(record, name)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str, separators=(",", ":"))

@@ -273,6 +273,7 @@ class ScanResult:
 
     imports: dict[str, set[str]] = field(default_factory=dict)
     env_vars: set[str] = field(default_factory=set)
+    env_sources: dict[str, set[str]] = field(default_factory=dict)
     files_scanned: int = 0
     raw_text: dict[str, str] = field(default_factory=dict)
 
@@ -291,15 +292,48 @@ def _iter_source_files(include_tests: bool = False) -> list[Path]:
             if excluded & set(path.parts):
                 continue
             files.append(path)
+    manage = PROJECT_ROOT / "manage.py"
+    if manage.is_file():
+        files.append(manage)
     return sorted(files)
 
 
-def _scan_source(include_tests: bool = False) -> ScanResult:
-    """Parse runtime source and collect imports plus environment variables.
+def _string_literal(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
-    Uses :mod:`ast` rather than regular expressions so that an identifier
-    mentioned in a docstring or comment is never mistaken for a dependency.
-    """
+
+def _environment_name(node: ast.AST) -> str | None:
+    """Return the literal environment variable used by a supported AST node."""
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else ""
+        if name in {"env", "env_bool", "env_float", "env_int", "env_list"} and node.args:
+            return _string_literal(node.args[0])
+        if isinstance(func, ast.Attribute) and func.attr == "getenv" and node.args:
+            return _string_literal(node.args[0])
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"get", "setdefault"}
+            and isinstance(func.value, ast.Attribute)
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "os"
+            and func.value.attr == "environ"
+            and node.args
+        ):
+            return _string_literal(node.args[0])
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "os"
+        and node.value.attr == "environ"
+    ):
+        return _string_literal(node.slice)
+    return None
+
+
+def _scan_source(include_tests: bool = False) -> ScanResult:
+    """Parse all runtime source for imports and literal environment accesses."""
     result = ScanResult()
     for path in _iter_source_files(include_tests=include_tests):
         try:
@@ -313,14 +347,9 @@ def _scan_source(include_tests: bool = False) -> ScanResult:
                     result.imports.setdefault(alias.name.split(".")[0], set()).add(str(path))
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 result.imports.setdefault(node.module.split(".")[0], set()).add(str(path))
-
-    settings_files = sorted((PROJECT_ROOT / "config" / "settings").glob("*.py"))
-    env_pattern = re.compile(
-        r"(?:os\.getenv|env_bool|env_float|env_int|env_list|env)\(\s*['\"]([A-Z0-9_]+)['\"]"
-    )
-    for path in settings_files:
-        text = path.read_text(encoding="utf-8")
-        result.env_vars.update(env_pattern.findall(text))
+            if name := _environment_name(node):
+                result.env_vars.add(name)
+                result.env_sources.setdefault(name, set()).add(str(path.relative_to(PROJECT_ROOT)))
     return result
 
 
@@ -682,6 +711,7 @@ class Command(BaseCommand):
             "models": _load_model_matrix(migrations),
             "endpoints": _load_url_specs(),
             "env_vars": env_vars,
+            "env_var_sources": {name: sorted(scan.env_sources[name]) for name in env_vars},
             "packages": dependencies,
             "integrations": integration_rows,
             "architecture_decisions": adr_rows,

@@ -36,6 +36,17 @@ class RequestContextMiddleware:
             sentry_sdk.set_tag("request_id", request_id)
             sentry_sdk.set_tag("trace_id", trace_id)
             response = self.get_response(request)
+        except Exception:
+            logger.exception(
+                "request failed",
+                extra={
+                    "method": request.method,
+                    "path": request.path,
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                },
+            )
+            raise
+        else:
             response["X-Request-ID"] = request_id
             response["X-Trace-ID"] = trace_id
             logger.info(

@@ -126,3 +126,24 @@ def test_ci_security_scans_are_gating():
     assert "bandit -q -r apps config manage.py" in ci
     assert "pip-audit --strict" in ci
     assert "|| true" not in ci
+
+
+def test_json_logging_preserves_allowlisted_operational_fields():
+    import json
+    import logging
+
+    from apps.core.logging import JSONFormatter
+
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "completed", (), None)
+    record.method = "GET"
+    record.path = "/api/v1/health/live/"
+    record.status_code = 200
+    record.duration_ms = 1.25
+    record.untrusted_body = "must not be serialized"
+    payload = json.loads(JSONFormatter().format(record))
+
+    assert payload["method"] == "GET"
+    assert payload["path"] == "/api/v1/health/live/"
+    assert payload["status_code"] == 200
+    assert payload["duration_ms"] == 1.25
+    assert "untrusted_body" not in payload
