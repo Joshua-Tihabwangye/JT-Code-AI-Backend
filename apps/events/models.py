@@ -1,11 +1,14 @@
 import uuid
+
 from django.db import models
+
 
 class OutboxEvent(models.Model):
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        PUBLISHED = 'published', 'Published'
-        FAILED = 'failed', 'Failed'
+        PENDING = "pending", "Pending"
+        PUBLISHED = "published", "Published"
+        FAILED = "failed", "Failed"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     topic = models.CharField(max_length=255)
     event_key = models.CharField(max_length=255)
@@ -19,4 +22,7 @@ class OutboxEvent(models.Model):
     last_error = models.TextField(blank=True)
 
     class Meta:
-        indexes = [models.Index(fields=('status', 'available_at', 'created_at'))]
+        indexes = [models.Index(fields=("status", "available_at", "created_at"))]
+
+    def __str__(self):
+        return f"{self.topic} [{self.status}] key={self.event_key}"

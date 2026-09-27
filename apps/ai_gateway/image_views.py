@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai_gateway.models import Model, Provider
+from apps.assets.imagekit import upload_bytes_to_imagekit
 from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ImageThrottle
 from apps.events.outbox import add_outbox_event
@@ -151,22 +152,14 @@ def _wrap_text(text: str, width: int) -> list[str]:
 
 
 def _save_image(content: bytes, image_id: uuid.UUID) -> str:
-    if (
-        all((settings.CLOUDINARY_CLOUD_NAME, settings.CLOUDINARY_API_KEY, settings.CLOUDINARY_API_SECRET))
-        and settings.CLOUDINARY_CLOUD_NAME != "replace_me"
-    ):
-        try:
-            import cloudinary.uploader
-
-            result = cloudinary.uploader.upload(
-                io.BytesIO(content),
-                public_id=f"jt-code/images/{image_id}",
-                resource_type="image",
-                overwrite=True,
-            )
-            return result.get("secure_url", "")
-        except Exception:
-            pass
+    imagekit_url = upload_bytes_to_imagekit(
+        content,
+        file_name=f"{image_id}.png",
+        folder="/jt-code/images",
+        content_type="image/png",
+    )
+    if imagekit_url:
+        return imagekit_url
     IMAGE_RENDER_ROOT.mkdir(parents=True, exist_ok=True)
     path = IMAGE_RENDER_ROOT / f"{image_id}.png"
     with open(path, "wb") as fh:

@@ -14,9 +14,7 @@ def cleanup_old_audit_events():
     for rule in rules:
         cutoff = timezone.now() - timezone.timedelta(days=rule.retention_days + rule.grace_period_days)
         events = AuditEvent.objects.filter(
-            organization=rule.organization,
-            category=rule.data_category,
-            created_at__lt=cutoff
+            organization=rule.organization, category=rule.data_category, created_at__lt=cutoff
         )
 
         if rule.action == RetentionRule.Action.HARD_DELETE:
@@ -41,27 +39,27 @@ def cleanup_old_safety_events():
 @shared_task
 def check_consent_expiry():
     """Check for expiring consents"""
+    from django.utils import timezone
+
     from apps.governance.models import ConsentRecord
 
-    from django.utils import timezone
     soon = timezone.now() + timezone.timedelta(days=30)
     expiring = ConsentRecord.objects.filter(
-        status=ConsentRecord.Status.GRANTED,
-        expires_at__lte=soon,
-        expires_at__isnull=False
+        status=ConsentRecord.Status.GRANTED, expires_at__lte=soon, expires_at__isnull=False
     )
 
     for consent in expiring:
         from apps.events.outbox import enqueue_outbox_event
+
         enqueue_outbox_event(
-            topic='governance.consent.expiring',
+            topic="governance.consent.expiring",
             event_key=str(consent.id),
             payload={
-                'consent_id': str(consent.id),
-                'user_id': str(consent.user_id),
-                'organization_id': str(consent.organization_id),
-                'consent_type': consent.consent_type,
-                'expires_at': consent.expires_at.isoformat(),
+                "consent_id": str(consent.id),
+                "user_id": str(consent.user_id),
+                "organization_id": str(consent.organization_id),
+                "consent_type": consent.consent_type,
+                "expires_at": consent.expires_at.isoformat(),
             },
-            headers={'trace_id': f'consent-{consent.id}'}
+            headers={"trace_id": f"consent-{consent.id}"},
         )

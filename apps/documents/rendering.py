@@ -3,13 +3,13 @@ from __future__ import annotations
 import io
 
 import markdown
-from django.conf import settings
 
+from apps.assets.imagekit import upload_bytes_to_imagekit
 from apps.documents.models import Document
 
 
 def _render_html(content: str) -> str:
-    body = markdown.markdown(content or '', extensions=['tables', 'fenced_code', 'sane_lists'])
+    body = markdown.markdown(content or "", extensions=["tables", "fenced_code", "sane_lists"])
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -43,12 +43,12 @@ def render_docx(document: Document) -> bytes:
     doc = DocxDocument()
     doc.add_heading(document.title, level=0)
     for block in _split_blocks(document.content):
-        if block.startswith('# '):
+        if block.startswith("# "):
             doc.add_heading(block[2:].strip(), level=1)
-        elif block.startswith('## '):
+        elif block.startswith("## "):
             doc.add_heading(block[3:].strip(), level=2)
-        elif block.startswith('- '):
-            doc.add_paragraph(block[2:].strip(), style='List Bullet')
+        elif block.startswith("- "):
+            doc.add_paragraph(block[2:].strip(), style="List Bullet")
         else:
             doc.add_paragraph(block.strip())
     doc.save(buffer)
@@ -56,23 +56,13 @@ def render_docx(document: Document) -> bytes:
 
 
 def _split_blocks(content: str) -> list[str]:
-    return [b for b in content.split('\n\n') if b.strip()]
+    return [b for b in content.split("\n\n") if b.strip()]
 
 
-def upload_bytes_to_cloudinary(content: bytes, public_id: str, resource_type: str = 'raw') -> str | None:
-    if not all((settings.CLOUDINARY_CLOUD_NAME, settings.CLOUDINARY_API_KEY, settings.CLOUDINARY_API_SECRET)):
-        return None
-    if settings.CLOUDINARY_CLOUD_NAME == 'replace_me':
-        return None
-    try:
-        import cloudinary.uploader
-
-        result = cloudinary.uploader.upload(
-            io.BytesIO(content),
-            public_id=public_id,
-            resource_type=resource_type,
-            overwrite=True,
-        )
-        return result.get('secure_url')
-    except Exception:
-        return None
+def upload_rendered_bytes(content: bytes, *, file_name: str, folder: str) -> str | None:
+    return upload_bytes_to_imagekit(
+        content,
+        file_name=file_name,
+        folder=folder,
+        content_type="application/octet-stream",
+    )

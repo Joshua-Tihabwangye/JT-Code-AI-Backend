@@ -1,7 +1,8 @@
 import os
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 # Add the project root to Python path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -10,11 +11,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Configure Django settings before importing Django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.test")
 
-import django
+import django  # noqa: E402
+
 django.setup()
 
-from django.conf import settings
-from django.test.utils import get_runner
+from django.conf import settings  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -32,6 +33,7 @@ def celery_config():
 def api_client():
     """Provide a DRF API client for testing."""
     from rest_framework.test import APIClient
+
     return APIClient()
 
 
@@ -40,6 +42,7 @@ def authenticated_client(api_client, user):
     """Provide an authenticated API client using a Supabase-style JWT."""
     import time
     import uuid
+
     import jwt as pyjwt
 
     token = pyjwt.encode(
@@ -66,7 +69,7 @@ def user(django_user_model):
         username="test-user",
         supabase_user_id="test-supabase-user-id",
         email="test@example.com",
-        password="testpass123"
+        password="testpass123",
     )
 
 
@@ -77,5 +80,5 @@ def admin_user(django_user_model):
         username="test-admin",
         supabase_user_id="test-admin-supabase-user-id",
         email="admin@example.com",
-        password="adminpass123"
+        password="adminpass123",
     )

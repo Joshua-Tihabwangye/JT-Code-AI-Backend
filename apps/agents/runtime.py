@@ -31,17 +31,17 @@ from apps.ai_gateway.service import generate_completion
 
 AGENT_DEFAULT_SYSTEM_PROMPT = (
     "You are JT-Code's research agent. Use the available tools to gather "
-    'information before answering. Answer concisely and cite the source '
-    'document titles when you use the knowledge base.'
+    "information before answering. Answer concisely and cite the source "
+    "document titles when you use the knowledge base."
 )
 
 
 class AgentRuntimeError(AIGatewayError):
-    code = 'AGENT_RUNTIME_ERROR'
+    code = "AGENT_RUNTIME_ERROR"
 
 
 class AgentMaxIterationsError(AgentRuntimeError):
-    code = 'AGENT_MAX_ITERATIONS_EXCEEDED'
+    code = "AGENT_MAX_ITERATIONS_EXCEEDED"
 
 
 @dataclass
@@ -59,8 +59,8 @@ class AgentRun:
     def final_answer(self) -> str:
         for message in reversed(self.messages):
             if isinstance(message, AIMessage) and message.content:
-                return str(message.content) if not message.tool_calls else ''
-        return ''
+                return str(message.content) if not message.tool_calls else ""
+        return ""
 
 
 class _AgentContext:
@@ -103,34 +103,34 @@ class _AgentContext:
 
 def _to_gateway_message(message: BaseMessage) -> GatewayMessage:
     if isinstance(message, SystemMessage):
-        role = 'system'
+        role = "system"
     elif isinstance(message, HumanMessage):
-        role = 'user'
+        role = "user"
     elif isinstance(message, AIMessage):
-        role = 'assistant'
+        role = "assistant"
     elif isinstance(message, ToolMessage):
-        role = 'tool'
+        role = "tool"
     else:
-        role = 'user'
-    return GatewayMessage(role=role, content=str(message.content or ''))
+        role = "user"
+    return GatewayMessage(role=role, content=str(message.content or ""))
 
 
 def _tool_call_stanza(call: dict[str, Any]) -> dict[str, Any]:
     return {
-        'name': call.get('name', ''),
-        'args': call.get('args') or {},
-        'id': call.get('id', ''),
-        'type': 'tool_call',
+        "name": call.get("name", ""),
+        "args": call.get("args") or {},
+        "id": call.get("id", ""),
+        "type": "tool_call",
     }
 
 
 def _build_graph(ctx: _AgentContext):
     def call_model(state: dict[str, Any]) -> dict[str, Any]:
         if ctx.model_calls >= ctx.max_model_calls:
-            raise AgentMaxIterationsError(f'Agent exceeded the {ctx.max_model_calls}-call iteration limit.')
-        gateway_messages = [_to_gateway_message(m) for m in state['messages']]
+            raise AgentMaxIterationsError(f"Agent exceeded the {ctx.max_model_calls}-call iteration limit.")
+        gateway_messages = [_to_gateway_message(m) for m in state["messages"]]
         if ctx.system:
-            gateway_messages.insert(0, GatewayMessage('system', ctx.system))
+            gateway_messages.insert(0, GatewayMessage("system", ctx.system))
 
         outcome = generate_completion(
             messages=gateway_messages,
@@ -153,20 +153,20 @@ def _build_graph(ctx: _AgentContext):
             ai = AIMessage(
                 content=outcome.content,
                 tool_calls=[
-                    _tool_call_stanza({'name': tc.name, 'args': tc.arguments, 'id': tc.id})
+                    _tool_call_stanza({"name": tc.name, "args": tc.arguments, "id": tc.id})
                     for tc in outcome.tool_calls
                 ],
             )
         else:
             ai = AIMessage(content=outcome.content)
-        return {'messages': [ai]}
+        return {"messages": [ai]}
 
     def execute_tools(state: dict[str, Any]) -> dict[str, Any]:
-        last = state['messages'][-1]
+        last = state["messages"][-1]
         outputs = []
         for call in last.tool_calls or []:
-            name = call.get('name', '')
-            args = call.get('args') or {}
+            name = call.get("name", "")
+            args = call.get("args") or {}
             ctx.invoked_tools.append(name)
             try:
                 content = invoke_tool(
@@ -176,22 +176,22 @@ def _build_graph(ctx: _AgentContext):
                     arguments=args,
                 )
             except Exception as exc:  # noqa: BLE001 - tool failures feed back to the model
-                content = f'Tool {name!r} failed: {exc}'
-            outputs.append(ToolMessage(content=content, tool_call_id=str(call.get('id') or 'call-0')))
-        return {'messages': outputs}
+                content = f"Tool {name!r} failed: {exc}"
+            outputs.append(ToolMessage(content=content, tool_call_id=str(call.get("id") or "call-0")))
+        return {"messages": outputs}
 
     def route(state: dict[str, Any]) -> str:
-        last = state['messages'][-1]
-        if isinstance(last, AIMessage) and getattr(last, 'tool_calls', None):
-            return 'execute_tools'
+        last = state["messages"][-1]
+        if isinstance(last, AIMessage) and getattr(last, "tool_calls", None):
+            return "execute_tools"
         return END
 
     builder = StateGraph(MessagesState)
-    builder.add_node('call_model', call_model)
-    builder.add_node('execute_tools', execute_tools)
-    builder.add_edge(START, 'call_model')
-    builder.add_conditional_edges('call_model', route, {'execute_tools': 'execute_tools', END: END})
-    builder.add_edge('execute_tools', 'call_model')
+    builder.add_node("call_model", call_model)
+    builder.add_node("execute_tools", execute_tools)
+    builder.add_edge(START, "call_model")
+    builder.add_conditional_edges("call_model", route, {"execute_tools": "execute_tools", END: END})
+    builder.add_edge("execute_tools", "call_model")
     return builder.compile()
 
 
@@ -200,7 +200,7 @@ def iter_agent(
     user,
     organization_id,
     initial_messages: list[BaseMessage],
-    task_type: str = 'GENERAL_QUESTION',
+    task_type: str = "GENERAL_QUESTION",
     model_id: str | None = None,
     policy_slug: str | None = None,
     temperature: float = 0.7,
@@ -209,7 +209,7 @@ def iter_agent(
     system: str | None = AGENT_DEFAULT_SYSTEM_PROMPT,
     max_model_calls: int = 6,
     request_id: str | None = None,
-    trace_id: str = '',
+    trace_id: str = "",
     job_id: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Stream agent updates; each event is ``{node_name: {channel: value}}``."""
@@ -229,16 +229,16 @@ def iter_agent(
         job_id=job_id,
     )
     graph = _build_graph(ctx)
-    state: dict[str, Any] = {'messages': list(initial_messages)}
-    yield from graph.stream(state, config={'recursion_limit': max_model_calls * 4})
+    state: dict[str, Any] = {"messages": list(initial_messages)}
+    yield from graph.stream(state, config={"recursion_limit": max_model_calls * 4})
 
     yield {
-        'summary': {
-            'model_calls': ctx.model_calls,
-            'model_runs': ctx.model_runs,
-            'invoked_tools': ctx.invoked_tools,
-            'input_tokens': ctx.input_tokens,
-            'output_tokens': ctx.output_tokens,
+        "summary": {
+            "model_calls": ctx.model_calls,
+            "model_runs": ctx.model_runs,
+            "invoked_tools": ctx.invoked_tools,
+            "input_tokens": ctx.input_tokens,
+            "output_tokens": ctx.output_tokens,
         }
     }
 
@@ -248,7 +248,7 @@ def run_agent(
     user,
     organization_id,
     initial_messages: list[BaseMessage],
-    task_type: str = 'GENERAL_QUESTION',
+    task_type: str = "GENERAL_QUESTION",
     model_id: str | None = None,
     policy_slug: str | None = None,
     temperature: float = 0.7,
@@ -257,7 +257,7 @@ def run_agent(
     system: str | None = AGENT_DEFAULT_SYSTEM_PROMPT,
     max_model_calls: int = 6,
     request_id: str | None = None,
-    trace_id: str = '',
+    trace_id: str = "",
     job_id: str | None = None,
 ) -> AgentRun:
     """Run the agent to completion and return the final transcript."""
@@ -278,22 +278,22 @@ def run_agent(
         trace_id=trace_id,
         job_id=job_id,
     ):
-        if 'summary' in event:
-            summary = event['summary']
-            run.model_runs = summary['model_runs']
-            run.invoked_tools = summary['invoked_tools']
-            run.input_tokens = summary['input_tokens']
-            run.output_tokens = summary['output_tokens']
+        if "summary" in event:
+            summary = event["summary"]
+            run.model_runs = summary["model_runs"]
+            run.invoked_tools = summary["invoked_tools"]
+            run.input_tokens = summary["input_tokens"]
+            run.output_tokens = summary["output_tokens"]
             continue
         run.events.append(event)
         for payload in event.values():
             if not isinstance(payload, dict):
                 continue
-            for message in payload.get('messages', []):
+            for message in payload.get("messages", []):
                 if message not in run.messages:
                     run.messages.append(message)
     if not run.messages:
-        raise AgentRuntimeError('Agent produced no messages.', code='AGENT_EMPTY_RUN')
+        raise AgentRuntimeError("Agent produced no messages.", code="AGENT_EMPTY_RUN")
     if not isinstance(run.messages[-1], AIMessage):
-        raise AgentRuntimeError('Agent run did not terminate with the model.', code='AGENT_BAD_TERMINATION')
+        raise AgentRuntimeError("Agent run did not terminate with the model.", code="AGENT_BAD_TERMINATION")
     return run

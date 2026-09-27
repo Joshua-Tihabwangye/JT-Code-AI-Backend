@@ -140,7 +140,8 @@ class SettingsExportView(APIView):
             "assets": [
                 {
                     "id": str(a.id),
-                    "cloudinary_public_id": a.cloudinary_public_id,
+                    "imagekit_file_id": a.imagekit_file_id,
+                    "imagekit_file_path": a.imagekit_file_path,
                     "secure_url": a.secure_url,
                     "resource_type": a.resource_type,
                     "format": a.format,

@@ -16,9 +16,6 @@ celery[redis]>=5.5,<6
 # Event Streaming
 confluent-kafka>=2.8,<4
 
-# Storage & Media
-cloudinary>=1.42,<2
-
 # Monitoring & Observability
 sentry-sdk[django]>=2.20,<3
 

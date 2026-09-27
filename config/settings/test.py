@@ -10,7 +10,7 @@ DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memor
 
 # Provide default Supabase settings so tests can authenticate deterministically
 # (never inherit live project values from the environment during tests)
-SUPABASE_JWT_SECRET = 'test-jwt-secret'
+SUPABASE_JWT_SECRET = 'test-jwt-secret'  # nosec B105 - deterministic test-only signing secret.
 SUPABASE_JWT_AUDIENCE = 'authenticated'
 SUPABASE_JWT_ISSUER = ''
 SUPABASE_URL = ''

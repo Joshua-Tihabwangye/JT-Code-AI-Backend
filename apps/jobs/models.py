@@ -6,46 +6,34 @@ from django.db import models
 
 class Job(models.Model):
     class Status(models.TextChoices):
-        QUEUED = 'queued', 'Queued'
-        VALIDATING = 'validating', 'Validating'
-        RUNNING = 'running', 'Running'
-        WAITING_APPROVAL = 'waiting_approval', 'Waiting for Approval'
-        COMPLETED = 'completed', 'Completed'
-        FAILED = 'failed', 'Failed'
-        CANCELLED = 'cancelled', 'Cancelled'
-        EXPIRED = 'expired', 'Expired'
+        QUEUED = "queued", "Queued"
+        VALIDATING = "validating", "Validating"
+        RUNNING = "running", "Running"
+        WAITING_APPROVAL = "waiting_approval", "Waiting for Approval"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+        EXPIRED = "expired", "Expired"
 
     class TaskType(models.TextChoices):
-        GENERAL_QUESTION = 'GENERAL_QUESTION', 'General Question'
-        IMAGE_UNDERSTANDING = 'IMAGE_UNDERSTANDING', 'Image Understanding'
-        IMAGE_GENERATION = 'IMAGE_GENERATION', 'Image Generation'
-        DOCUMENT_DRAFTING = 'DOCUMENT_DRAFTING', 'Document Drafting'
-        DOCUMENT_RENDERING = 'DOCUMENT_RENDERING', 'Document Rendering'
-        FILE_CONVERSION = 'FILE_CONVERSION', 'File Conversion'
-        SEARCH_RESEARCH = 'SEARCH_RESEARCH', 'Search & Research'
-        RAG_QUERY = 'RAG_QUERY', 'RAG Query'
-        KNOWLEDGE_INGESTION = 'KNOWLEDGE_INGESTION', 'Knowledge Ingestion'
-        SCHEDULED_AUTOMATION = 'SCHEDULED_AUTOMATION', 'Scheduled Automation'
+        GENERAL_QUESTION = "GENERAL_QUESTION", "General Question"
+        IMAGE_UNDERSTANDING = "IMAGE_UNDERSTANDING", "Image Understanding"
+        IMAGE_GENERATION = "IMAGE_GENERATION", "Image Generation"
+        DOCUMENT_DRAFTING = "DOCUMENT_DRAFTING", "Document Drafting"
+        DOCUMENT_RENDERING = "DOCUMENT_RENDERING", "Document Rendering"
+        FILE_CONVERSION = "FILE_CONVERSION", "File Conversion"
+        SEARCH_RESEARCH = "SEARCH_RESEARCH", "Search & Research"
+        RAG_QUERY = "RAG_QUERY", "RAG Query"
+        KNOWLEDGE_INGESTION = "KNOWLEDGE_INGESTION", "Knowledge Ingestion"
+        SCHEDULED_AUTOMATION = "SCHEDULED_AUTOMATION", "Scheduled Automation"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='jobs'
-    )
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="jobs")
     organization = models.ForeignKey(
-        'identity.Organization',
-        on_delete=models.CASCADE,
-        related_name='jobs',
-        null=True,
-        blank=True
+        "identity.Organization", on_delete=models.CASCADE, related_name="jobs", null=True, blank=True
     )
     conversation = models.ForeignKey(
-        'conversations.Conversation',
-        on_delete=models.SET_NULL,
-        related_name='jobs',
-        null=True,
-        blank=True
+        "conversations.Conversation", on_delete=models.SET_NULL, related_name="jobs", null=True, blank=True
     )
     request_id = models.UUIDField(default=uuid.uuid4, editable=False, db_index=True)
     idempotency_key = models.CharField(max_length=255, db_index=True, default=uuid.uuid4)
@@ -69,36 +57,33 @@ class Job(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('owner', '-created_at')),
-            models.Index(fields=('organization', '-created_at')),
-            models.Index(fields=('status', '-created_at')),
-            models.Index(fields=('task_type', '-created_at')),
-            models.Index(fields=('request_id',)),
-            models.Index(fields=('idempotency_key',)),
+            models.Index(fields=("owner", "-created_at")),
+            models.Index(fields=("organization", "-created_at")),
+            models.Index(fields=("status", "-created_at")),
+            models.Index(fields=("task_type", "-created_at")),
+            models.Index(fields=("request_id",)),
+            models.Index(fields=("idempotency_key",)),
         ]
         constraints = [
-            models.UniqueConstraint(
-                fields=('owner', 'idempotency_key'),
-                name='uniq_job_idempotency'
-            ),
+            models.UniqueConstraint(fields=("owner", "idempotency_key"), name="uniq_job_idempotency"),
         ]
 
     def __str__(self):
-        return f'{self.task_type} ({self.status}) - {self.id}'
+        return f"{self.task_type} ({self.status}) - {self.id}"
 
 
 class JobStep(models.Model):
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        RUNNING = 'running', 'Running'
-        COMPLETED = 'completed', 'Completed'
-        FAILED = 'failed', 'Failed'
-        SKIPPED = 'skipped', 'Skipped'
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='steps')
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="steps")
     name = models.CharField(max_length=100)
     step_order = models.PositiveIntegerField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -117,24 +102,24 @@ class JobStep(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('step_order',)
+        ordering = ("step_order",)
         indexes = [
-            models.Index(fields=('job', 'step_order')),
+            models.Index(fields=("job", "step_order")),
         ]
 
     def __str__(self):
-        return f'{self.job_id} - {self.name} ({self.status})'
+        return f"{self.job_id} - {self.name} ({self.status})"
 
 
 class ProviderAttempt(models.Model):
     class Status(models.TextChoices):
-        ATTEMPTING = 'attempting', 'Attempting'
-        SUCCESS = 'success', 'Success'
-        FAILED = 'failed', 'Failed'
-        FALLBACK = 'fallback', 'Fallback'
+        ATTEMPTING = "attempting", "Attempting"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+        FALLBACK = "fallback", "Fallback"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job_step = models.ForeignKey(JobStep, on_delete=models.CASCADE, related_name='provider_attempts')
+    job_step = models.ForeignKey(JobStep, on_delete=models.CASCADE, related_name="provider_attempts")
     attempt_number = models.PositiveIntegerField()
     provider = models.CharField(max_length=100)
     model = models.CharField(max_length=100)
@@ -153,25 +138,25 @@ class ProviderAttempt(models.Model):
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ('attempt_number',)
+        ordering = ("attempt_number",)
         indexes = [
-            models.Index(fields=('job_step', 'attempt_number')),
+            models.Index(fields=("job_step", "attempt_number")),
         ]
 
     def __str__(self):
-        return f'{self.job_step_id} - Attempt {self.attempt_number} ({self.status})'
+        return f"{self.job_step_id} - Attempt {self.attempt_number} ({self.status})"
 
 
 class WorkflowRun(models.Model):
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        RUNNING = 'running', 'Running'
-        COMPLETED = 'completed', 'Completed'
-        FAILED = 'failed', 'Failed'
-        CANCELLED = 'cancelled', 'Cancelled'
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='workflow_run')
+    job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name="workflow_run")
     n8n_workflow_id = models.CharField(max_length=100)
     n8n_execution_id = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -187,21 +172,21 @@ class WorkflowRun(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
 
     def __str__(self):
-        return f'WorkflowRun {self.id} - {self.status}'
+        return f"WorkflowRun {self.id} - {self.status}"
 
 
 class Callback(models.Model):
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        DELIVERED = 'delivered', 'Delivered'
-        FAILED = 'failed', 'Failed'
-        EXPIRED = 'expired', 'Expired'
+        PENDING = "pending", "Pending"
+        DELIVERED = "delivered", "Delivered"
+        FAILED = "failed", "Failed"
+        EXPIRED = "expired", "Expired"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name='callbacks')
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="callbacks")
     url = models.URLField()
     payload = models.JSONField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -217,11 +202,11 @@ class Callback(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('status', 'next_retry_at')),
-            models.Index(fields=('job',)),
+            models.Index(fields=("status", "next_retry_at")),
+            models.Index(fields=("job",)),
         ]
 
     def __str__(self):
-        return f'Callback {self.id} - {self.status}'
+        return f"Callback {self.id} - {self.status}"

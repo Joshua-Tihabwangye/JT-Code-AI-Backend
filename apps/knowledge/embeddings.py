@@ -39,8 +39,8 @@ def _normalized_hash_token(text: str, index: int, dimensions: int) -> EmbeddingV
     """Deterministic pseudo-embedding (offline) for development and tests."""
     vector: list[float] = []
     for axis in range(dimensions):
-        digest = hashlib.sha256(f'{index}:{axis}:{text[:1024]}'.encode()).digest()
-        value = int.from_bytes(digest[:4], 'big') / 2**32
+        digest = hashlib.sha256(f"{index}:{axis}:{text[:1024]}".encode()).digest()
+        value = int.from_bytes(digest[:4], "big") / 2**32
         vector.append((value * 2.0) - 1.0)
     return vector
 
@@ -48,8 +48,8 @@ def _normalized_hash_token(text: str, index: int, dimensions: int) -> EmbeddingV
 class EchoEmbeddingProvider:
     """Offline deterministic backend used for development and tests."""
 
-    provider_name = 'echo'
-    model_name = 'echo-deterministic'
+    provider_name = "echo"
+    model_name = "echo-deterministic"
 
     def __init__(self, *, dimensions: int | None = None) -> None:
         self._dimensions = dimensions or settings.VECTOR_EMBEDDING_DIMENSIONS
@@ -59,14 +59,14 @@ class EchoEmbeddingProvider:
 
 
 class OpenAIEmbeddingProvider:
-    provider_name = 'openai'
+    provider_name = "openai"
     model_name: str
 
     def __init__(self, *, model: str | None = None) -> None:
         api_key = settings.OPENAI_API_KEY
         if not api_key:
             raise EmbeddingNotConfigured(
-                'OpenAI embeddings require OPENAI_API_KEY (RAG_EMBEDDING_PROVIDER=openai).'
+                "OpenAI embeddings require OPENAI_API_KEY (RAG_EMBEDDING_PROVIDER=openai)."
             )
         from openai import OpenAI
 
@@ -79,21 +79,21 @@ class OpenAIEmbeddingProvider:
             batch = texts[start : start + _DEFAULT_BATCH_SIZE]
             response = self._client.embeddings.create(
                 model=self.model_name,
-                input=[text or ' ' for text in batch],
+                input=[text or " " for text in batch],
             )
             embeddings.extend(element.embedding for element in response.data)
         return embeddings
 
 
 class GeminiEmbeddingProvider:
-    provider_name = 'gemini'
+    provider_name = "gemini"
     model_name: str
 
     def __init__(self, *, model: str | None = None) -> None:
         api_key = settings.GEMINI_API_KEY
         if not api_key:
             raise EmbeddingNotConfigured(
-                'Gemini embeddings require GEMINI_API_KEY (RAG_EMBEDDING_PROVIDER=gemini).'
+                "Gemini embeddings require GEMINI_API_KEY (RAG_EMBEDDING_PROVIDER=gemini)."
             )
         import google.generativeai as genai
 
@@ -108,23 +108,23 @@ class GeminiEmbeddingProvider:
             response = self._genai.embed_content(
                 model=self.model_name,
                 content=batch,
-                task_type='RETRIEVAL_DOCUMENT',
+                task_type="RETRIEVAL_DOCUMENT",
             )
-            embeddings.extend(response['embedding'])
+            embeddings.extend(response["embedding"])
         return embeddings
 
 
 def get_embedding_provider() -> EmbeddingProvider:
     """Return the embedding provider selected by ``RAG_EMBEDDING_PROVIDER``."""
-    provider = (settings.RAG_EMBEDDING_PROVIDER or 'openai').lower()
-    if provider == 'echo' or (provider == 'openai' and settings.DEBUG and not settings.OPENAI_API_KEY):
+    provider = (settings.RAG_EMBEDDING_PROVIDER or "openai").lower()
+    if provider == "echo" or (provider == "openai" and settings.DEBUG and not settings.OPENAI_API_KEY):
         return EchoEmbeddingProvider()
-    if provider == 'openai':
+    if provider == "openai":
         return OpenAIEmbeddingProvider()
-    if provider == 'gemini':
+    if provider == "gemini":
         return GeminiEmbeddingProvider()
     raise EmbeddingNotConfigured(
-        f'Unsupported RAG_EMBEDDING_PROVIDER={provider!r}. Supported values: openai, gemini, echo.'
+        f"Unsupported RAG_EMBEDDING_PROVIDER={provider!r}. Supported values: openai, gemini, echo."
     )
 
 
@@ -138,16 +138,16 @@ def embed_texts(texts: Sequence[str]) -> EmbeddingBatch:
     expected = settings.VECTOR_EMBEDDING_DIMENSIONS
     if dimensions and expected and dimensions != expected:
         raise EmbeddingError(
-            f'Embedding dimensionality mismatch: provider returned {dimensions} '
-            f'dimensions but VECTOR_EMBEDDING_DIMENSIONS={expected}. '
-            'Update the setting and re-run the pgvector migration for the new column width.'
+            f"Embedding dimensionality mismatch: provider returned {dimensions} "
+            f"dimensions but VECTOR_EMBEDDING_DIMENSIONS={expected}. "
+            "Update the setting and re-run the pgvector migration for the new column width."
         )
     return embeddings
 
 
 def embedding_model_name() -> str:
     provider = get_embedding_provider()
-    return f'{provider.provider_name}/{provider.model_name}'
+    return f"{provider.provider_name}/{provider.model_name}"
 
 
 def distance_to_similarity(distance: float) -> float:

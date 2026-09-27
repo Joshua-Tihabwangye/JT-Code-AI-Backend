@@ -27,13 +27,13 @@ def vector_store_enabled() -> bool:
     """True only when pgvector can be queried (Postgres + feature flag)."""
     if not settings.PGVECTOR_ENABLED:
         return False
-    return connection.vendor == 'postgresql'
+    return connection.vendor == "postgresql"
 
 
 def require_vector_store() -> None:
     if not vector_store_enabled():
         raise VectorStoreUnavailable(
-            'The pgvector store is only available on a PostgreSQL connection with PGVECTOR_ENABLED=true.'
+            "The pgvector store is only available on a PostgreSQL connection with PGVECTOR_ENABLED=true."
         )
 
 
@@ -52,7 +52,7 @@ def upsert_chunk_embeddings(
     if not chunks:
         return 0
     if len(chunks) != len(embeddings):
-        raise ValueError('chunks and embeddings must be aligned.')
+        raise ValueError("chunks and embeddings must be aligned.")
 
     from apps.knowledge.models import Chunk
 
@@ -64,7 +64,7 @@ def upsert_chunk_embeddings(
         chunk.embedding_dimensions = dimensions
     Chunk.objects.bulk_update(
         chunks_list,
-        fields=['embedding', 'embedding_model', 'embedding_dimensions'],
+        fields=["embedding", "embedding_model", "embedding_dimensions"],
         batch_size=500,
     )
     return len(chunks_list)
@@ -78,11 +78,11 @@ def delete_document_embeddings(document_id) -> int:
     updated = 0
     for chunk in (
         Chunk.objects.filter(document_id=document_id, embedding__isnull=False)
-        .only('id')
+        .only("id")
         .iterator(chunk_size=500)
     ):
         chunk.embedding = None
-        chunk.save(update_fields=['embedding'])
+        chunk.save(update_fields=["embedding"])
         updated += 1
     return updated
 
@@ -109,8 +109,8 @@ def semantic_search(
 
     queryset = (
         Chunk.objects.filter(embedding__isnull=False, collection_id__in=collection_ids)
-        .select_related('document', 'collection__organization')
-        .annotate(distance=CosineDistance('embedding', query_vector))
+        .select_related("document", "collection__organization")
+        .annotate(distance=CosineDistance("embedding", query_vector))
     )
     if organization_id is not None:
         queryset = queryset.filter(collection__organization_id=organization_id)
@@ -118,23 +118,23 @@ def semantic_search(
         min_similarity = settings.RAG_SIMILARITY_THRESHOLD
     if min_similarity is not None and min_similarity > 0:
         queryset = queryset.filter(distance__lte=1.0 - min_similarity)
-    queryset = queryset.order_by('distance')[:top_k]
+    queryset = queryset.order_by("distance")[:top_k]
 
     results: list[dict] = []
     for chunk in queryset:
         results.append(
             {
-                'chunk_id': str(chunk.id),
-                'document_id': str(chunk.document_id),
-                'document_title': chunk.document.title,
-                'collection_id': str(chunk.collection_id),
-                'chunk_index': chunk.chunk_index,
-                'content': chunk.content,
-                'heading_path': chunk.heading_path,
-                'page_number': chunk.page_number,
-                'offset_range': [chunk.offset_start, chunk.offset_end],
-                'score': round(distance_to_similarity(chunk.distance), 6),
-                'embedding_model': chunk.embedding_model,
+                "chunk_id": str(chunk.id),
+                "document_id": str(chunk.document_id),
+                "document_title": chunk.document.title,
+                "collection_id": str(chunk.collection_id),
+                "chunk_index": chunk.chunk_index,
+                "content": chunk.content,
+                "heading_path": chunk.heading_path,
+                "page_number": chunk.page_number,
+                "offset_range": [chunk.offset_start, chunk.offset_end],
+                "score": round(distance_to_similarity(chunk.distance), 6),
+                "embedding_model": chunk.embedding_model,
             }
         )
     return results

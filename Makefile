@@ -1,4 +1,4 @@
-.PHONY: help install migrate run worker beat test test-watch lint format check typecheck clean shell dbshell createsuperuser collectstatic compose-up compose-down compose-logs compose-build setup-dev start-dev
+.PHONY: help install migrate run worker beat test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic compose-up compose-down compose-logs compose-build setup-dev start-dev
 
 # Default target
 help:
@@ -28,6 +28,8 @@ help:
 	@echo "  format        Format code with ruff"
 	@echo "  typecheck     Run mypy type checking"
 	@echo "  check         Run all checks (lint + format + typecheck + test)"
+	@echo "  ci-local      Run the same gates as GitHub Actions where possible"
+	@echo "  restore-drill Run local Phase 3 restore verification"
 	@echo ""
 	@echo "Docker:"
 	@echo "  compose-up    Start all services with Docker Compose"
@@ -104,6 +106,18 @@ typecheck:
 	mypy .
 
 check: lint format typecheck test
+
+ci-local:
+	ruff check .
+	ruff format --check .
+	python manage.py makemigrations --check --dry-run --settings=config.settings.test
+	pytest --cov=apps --cov=config
+	detect-secrets scan --all-files --exclude-files '(^\.env\.example$$|^JT-Code_.*\.(pdf|docx)$$)'
+	bandit -q -r apps config manage.py --exclude tests
+	pip-audit --strict
+
+restore-drill:
+	python manage.py restore_drill_check --prepare-test-db --settings=config.settings.test
 
 # Docker
 compose-up:

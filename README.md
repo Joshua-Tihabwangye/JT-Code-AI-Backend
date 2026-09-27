@@ -8,7 +8,7 @@ Production-oriented Django boilerplate for JT-Code. This is the backend reposito
 - **Authentication**: Supabase JWT verification and Supabase user webhook
 - **Database**: PostgreSQL (Supabase)
 - **Vector search / RAG**: Supabase pgvector (semantic retrieval with tenant scoping)
-- **Storage**: Cloudinary signed uploads and verified asset registration
+- **Storage**: ImageKit signed uploads and verified asset registration
 - **Caching/Queue**: Redis for Django caching and Celery transport
 - **Background Jobs**: Celery workers + Celery Beat
 - **Event Streaming**: Kafka event bus using `confluent-kafka`
@@ -71,7 +71,7 @@ jt-code backend/
 |-----|---------|------------|
 | `identity` | User auth, Supabase integration | `User` |
 | `conversations` | Chat conversations & messages | `Conversation`, `Message`, `ChatRequest` |
-| `assets` | File uploads via Cloudinary | `Asset` |
+| `assets` | File uploads via ImageKit | `Asset` |
 | `events` | Kafka outbox pattern | `OutboxEvent` |
 | `core` | Shared utilities | Middleware, logging, exceptions |
 
@@ -169,9 +169,9 @@ See `.env.example` for all available variables. Key variables:
 | `SUPABASE_URL` | Supabase project URL | Yes |
 | `SUPABASE_JWT_SECRET` | Supabase JWT secret for token verification | Yes |
 | `SUPABASE_WEBHOOK_SIGNING_SECRET` | Supabase webhook signing secret | Yes |
-| `CLOUDINARY_CLOUD_NAME` | Cloudinary cloud name | Yes |
-| `CLOUDINARY_API_KEY` | Cloudinary API key | Yes |
-| `CLOUDINARY_API_SECRET` | Cloudinary API secret | Yes |
+| `IMAGEKIT_PUBLIC_KEY` | ImageKit public key for client uploads | Yes |
+| `IMAGEKIT_PRIVATE_KEY` | ImageKit private key for server signing/API verification | Yes |
+| `IMAGEKIT_ENDPOINT_URL` | ImageKit URL endpoint | Yes |
 | `REDIS_URL` | Redis connection URL | Yes |
 | `CELERY_BROKER_URL` | Celery broker URL | Yes |
 | `CELERY_RESULT_BACKEND` | Celery result backend URL | Yes |
@@ -192,9 +192,9 @@ See `.env.example` for all available variables. Key variables:
 - Webhook handler for user sync at `/api/v1/webhooks/supabase/`
 - Local user mapping created on first authenticated request
 
-### File Uploads (Cloudinary)
-- Signed upload workflow: client requests signature → uploads to Cloudinary → calls completion endpoint
-- Server verifies Cloudinary resource before storing metadata
+### File Uploads (ImageKit)
+- Signed upload workflow: client requests auth parameters → uploads to ImageKit → calls completion endpoint
+- Server verifies ImageKit file details before storing metadata
 - Assets tracked in `Asset` model with status (ready/quarantined/deleted)
 
 ### Event Processing (Kafka + Outbox)

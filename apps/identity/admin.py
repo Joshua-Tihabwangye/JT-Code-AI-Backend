@@ -8,14 +8,21 @@ from apps.identity.models import User
 class JTCodeUserAdmin(UserAdmin):
     fieldsets = UserAdmin.fieldsets + (
         (
-            'Supabase',
+            "Supabase",
             {
-                'fields': (
-                    'supabase_user_id', 'full_name', 'display_name', 'avatar_url',
-                    'job_title', 'contact', 'country', 'timezone', 'bio',
+                "fields": (
+                    "supabase_user_id",
+                    "full_name",
+                    "display_name",
+                    "avatar_url",
+                    "job_title",
+                    "contact",
+                    "country",
+                    "timezone",
+                    "bio",
                 )
             },
         ),
     )
-    list_display = ('supabase_user_id', 'email', 'full_name', 'is_active', 'is_staff')
-    search_fields = ('supabase_user_id', 'email', 'full_name', 'display_name')
+    list_display = ("supabase_user_id", "email", "full_name", "is_active", "is_staff")
+    search_fields = ("supabase_user_id", "email", "full_name", "display_name")

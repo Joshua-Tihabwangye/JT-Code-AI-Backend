@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-import cloudinary
 import dj_database_url
 import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
@@ -13,7 +12,7 @@ from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.redis import RedisIntegration
 
-from config.logging import LOGGING
+from config.logging import LOGGING  # noqa: F401
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BASE_DIR / ".env")
@@ -181,17 +180,12 @@ SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE")
 SUPABASE_JWT_ISSUER = env("SUPABASE_JWT_ISSUER")
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
 
-CLOUDINARY_CLOUD_NAME = env("CLOUDINARY_CLOUD_NAME")
-CLOUDINARY_API_KEY = env("CLOUDINARY_API_KEY")
-CLOUDINARY_API_SECRET = env("CLOUDINARY_API_SECRET")
-CLOUDINARY_UPLOAD_FOLDER = env("CLOUDINARY_UPLOAD_FOLDER", "jt-code/development")
-CLOUDINARY_MAX_UPLOAD_BYTES = int(env("CLOUDINARY_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
-cloudinary.config(
-    cloud_name=CLOUDINARY_CLOUD_NAME,
-    api_key=CLOUDINARY_API_KEY,
-    api_secret=CLOUDINARY_API_SECRET,
-    secure=True,
-)
+IMAGEKIT_PUBLIC_KEY = env("IMAGEKIT_PUBLIC_KEY")
+IMAGEKIT_PRIVATE_KEY = env("IMAGEKIT_PRIVATE_KEY")
+IMAGEKIT_ENDPOINT_URL = env("IMAGEKIT_ENDPOINT_URL")
+IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code/development")
+IMAGEKIT_MAX_UPLOAD_BYTES = int(env("IMAGEKIT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS = int(env("IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "300"))
 
 KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_CLIENT_ID = env("KAFKA_CLIENT_ID", "jt-code-api")

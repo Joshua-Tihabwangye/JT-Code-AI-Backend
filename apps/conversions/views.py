@@ -31,7 +31,10 @@ class ConversionViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        return tenant_scoped_queryset(ConversionJob.objects.filter(owner=self.request.user), self.request.user)
+        return tenant_scoped_queryset(
+            ConversionJob.objects.filter(owner=self.request.user),
+            self.request.user,
+        )
 
     def create(self, request: Request) -> Response:
         serializer = ConversionCreateSerializer(data=request.data)
@@ -114,7 +117,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
             job.status = ConversionJob.Status.RUNNING
             job.save(update_fields=["status", "updated_at"])
             output = run_conversion(job)
-            cloudinary_url = finalize_conversion(job, output)
+            imagekit_url = finalize_conversion(job, output)
             job.status = ConversionJob.Status.COMPLETED
             job.save(update_fields=["status", "output_bytes", "output_path", "output_url", "updated_at"])
             add_outbox_event(
@@ -124,7 +127,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
                     "conversionId": str(job.id),
                     "userId": str(request.user.id),
                     "outputBytes": job.output_bytes,
-                    "outputUrl": cloudinary_url,
+                    "outputUrl": imagekit_url,
                 },
             )
         except Exception as exc:

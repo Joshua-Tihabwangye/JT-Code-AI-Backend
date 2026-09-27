@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import time
-
-import cloudinary.api
-import cloudinary.utils
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from rest_framework import status
@@ -12,6 +8,13 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.assets.imagekit import (
+    generate_upload_auth,
+    imagekit_is_configured,
+    sanitize_file_name,
+    user_upload_folder,
+    verify_imagekit_file,
+)
 from apps.assets.models import Asset
 from apps.assets.serializers import AssetSerializer, CompleteUploadSerializer, SignatureRequestSerializer
 from apps.events.outbox import add_outbox_event
@@ -29,33 +32,31 @@ class AssetListView(ListAPIView):
         )
 
 
-class CloudinarySignatureView(APIView):
+class ImageKitSignatureView(APIView):
     def post(self, request: Request) -> Response:
         serializer = SignatureRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if serializer.validated_data["bytes"] > settings.CLOUDINARY_MAX_UPLOAD_BYTES:
+        if serializer.validated_data["bytes"] > settings.IMAGEKIT_MAX_UPLOAD_BYTES:
             return Response(
                 {"detail": "File exceeds the configured upload limit."},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
-        if not all(
-            (settings.CLOUDINARY_CLOUD_NAME, settings.CLOUDINARY_API_KEY, settings.CLOUDINARY_API_SECRET)
-        ):
+        if not imagekit_is_configured():
             return Response(
-                {"detail": "Cloudinary is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
-        timestamp = int(time.time())
-        folder = f"{settings.CLOUDINARY_UPLOAD_FOLDER}/{request.user.id}"
-        params = {"timestamp": timestamp, "folder": folder}
-        signature = cloudinary.utils.api_sign_request(params, settings.CLOUDINARY_API_SECRET)
+        folder = user_upload_folder(request.user)
+        auth = generate_upload_auth()
         return Response(
             {
-                "cloudName": settings.CLOUDINARY_CLOUD_NAME,
-                "apiKey": settings.CLOUDINARY_API_KEY,
-                "timestamp": timestamp,
-                "signature": signature,
+                "publicKey": settings.IMAGEKIT_PUBLIC_KEY,
+                "endpointUrl": settings.IMAGEKIT_ENDPOINT_URL,
+                "uploadUrl": "https://upload.imagekit.io/api/v1/files/upload",
                 "folder": folder,
-                "uploadUrl": f"https://api.cloudinary.com/v1_1/{settings.CLOUDINARY_CLOUD_NAME}/auto/upload",
+                "fileName": sanitize_file_name(serializer.validated_data["originalFilename"]),
+                "token": auth["token"],
+                "expire": auth["expire"],
+                "signature": auth["signature"],
             }
         )
 
@@ -64,48 +65,57 @@ class CompleteUploadView(APIView):
     def post(self, request: Request) -> Response:
         serializer = CompleteUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        public_id = serializer.validated_data["publicId"]
-        expected_prefix = f"{settings.CLOUDINARY_UPLOAD_FOLDER}/{request.user.id}/"
-        if not public_id.startswith(expected_prefix):
+        file_id = serializer.validated_data["fileId"]
+        file_path = serializer.validated_data["filePath"]
+        expected_prefix = f"{user_upload_folder(request.user)}/"
+        if not file_path.startswith(expected_prefix):
             return Response(
                 {"detail": "Uploaded asset is outside the authorized folder."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        try:
-            resource = cloudinary.api.resource(
-                public_id, resource_type=serializer.validated_data["resourceType"]
+        if not imagekit_is_configured():
+            return Response(
+                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
+        try:
+            resource = verify_imagekit_file(file_id)
         except Exception:
             return Response(
-                {"detail": "Cloudinary asset could not be verified."}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "ImageKit asset could not be verified."}, status=status.HTTP_400_BAD_REQUEST
             )
-        if int(resource.get("bytes", -1)) != serializer.validated_data["bytes"]:
-            return Response({"detail": "Cloudinary asset size mismatch."}, status=status.HTTP_409_CONFLICT)
+        if resource.get("filePath") != file_path:
+            return Response({"detail": "ImageKit asset path mismatch."}, status=status.HTTP_409_CONFLICT)
+        if int(resource.get("size", -1)) != serializer.validated_data["size"]:
+            return Response({"detail": "ImageKit asset size mismatch."}, status=status.HTTP_409_CONFLICT)
         try:
             with transaction.atomic():
                 asset = Asset.objects.create(
                     owner=request.user,
                     organization=primary_organization_for_user(request.user),
-                    cloudinary_public_id=public_id,
-                    secure_url=resource.get("secure_url") or serializer.validated_data["secureUrl"],
-                    resource_type=resource.get("resource_type") or serializer.validated_data["resourceType"],
+                    imagekit_file_id=file_id,
+                    imagekit_file_path=file_path,
+                    secure_url=resource.get("url") or serializer.validated_data["url"],
+                    resource_type=resource.get("fileType") or serializer.validated_data["fileType"],
                     format=resource.get("format") or serializer.validated_data.get("format", ""),
-                    bytes=resource.get("bytes") or serializer.validated_data["bytes"],
-                    version=resource.get("version") or serializer.validated_data["version"],
+                    bytes=resource.get("size") or serializer.validated_data["size"],
+                    version=serializer.validated_data.get("version", 0),
                     original_filename=serializer.validated_data["originalFilename"],
-                    metadata={"etag": resource.get("etag"), "asset_id": resource.get("asset_id")},
+                    metadata={
+                        "thumbnail_url": resource.get("thumbnailUrl"),
+                        "version_info": resource.get("versionInfo"),
+                    },
                 )
                 add_outbox_event(
                     "asset.created",
                     str(asset.id),
                     {
                         "assetId": str(asset.id),
-                        "publicId": public_id,
+                        "fileId": file_id,
                         "ownerId": str(request.user.id),
                         "resourceType": asset.resource_type,
                         "bytes": asset.bytes,
                     },
                 )
         except IntegrityError:
-            asset = Asset.objects.get(cloudinary_public_id=public_id, owner=request.user)
+            asset = Asset.objects.get(imagekit_file_id=file_id, owner=request.user)
         return Response(AssetSerializer(asset).data, status=status.HTTP_201_CREATED)

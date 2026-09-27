@@ -27,9 +27,9 @@ class Tool:
 
     def tool_def(self) -> dict[str, Any]:
         return {
-            'name': self.name,
-            'description': self.description,
-            'parameters': self.parameters,
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
         }
 
 
@@ -63,33 +63,33 @@ def invoke_tool(name: str, *, user, organization_id, arguments: dict[str, Any]) 
     """
     tool = _REGISTRY.get(name)
     if tool is None:
-        return f'Tool {name!r} is not registered.'
+        return f"Tool {name!r} is not registered."
     try:
         return tool.handler(user=user, organization_id=organization_id, **arguments)
     except TypeError as exc:
-        return f'Tool {name!r} called with invalid arguments: {exc}'
+        return f"Tool {name!r} called with invalid arguments: {exc}"
     except Exception as exc:  # noqa: BLE001 - tool failures are surfaced to the model
-        return f'Tool {name!r} execution failed: {exc}'
+        return f"Tool {name!r} execution failed: {exc}"
 
 
-def _knowledge_search(user, organization_id, *, query: str = '', top_k: int = 5) -> str:  # noqa: ARG001
+def _knowledge_search(user, organization_id, *, query: str = "", top_k: int = 5) -> str:  # noqa: ARG001
     if not query:
-        return 'A query is required for knowledge.search.'
+        return "A query is required for knowledge.search."
     top_k = min(max(int(top_k or 5), 1), 10)
     try:
         from apps.knowledge.embeddings import embed_texts
         from apps.knowledge.vectorstore import vector_store_enabled
 
         if not vector_store_enabled():
-            return 'The knowledge vector store is currently unavailable.'
+            return "The knowledge vector store is currently unavailable."
         from apps.knowledge.models import Collection
         from apps.knowledge.vectorstore import semantic_search
 
         collection_ids = list(
-            Collection.objects.filter(organization_id=organization_id).values_list('id', flat=True)
+            Collection.objects.filter(organization_id=organization_id).values_list("id", flat=True)
         )
         if not collection_ids:
-            return 'No knowledge collections exist for this organization.'
+            return "No knowledge collections exist for this organization."
 
         vectors = embed_texts([query])
         results = semantic_search(
@@ -99,12 +99,12 @@ def _knowledge_search(user, organization_id, *, query: str = '', top_k: int = 5)
             top_k=top_k,
         )
     except Exception as exc:  # noqa: BLE001 - tool failures are surfaced to the model
-        return f'Knowledge search failed: {exc}'
+        return f"Knowledge search failed: {exc}"
     if not results:
-        return 'No results found matching the query.'
-    return '\n'.join(
-        f'[{i + 1}] {r.get("document_title", "Document")} '
-        f'(chunk {r.get("chunk_index", "?")}): {r["content"][:1000]}'
+        return "No results found matching the query."
+    return "\n".join(
+        f"[{i + 1}] {r.get('document_title', 'Document')} "
+        f"(chunk {r.get('chunk_index', '?')}): {r['content'][:1000]}"
         for i, r in enumerate(results)
     )
 
@@ -112,46 +112,46 @@ def _knowledge_search(user, organization_id, *, query: str = '', top_k: int = 5)
 def _system_now(user, organization_id) -> str:  # noqa: ARG001
     from django.utils import timezone
 
-    return f'Current UTC time: {timezone.now().isoformat(timespec="seconds")}.'
+    return f"Current UTC time: {timezone.now().isoformat(timespec='seconds')}."
 
 
 def _whoami(user, organization_id) -> str:  # noqa: ARG001
-    name = getattr(user, 'display_name', '') or getattr(user, 'full_name', '') or ''
-    email = getattr(user, 'email', '') or ''
-    return f'User: {name or "unknown"}; email: {email or "(none)"}.'
+    name = getattr(user, "display_name", "") or getattr(user, "full_name", "") or ""
+    email = getattr(user, "email", "") or ""
+    return f"User: {name or 'unknown'}; email: {email or '(none)'}."
 
 
 register_tool(
     Tool(
-        name='knowledge.search',
+        name="knowledge.search",
         description=(
-            'Search the organization knowledge base for chunks related to a query '
-            'and return the most relevant passages with source document titles.'
+            "Search the organization knowledge base for chunks related to a query "
+            "and return the most relevant passages with source document titles."
         ),
         parameters={
-            'type': 'object',
-            'properties': {
-                'query': {'type': 'string', 'description': 'The search query.'},
-                'top_k': {'type': 'integer', 'description': 'Max results (1-10).', 'default': 5},
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query."},
+                "top_k": {"type": "integer", "description": "Max results (1-10).", "default": 5},
             },
-            'required': ['query'],
+            "required": ["query"],
         },
         handler=_knowledge_search,
     )
 )
 register_tool(
     Tool(
-        name='system.now',
-        description='Return the current UTC date and time.',
-        parameters={'type': 'object', 'properties': {}},
+        name="system.now",
+        description="Return the current UTC date and time.",
+        parameters={"type": "object", "properties": {}},
         handler=_system_now,
     )
 )
 register_tool(
     Tool(
-        name='identity.whoami',
+        name="identity.whoami",
         description="Return the acting user's display name and email.",
-        parameters={'type': 'object', 'properties': {}},
+        parameters={"type": "object", "properties": {}},
         handler=_whoami,
     )
 )
@@ -159,4 +159,4 @@ register_tool(
 
 def default_agent_tools() -> tuple[str, ...]:
     """Tool names enabled for general research-style agent runs."""
-    return ('knowledge.search', 'system.now', 'identity.whoami')
+    return ("knowledge.search", "system.now", "identity.whoami")

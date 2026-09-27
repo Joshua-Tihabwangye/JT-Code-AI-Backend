@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-20
-- **Related:** Production backlog Phase 0, Phase 11
+- **Related:** Production backlog Phase 0
 
 ## Context
 
@@ -14,9 +14,8 @@ and ownership must remain Django-owned.
 ## Decision
 
 - **ImageKit** is the canonical asset bytes/CDN provider going forward.
-- Cloudinary is deprecated and must be removed completely (Phase 11): no
-  packages, no configuration, no environment variables, no API code, no
-  documentation references.
+- The previous storage provider has been removed from runtime packages,
+  configuration, environment variables and API code.
 - The browser never receives the ImageKit private key. Django signs short-lived
  , scoped upload tokens; the completion endpoint verifies the upload
   server-side before persisting asset metadata.
@@ -24,21 +23,21 @@ and ownership must remain Django-owned.
   `assets.Asset`; ImageKit stores only bytes and transformations.
 - Delivery URLs are signed and access-controlled server-side; lifecycle/delete
   and orphan cleanup jobs run through a Django-owned worker.
-- Existing asset references must be migrated in Phase 11 before Cloudinary is
-  decommissioned.
+- Existing asset rows keep their provider identifier through a Django field
+  rename migration; new rows store ImageKit `fileId` and `filePath`.
 
 ## Consequences
 
 - **Positive:** no vendor lock-in and no secret exposure; verifiable
   uploads; full control of asset ACLs and lifecycle.
-- **Negative:** migration effort (Phase 11) plus double-run of
-  storage/Cloudinary code until removed; CDN outage affects deliverability.
-- **Action:** `documents`/`conversions` renderers, `assets` upload views and
-  all reported Cloudinary configuration will be re-pointed at ImageKit in
-  Phase 11 and the old integration deleted.
+- **Negative:** CDN outage affects deliverability; historical migrations retain
+  legacy field names so old databases can migrate forward safely.
+- **Action:** lifecycle/delete and orphan cleanup jobs should be expanded as
+  asset governance hardens.
 
 ## Verification
 
-- After Phase 11: no `cloudinary` module import, env var or docs reference;
-  ImageKit integration tests pass (signed upload, server-side verify,
-  signed delivery, delete/orphan cleanup).
+- No runtime `cloudinary` package import, dependency, environment variable or
+  API code remains.
+- ImageKit integration tests pass for signed upload auth, server-side verify
+  and generated/rendered byte upload fallback.

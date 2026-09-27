@@ -2,7 +2,7 @@
 
 ## Source-of-truth boundary
 
-Django and Supabase-hosted PostgreSQL own users' local application profile mappings, conversations, job state, asset metadata, usage and audit references. Supabase Auth owns authentication sessions and primary identity. Cloudinary owns asset bytes and transformations. Redis provides caching and Celery transport; it is not durable business state. Kafka carries integration/domain events; events are emitted through the PostgreSQL transactional outbox.
+Django and Supabase-hosted PostgreSQL own users' local application profile mappings, conversations, job state, asset metadata, usage and audit references. Supabase Auth owns authentication sessions and primary identity. ImageKit owns asset bytes and transformations. Redis provides caching and Celery transport; it is not durable business state. Kafka carries integration/domain events; events are emitted through the PostgreSQL transactional outbox.
 
 ## Request path
 
@@ -14,13 +14,13 @@ Django and Supabase-hosted PostgreSQL own users' local application profile mappi
 6. The outbox publisher sends committed events to Kafka.
 7. Sentry receives sanitized errors and traces from Django, Celery, Kafka consumers and the n8n error relay.
 
-## Cloudinary boundary
+## ImageKit boundary
 
-The browser never receives the Cloudinary API secret. Django signs short-lived upload parameters scoped to the user's folder. The completion endpoint verifies the asset against Cloudinary before saving metadata. Add malware scanning/quarantine before allowing generated or uploaded files to become downloadable in regulated deployments.
+The browser never receives the ImageKit private key. Django signs short-lived upload authentication parameters scoped to the user's folder. The completion endpoint verifies the asset against ImageKit before saving metadata. Add malware scanning/quarantine before allowing generated or uploaded files to become downloadable in regulated deployments.
 
 ## Supabase PostgreSQL
 
-Use a direct or session-pooler connection for long-running Django services. Require TLS in hosted environments. Supabase Auth owns user identity and session management; Cloudinary owns asset bytes and transformations.
+Use a direct or session-pooler connection for long-running Django services. Require TLS in hosted environments. Supabase Auth owns user identity and session management; ImageKit owns asset bytes and transformations.
 
 ## AI gateway and job execution
 

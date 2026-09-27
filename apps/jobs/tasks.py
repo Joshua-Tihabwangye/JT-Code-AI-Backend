@@ -10,7 +10,7 @@ def execute_job_task(self, job_id: str) -> dict:
     from apps.jobs.executor import execute_job
     from apps.jobs.models import Job
 
-    job = Job.objects.select_related('organization').get(id=job_id)
+    job = Job.objects.select_related("organization").get(id=job_id)
     return execute_job(job)
 
 
@@ -29,14 +29,14 @@ def process_callbacks():
             # For now, just mark as delivered
             callback.status = Callback.Status.DELIVERED
             callback.delivered_at = timezone.now()
-            callback.save(update_fields=['status', 'delivered_at'])
+            callback.save(update_fields=["status", "delivered_at"])
         except Exception as e:
             callback.attempts += 1
             callback.last_error = str(e)
             callback.last_attempt_at = timezone.now()
             # Exponential backoff
             callback.next_retry_at = timezone.now() + timezone.timedelta(minutes=2**callback.attempts)
-            callback.save(update_fields=['attempts', 'last_error', 'last_attempt_at', 'next_retry_at'])
+            callback.save(update_fields=["attempts", "last_error", "last_attempt_at", "next_retry_at"])
 
 
 @shared_task
@@ -52,14 +52,14 @@ def check_job_deadlines():
     for job in expired_jobs:
         job.status = Job.Status.EXPIRED
         job.completed_at = timezone.now()
-        job.error_message = 'Job deadline exceeded'
-        job.save(update_fields=['status', 'completed_at', 'error_message'])
+        job.error_message = "Job deadline exceeded"
+        job.save(update_fields=["status", "completed_at", "error_message"])
 
         enqueue_outbox_event(
-            topic='jobs.job.expired',
+            topic="jobs.job.expired",
             event_key=str(job.request_id),
-            payload={'job_id': str(job.id), 'request_id': str(job.request_id)},
-            headers={'trace_id': job.trace_id},
+            payload={"job_id": str(job.id), "request_id": str(job.request_id)},
+            headers={"trace_id": job.trace_id},
         )
 
 
@@ -77,4 +77,4 @@ def expire_old_jobs():
     count = old_jobs.count()
     old_jobs.delete()
 
-    return f'Deleted {count} old jobs'
+    return f"Deleted {count} old jobs"

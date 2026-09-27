@@ -19,7 +19,8 @@ class Asset(models.Model):
         null=True,
         blank=True,
     )
-    cloudinary_public_id = models.CharField(max_length=500, unique=True)
+    imagekit_file_id = models.CharField(max_length=500, unique=True)
+    imagekit_file_path = models.CharField(max_length=1000, blank=True)
     secure_url = models.URLField(max_length=1000)
     resource_type = models.CharField(max_length=50)
     format = models.CharField(max_length=50, blank=True)

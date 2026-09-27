@@ -8,26 +8,26 @@ from django.db import models
 
 class Document(models.Model):
     class Status(models.TextChoices):
-        DRAFT = 'draft', 'Draft'
-        RENDERING = 'rendering', 'Rendering'
-        READY = 'ready', 'Ready'
-        FAILED = 'failed', 'Failed'
+        DRAFT = "draft", "Draft"
+        RENDERING = "rendering", "Rendering"
+        READY = "ready", "Ready"
+        FAILED = "failed", "Failed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='documents',
+        related_name="documents",
     )
     organization = models.ForeignKey(
-        'identity.Organization',
+        "identity.Organization",
         on_delete=models.CASCADE,
-        related_name='documents',
+        related_name="documents",
         null=True,
         blank=True,
     )
     title = models.CharField(max_length=500)
-    template = models.CharField(max_length=100, default='general')
+    template = models.CharField(max_length=100, default="general")
     template_version = models.PositiveIntegerField(default=1)
     content = models.TextField(blank=True)
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.DRAFT)
@@ -40,10 +40,10 @@ class Document(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-updated_at']
+        ordering = ["-updated_at"]
         indexes = [
-            models.Index(fields=['owner', 'status']),
-            models.Index(fields=['organization', 'status']),
+            models.Index(fields=["owner", "status"]),
+            models.Index(fields=["organization", "status"]),
         ]
 
     def __str__(self) -> str:

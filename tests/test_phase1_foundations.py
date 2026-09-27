@@ -6,7 +6,6 @@ from django.conf import settings
 
 from config.settings.validation import validate_environment
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -26,9 +25,9 @@ def _strict_env() -> dict[str, str]:
         "CELERY_BROKER_URL": "redis://redis.example.com:6379/1",
         "CELERY_RESULT_BACKEND": "redis://redis.example.com:6379/2",
         "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.com:9092",
-        "CLOUDINARY_CLOUD_NAME": "jt-code",
-        "CLOUDINARY_API_KEY": "cloudinary-key",
-        "CLOUDINARY_API_SECRET": "cloudinary-secret",
+        "IMAGEKIT_PUBLIC_KEY": "public_key",
+        "IMAGEKIT_PRIVATE_KEY": "private_key",
+        "IMAGEKIT_ENDPOINT_URL": "https://ik.imagekit.io/jt-code",
         "STRIPE_SECRET_KEY": "sk_live_placeholder_for_validation",
         "STRIPE_WEBHOOK_SECRET": "whsec_placeholder_for_validation",
         "DJANGO_DEBUG": "false",

@@ -14,7 +14,7 @@ from rest_framework.response import Response
 
 from apps.core.throttling import BurstThrottle, ConversionThrottle
 from apps.documents.models import Document
-from apps.documents.rendering import render_docx, render_pdf, upload_bytes_to_cloudinary
+from apps.documents.rendering import render_docx, render_pdf, upload_rendered_bytes
 from apps.documents.serializers import (
     DocumentCreateSerializer,
     DocumentRenderSerializer,
@@ -74,7 +74,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 path.unlink(missing_ok=True)
 
     def _save_render(self, instance: Document, content: bytes, fmt: str) -> str:
-        url = upload_bytes_to_cloudinary(content, f"jt-code/documents/{instance.id}", resource_type="raw")
+        url = upload_rendered_bytes(
+            content,
+            file_name=f"{instance.id}.{fmt}",
+            folder=f"/jt-code/documents/{instance.owner_id}",
+        )
         if url:
             return url
         RENDER_ROOT.mkdir(parents=True, exist_ok=True)
@@ -162,7 +166,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def document_download(request: Request, id: uuid.UUID) -> FileResponse:
-    """Serves locally rendered documents when Cloudinary is not configured."""
+    """Serves locally rendered documents when ImageKit is not configured."""
     fmt = request.GET.get("fmt", "pdf")
     if fmt not in {"pdf", "docx"}:
         raise Http404

@@ -1,4 +1,5 @@
-from config.settings.base import *  # noqa: F403
+from config.settings.base import *  # noqa: F403,F405
+from config.settings.validation import validate_settings
 
 DEBUG = False
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -10,3 +11,5 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 X_FRAME_OPTIONS = 'DENY'
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+validate_settings('production')

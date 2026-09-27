@@ -23,7 +23,7 @@ Resolved from `pyproject.toml` / `requirements.txt`.
 | PyJWT[crypto] | Supabase JWT verification (JWKS) |
 | redis / celery[redis] | Cache transport + background jobs |
 | confluent-kafka | Kafka producer/consumer (events) |
-| cloudinary | Asset storage (deprecated — see ADR-002, removal in Phase 11) |
+| ImageKit REST API | Asset storage and CDN (ADR-002) |
 | sentry-sdk[django] | Error monitoring + tracing |
 | gunicorn / uvicorn[standard] / whitenoise | ASGI/WSGI serving + static |
 | openai | OpenAI + OpenAI-compatible Llama chat/embedding |
@@ -49,12 +49,9 @@ Canonical list (defaults in code, values in `.env.example`). Groups:
 **Authentication (Supabase):** `SUPABASE_URL`, `SUPABASE_JWT_SECRET`,
 `SUPABASE_JWT_AUDIENCE`, `SUPABASE_JWT_ISSUER`, `SUPABASE_WEBHOOK_SIGNING_SECRET`
 
-**Storage (assets):** current runtime code still uses `CLOUDINARY_CLOUD_NAME`,
-`CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `CLOUDINARY_UPLOAD_FOLDER`,
-`CLOUDINARY_MAX_UPLOAD_BYTES`. ADR-002 freezes ImageKit as the approved target;
-`IMAGEKIT_PUBLIC_KEY`, `IMAGEKIT_PRIVATE_KEY` and `IMAGEKIT_ENDPOINT_URL` are
-documented in `.env.example` for Phase 11 migration work, but they are not yet
-runtime settings in Phase 0-3.
+**Storage (assets):** `IMAGEKIT_PUBLIC_KEY`, `IMAGEKIT_PRIVATE_KEY`,
+`IMAGEKIT_ENDPOINT_URL`, `IMAGEKIT_UPLOAD_FOLDER`, `IMAGEKIT_MAX_UPLOAD_BYTES`,
+`IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS`.
 
 **Redis/Celery:** `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 
@@ -150,8 +147,7 @@ Admin/schema/docs: `/admin/`, `/api/schema/`, `/api/docs/`.
 | Supabase Auth | verify JWT/JWKS, user webhook | `apps.identity` |
 | Supabase PostgreSQL | primary relational database | `config.settings` |
 | Supabase PostgreSQL pgvector | active vector store; ADR-003 supersedes Pinecone | `apps.knowledge` |
-| Cloudinary | asset bytes, deprecated-active until Phase 11 | `apps.assets` |
-| ImageKit | approved target for asset bytes/CDN, not runtime-active yet | `apps.assets` |
+| ImageKit | active asset bytes/CDN provider | `apps.assets` |
 | Redis | cache + Celery transport | `config.settings` |
 | Kafka | outbox-published events | `apps.events` |
 | Celery / Celery Beat | background jobs + schedule | `config/celery.py` |

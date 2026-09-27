@@ -6,21 +6,21 @@ from django.db import models
 
 class ConversionJob(models.Model):
     class Status(models.TextChoices):
-        QUEUED = 'queued', 'Queued'
-        RUNNING = 'running', 'Running'
-        COMPLETED = 'completed', 'Completed'
-        FAILED = 'failed', 'Failed'
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='conversion_jobs',
+        related_name="conversion_jobs",
     )
     organization = models.ForeignKey(
-        'identity.Organization',
+        "identity.Organization",
         on_delete=models.CASCADE,
-        related_name='conversion_jobs',
+        related_name="conversion_jobs",
         null=True,
         blank=True,
     )
@@ -40,8 +40,8 @@ class ConversionJob(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['-created_at']
-        indexes = [models.Index(fields=('owner', '-created_at'))]
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=("owner", "-created_at"))]
 
     def __str__(self):
-        return f'{self.input_format}->{self.output_format} ({self.status})'
+        return f"{self.input_format}->{self.output_format} ({self.status})"

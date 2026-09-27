@@ -1,2 +1,1 @@
-from django.contrib import admin
-from apps.core.models import *  # No models in core yet, but keeping for future
+from django.contrib import admin  # noqa: F401  # core has no models currently
