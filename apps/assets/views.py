@@ -18,7 +18,11 @@ from apps.assets.imagekit import (
 from apps.assets.models import Asset
 from apps.assets.serializers import AssetSerializer, CompleteUploadSerializer, SignatureRequestSerializer
 from apps.events.outbox import add_outbox_event
-from apps.identity.authorization import organization_for_request, tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 
 
 class AssetListView(ListAPIView):
@@ -33,6 +37,8 @@ class AssetListView(ListAPIView):
 
 
 class ImageKitSignatureView(APIView):
+    permission_classes = [HasOrganizationWriteAccess]
+
     def post(self, request: Request) -> Response:
         serializer = SignatureRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -62,6 +68,8 @@ class ImageKitSignatureView(APIView):
 
 
 class CompleteUploadView(APIView):
+    permission_classes = [HasOrganizationWriteAccess]
+
     def post(self, request: Request) -> Response:
         serializer = CompleteUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

@@ -45,12 +45,14 @@ def test_create_document(authenticated_client, user, org):
 
 
 @pytest.mark.django_db
-def test_list_documents_scoped_to_owner(authenticated_client, user):
+def test_list_documents_scoped_to_selected_tenant(authenticated_client, user, org):
     other_user = user.__class__.objects.create_user(
         username="other-user", supabase_user_id="other-supabase-id", email="other@example.com"
     )
-    Document.objects.create(owner=other_user, title="Mine")
-    Document.objects.create(owner=user, title="Ours")
+    foreign_org = Organization.objects.create(name="Foreign Org", owner=other_user)
+    other_user.organizations.add(foreign_org)
+    Document.objects.create(owner=other_user, organization=foreign_org, title="Foreign")
+    Document.objects.create(owner=user, organization=org, title="Ours")
     response = authenticated_client.get("/api/v1/documents/")
     assert response.status_code == 200
     titles = [item["title"] for item in response.data["results"]]

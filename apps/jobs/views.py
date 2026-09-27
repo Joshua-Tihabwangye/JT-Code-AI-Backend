@@ -71,6 +71,7 @@ class JobViewSet(viewsets.ModelViewSet):
             request_id=job.request_id,
             job_id=job.id,
             reason=f"Job reservation: {job.task_type}",
+            organization=job.organization,
         )
 
     def _estimate_credits(self, task_type: str, input_payload: dict) -> Decimal:
@@ -131,7 +132,9 @@ class JobViewSet(viewsets.ModelViewSet):
         job.save(update_fields=["status", "completed_at"])
 
         # Release reserved credits
-        CreditService.release_reservation(user=request.user, request_id=job.request_id)
+        CreditService.release_reservation(
+            user=request.user, request_id=job.request_id, organization=job.organization
+        )
 
         # Enqueue cancellation event
         enqueue_outbox_event(
@@ -298,10 +301,15 @@ class JobStatusCallbackView(APIView):
             job.save(update_fields=["actual_credits"])
 
             CreditService.settle_reservation(
-                user=job.owner, request_id=job.request_id, actual_amount=actual_credits
+                user=job.owner,
+                request_id=job.request_id,
+                actual_amount=actual_credits,
+                organization=job.organization,
             )
         elif data["status"] in [Job.Status.FAILED, Job.Status.CANCELLED]:
-            CreditService.release_reservation(user=job.owner, request_id=job.request_id)
+            CreditService.release_reservation(
+                user=job.owner, request_id=job.request_id, organization=job.organization
+            )
 
         # Enqueue completion event
         enqueue_outbox_event(
@@ -345,7 +353,7 @@ class ResearchJobsView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user_orgs = request.user.organizations.values_list("id", flat=True)
+        organization = organization_for_request(request, required=True)
         collections = []
         if collection_ids:
             from apps.knowledge.models import Collection
@@ -353,7 +361,7 @@ class ResearchJobsView(APIView):
             collections = list(
                 Collection.objects.filter(
                     id__in=collection_ids,
-                    organization_id__in=user_orgs,
+                    organization=organization,
                     is_active=True,
                 ).values_list("id", flat=True)
             )
@@ -362,7 +370,7 @@ class ResearchJobsView(APIView):
 
             collections = list(
                 Collection.objects.filter(
-                    organization_id__in=user_orgs,
+                    organization=organization,
                     is_active=True,
                 ).values_list("id", flat=True)
             )
@@ -375,13 +383,14 @@ class ResearchJobsView(APIView):
                 amount=estimated_credits,
                 request_id=request_id,
                 reason=f"Deep research: {depth}",
+                organization=organization,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
         job = Job.objects.create(
             owner=request.user,
-            organization=organization_for_request(request, required=True),
+            organization=organization,
             task_type=Job.TaskType.SEARCH_RESEARCH,
             idempotency_key=f"research:{request_id}",
             input_payload={

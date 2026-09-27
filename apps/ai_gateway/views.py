@@ -122,11 +122,13 @@ class ModelRunViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        # Model runs are linked to jobs which have organization
+        # Model runs are linked to jobs in one explicitly selected tenant.
         from apps.jobs.models import Job
 
-        job_ids = Job.objects.filter(organization_id__in=user_orgs).values_list("id", flat=True)
+        organization = organization_for_request(self.request)
+        if organization is None:
+            return ModelRun.objects.none()
+        job_ids = Job.objects.filter(organization=organization).values_list("id", flat=True)
         return ModelRun.objects.filter(Q(job_id__in=job_ids) | Q(request_id__in=[])).select_related(
             "provider", "model", "policy"
         )

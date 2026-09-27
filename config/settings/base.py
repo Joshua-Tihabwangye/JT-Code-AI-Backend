@@ -52,7 +52,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_spectacular",
     "apps.core",
-    "apps.identity",
+    "apps.identity.apps.IdentityConfig",
     "apps.conversations",
     "apps.assets",
     "apps.events",

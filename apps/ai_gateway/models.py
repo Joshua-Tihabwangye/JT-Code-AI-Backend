@@ -214,7 +214,7 @@ class Prompt(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField()
     category = models.CharField(max_length=30, choices=Category.choices)
     content = models.TextField()
     variables = models.JSONField(default=list, blank=True)
@@ -235,6 +235,9 @@ class Prompt(models.Model):
 
     class Meta:
         ordering = ("category", "name")
+        constraints = [
+            models.UniqueConstraint(fields=("organization", "slug"), name="uniq_prompt_org_slug")
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.category}) v{self.version}"
@@ -259,7 +262,7 @@ class Evaluation(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField()
     type = models.CharField(max_length=20, choices=Type.choices)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     model = models.ForeignKey(Model, on_delete=models.CASCADE, related_name="evaluations")
@@ -284,6 +287,9 @@ class Evaluation(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(fields=("organization", "slug"), name="uniq_evaluation_org_slug")
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.type}) - {self.status}"

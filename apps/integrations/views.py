@@ -13,7 +13,10 @@ from rest_framework.response import Response
 
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
-from apps.identity.authorization import primary_organization_for_user
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+)
 from apps.integrations.models import (
     APIKey,
     Connector,
@@ -37,6 +40,18 @@ from apps.integrations.serializers import (
 )
 
 
+def _selected_organization_id(request: Request):
+    organization = organization_for_request(request)
+    return organization.id if organization is not None else None
+
+
+def _tenant_queryset(queryset, request: Request, *, organization_field: str = "organization"):
+    organization_id = _selected_organization_id(request)
+    if organization_id is None:
+        return queryset.none()
+    return queryset.filter(**{f"{organization_field}_id": organization_id})
+
+
 class ConnectorViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = ConnectorSerializer
@@ -47,13 +62,12 @@ class ConnectorViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ConnectorAccountViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = ConnectorAccountSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return ConnectorAccount.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(ConnectorAccount.objects.all(), self.request).select_related(
             "organization", "connector", "user"
         )
 
@@ -63,9 +77,7 @@ class ConnectorAccountViewSet(viewsets.ModelViewSet):
         return ConnectorAccountSerializer
 
     def perform_create(self, serializer):
-        org = primary_organization_for_user(self.request.user)
-        if not org:
-            raise ValueError("User must belong to an organization")
+        org = organization_for_request(self.request, required=True)
         serializer.save(organization=org, user=self.request.user)
 
     @action(detail=True, methods=["post"])
@@ -127,13 +139,12 @@ class ConnectorAccountViewSet(viewsets.ModelViewSet):
 
 
 class WebhookViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = WebhookSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Webhook.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(Webhook.objects.all(), self.request).select_related(
             "organization", "created_by"
         )
 
@@ -143,9 +154,7 @@ class WebhookViewSet(viewsets.ModelViewSet):
         return WebhookSerializer
 
     def perform_create(self, serializer):
-        org = primary_organization_for_user(self.request.user)
-        if not org:
-            raise ValueError("User must belong to an organization")
+        org = organization_for_request(self.request, required=True)
         # Generate secret
         secret = secrets.token_urlsafe(32)
         serializer.save(organization=org, created_by=self.request.user, secret=secret)
@@ -182,8 +191,7 @@ class WebhookDeliveryViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        webhook_ids = Webhook.objects.filter(organization_id__in=user_orgs).values_list("id", flat=True)
+        webhook_ids = _tenant_queryset(Webhook.objects.all(), self.request).values_list("id", flat=True)
         return WebhookDelivery.objects.filter(webhook_id__in=webhook_ids).select_related("webhook")
 
 
@@ -201,10 +209,11 @@ class IncomingWebhookView(APIView):
 
         # Verify signature
         signature = request.headers.get("X-Webhook-Signature")
-        if signature:
-            expected = hashlib.sha256((webhook.secret + request.body.decode()).encode()).hexdigest()
-            if not secrets.compare_digest(signature, expected):
-                return Response({"detail": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+        if not signature:
+            return Response({"detail": "Webhook signature required"}, status=status.HTTP_401_UNAUTHORIZED)
+        expected = hashlib.sha256((webhook.secret + request.body.decode()).encode()).hexdigest()
+        if not secrets.compare_digest(signature, expected):
+            return Response({"detail": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Create delivery record
         delivery = WebhookDelivery.objects.create(
@@ -231,13 +240,12 @@ class IncomingWebhookView(APIView):
 
 
 class APIKeyViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = APIKeySerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return APIKey.objects.filter(organization_id__in=user_orgs).select_related("organization", "user")
+        return _tenant_queryset(APIKey.objects.all(), self.request).select_related("organization", "user")
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -245,9 +253,7 @@ class APIKeyViewSet(viewsets.ModelViewSet):
         return APIKeySerializer
 
     def perform_create(self, serializer):
-        org = primary_organization_for_user(self.request.user)
-        if not org:
-            raise ValueError("User must belong to an organization")
+        org = organization_for_request(self.request, required=True)
 
         # Generate API key
         prefix = "jtk_live" if not settings.DEBUG else "jtk_test"
@@ -280,13 +286,12 @@ class APIKeyViewSet(viewsets.ModelViewSet):
 
 
 class KafkaConsumerViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = KafkaConsumerSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return KafkaConsumer.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(KafkaConsumer.objects.all(), self.request).select_related(
             "organization", "created_by"
         )
 
@@ -296,9 +301,7 @@ class KafkaConsumerViewSet(viewsets.ModelViewSet):
         return KafkaConsumerSerializer
 
     def perform_create(self, serializer):
-        org = primary_organization_for_user(self.request.user)
-        if not org:
-            raise ValueError("User must belong to an organization")
+        org = organization_for_request(self.request, required=True)
         serializer.save(organization=org, created_by=self.request.user)
 
     @action(detail=True, methods=["post"])

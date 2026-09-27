@@ -23,7 +23,18 @@ from apps.billing.serializers import (
 from apps.billing.services import StripeService
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
-from apps.identity.authorization import primary_organization_for_user
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    require_organization_write_access,
+)
+
+
+def _tenant_queryset(queryset, request: Request, *, organization_field: str = "organization"):
+    organization = organization_for_request(request)
+    if organization is None:
+        return queryset.none()
+    return queryset.filter(**{f"{organization_field}_id": organization.id})
 
 
 class PlanViewSet(viewsets.ReadOnlyModelViewSet):
@@ -44,12 +55,8 @@ class PlanViewSet(viewsets.ReadOnlyModelViewSet):
         plan = self.get_object()
         user = request.user
 
-        # Get or create organization
-        org = primary_organization_for_user(user)
-        if not org:
-            return Response(
-                {"detail": "User must belong to an organization"}, status=status.HTTP_400_BAD_REQUEST
-            )
+        org = organization_for_request(request, required=True)
+        require_organization_write_access(user, org.id)
 
         # Check if already subscribed
         existing = Subscription.objects.filter(
@@ -74,13 +81,12 @@ class PlanViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class SubscriptionViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = SubscriptionSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Subscription.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(Subscription.objects.all(), self.request).select_related(
             "plan", "organization"
         )
 
@@ -118,13 +124,12 @@ class SubscriptionViewSet(viewsets.ModelViewSet):
 
 
 class CreditWalletViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = CreditWalletSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return CreditWallet.objects.filter(organization_id__in=user_orgs).select_related("organization")
+        return _tenant_queryset(CreditWallet.objects.all(), self.request).select_related("organization")
 
     @action(detail=True, methods=["post"])
     def topup(self, request: Request, id=None):
@@ -156,8 +161,7 @@ class CreditLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        wallet_ids = CreditWallet.objects.filter(organization_id__in=user_orgs).values_list("id", flat=True)
+        wallet_ids = _tenant_queryset(CreditWallet.objects.all(), self.request).values_list("id", flat=True)
         return CreditLedger.objects.filter(wallet_id__in=wallet_ids).select_related(
             "wallet", "wallet__organization"
         )
@@ -169,8 +173,7 @@ class InvoiceViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Invoice.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(Invoice.objects.all(), self.request).select_related(
             "organization", "subscription"
         )
 
@@ -181,8 +184,7 @@ class PaymentViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Payment.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(Payment.objects.all(), self.request).select_related(
             "organization", "invoice", "wallet"
         )
 
@@ -226,9 +228,7 @@ class UsageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
-        org = primary_organization_for_user(request.user)
-        if not org:
-            return Response({"detail": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
+        org = organization_for_request(request, required=True)
 
         wallet = CreditWallet.objects.filter(organization=org).first()
         subscription = Subscription.objects.filter(

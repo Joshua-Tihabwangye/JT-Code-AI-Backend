@@ -66,6 +66,12 @@ class ConsentRecordSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
+class ConsentCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConsentRecord
+        fields = ["consent_type", "status", "version", "metadata", "expires_at"]
+
+
 class ConsentUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=ConsentRecord.Status.choices)
     version = serializers.CharField(max_length=50, required=False)

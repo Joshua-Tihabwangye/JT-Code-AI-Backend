@@ -12,6 +12,7 @@ from apps.core.views import APIView
 from apps.governance.models import AuditEvent, ConsentRecord, RetentionRule, SafetyEvent, SupportCase
 from apps.governance.serializers import (
     AuditEventSerializer,
+    ConsentCreateSerializer,
     ConsentRecordSerializer,
     ConsentUpdateSerializer,
     RetentionRuleSerializer,
@@ -22,7 +23,14 @@ from apps.governance.serializers import (
     SupportCaseSerializer,
     SupportCaseUpdateSerializer,
 )
-from apps.identity.authorization import primary_organization_for_user
+from apps.identity.authorization import HasOrganizationWriteAccess, organization_for_request
+
+
+def _tenant_queryset(queryset, request: Request, *, organization_field: str = "organization"):
+    organization = organization_for_request(request)
+    if organization is None:
+        return queryset.none()
+    return queryset.filter(**{f"{organization_field}_id": organization.id})
 
 
 class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
@@ -31,8 +39,7 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        queryset = AuditEvent.objects.filter(organization_id__in=user_orgs).select_related(
+        queryset = _tenant_queryset(AuditEvent.objects.all(), self.request).select_related(
             "organization", "actor"
         )
 
@@ -63,36 +70,43 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ConsentRecordViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = ConsentRecordSerializer
     lookup_field = "id"
 
+    def get_permissions(self):
+        # Consent is a member's own record; management of existing tenant
+        # records still requires an editor or admin role.
+        if self.action == "create":
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return ConsentRecord.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(ConsentRecord.objects.all(), self.request).select_related(
             "organization", "user"
         )
 
     def get_serializer_class(self):
+        if self.action == "create":
+            return ConsentCreateSerializer
         if self.action in ["update", "partial_update"]:
             return ConsentUpdateSerializer
         return ConsentRecordSerializer
 
     def perform_create(self, serializer):
-        org = serializer.validated_data["organization"]
-        if not self.request.user.organizations.filter(id=org.id).exists():
-            self.permission_denied(self.request)
-        serializer.save()
+        serializer.save(
+            organization=organization_for_request(self.request, required=True),
+            user=self.request.user,
+        )
 
 
 class RetentionRuleViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = RetentionRuleSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return RetentionRule.objects.filter(organization_id__in=user_orgs).select_related(
+        return _tenant_queryset(RetentionRule.objects.all(), self.request).select_related(
             "organization", "created_by"
         )
 
@@ -102,20 +116,19 @@ class RetentionRuleViewSet(viewsets.ModelViewSet):
         return RetentionRuleSerializer
 
     def perform_create(self, serializer):
-        org = serializer.validated_data["organization"]
-        if not self.request.user.organizations.filter(id=org.id).exists():
-            self.permission_denied(self.request)
-        serializer.save(created_by=self.request.user)
+        serializer.save(
+            organization=organization_for_request(self.request, required=True),
+            created_by=self.request.user,
+        )
 
 
 class SafetyEventViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = SafetyEventSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        queryset = SafetyEvent.objects.filter(organization_id__in=user_orgs).select_related(
+        queryset = _tenant_queryset(SafetyEvent.objects.all(), self.request).select_related(
             "organization", "user", "job", "reviewed_by"
         )
 
@@ -152,13 +165,19 @@ class SafetyEventViewSet(viewsets.ModelViewSet):
 
 
 class SupportCaseViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = SupportCaseSerializer
     lookup_field = "id"
 
+    def get_permissions(self):
+        # Any member can open a case for their selected tenant. Assignment,
+        # resolution, and other management actions remain role-protected.
+        if self.action == "create":
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        queryset = SupportCase.objects.filter(organization_id__in=user_orgs).select_related(
+        queryset = _tenant_queryset(SupportCase.objects.all(), self.request).select_related(
             "organization", "user", "assigned_to"
         )
 
@@ -182,10 +201,9 @@ class SupportCaseViewSet(viewsets.ModelViewSet):
         return SupportCaseSerializer
 
     def perform_create(self, serializer):
-        org = primary_organization_for_user(self.request.user)
-        if not org:
-            raise ValueError("User must belong to an organization")
-        serializer.save(organization=org, user=self.request.user)
+        serializer.save(
+            organization=organization_for_request(self.request, required=True), user=self.request.user
+        )
 
     @action(detail=True, methods=["post"])
     def assign(self, request: Request, id=None):
@@ -233,18 +251,18 @@ class GovernanceDashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
-        user_orgs = request.user.organizations.values_list("id", flat=True)
+        organization = organization_for_request(request, required=True)
 
         # Safety events stats
         safety_stats = (
-            SafetyEvent.objects.filter(organization_id__in=user_orgs)
+            SafetyEvent.objects.filter(organization=organization)
             .values("category", "severity", "action_taken")
             .annotate(count=Count("id"))
         )
 
         # Support cases stats
         case_stats = (
-            SupportCase.objects.filter(organization_id__in=user_orgs)
+            SupportCase.objects.filter(organization=organization)
             .values("status", "priority", "category")
             .annotate(count=Count("id"))
         )
@@ -254,14 +272,14 @@ class GovernanceDashboardView(APIView):
 
         thirty_days_ago = timezone.now() - timezone.timedelta(days=30)
         audit_stats = (
-            AuditEvent.objects.filter(organization_id__in=user_orgs, created_at__gte=thirty_days_ago)
+            AuditEvent.objects.filter(organization=organization, created_at__gte=thirty_days_ago)
             .values("category", "severity")
             .annotate(count=Count("id"))
         )
 
         # Consent stats
         consent_stats = (
-            ConsentRecord.objects.filter(organization_id__in=user_orgs)
+            ConsentRecord.objects.filter(organization=organization)
             .values("consent_type", "status")
             .annotate(count=Count("id"))
         )

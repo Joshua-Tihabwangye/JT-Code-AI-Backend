@@ -52,16 +52,20 @@ def supabase_webhook(request: HttpRequest):
         display_name = full_name or ""
         avatar_url = user_metadata.get("avatar_url", "") or ""
 
-        User.objects.update_or_create(
+        profile_defaults = {
+            "email": email,
+            "full_name": full_name,
+            "display_name": display_name,
+            "avatar_url": avatar_url,
+        }
+        user, created = User.objects.get_or_create(
             supabase_user_id=supabase_id,
-            defaults={
-                "email": email,
-                "full_name": full_name,
-                "display_name": display_name,
-                "avatar_url": avatar_url,
-                "is_active": True,
-            },
+            defaults={**profile_defaults, "is_active": True},
         )
+        if not created:
+            # A local suspension is an authorization decision. A routine upstream
+            # profile UPDATE must never silently reactivate that account.
+            User.objects.filter(pk=user.pk).update(**profile_defaults)
         return JsonResponse({"received": True})
 
     return JsonResponse({"received": True})

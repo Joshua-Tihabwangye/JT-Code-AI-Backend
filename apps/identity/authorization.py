@@ -111,6 +111,39 @@ def user_can_edit_organization(user, organization_id) -> bool:
     )
 
 
+def require_organization_write_access(user, organization_id) -> None:
+    if not user_can_edit_organization(user, organization_id):
+        raise PermissionDenied("Editor or admin access is required for this organization.")
+
+
+def organization_id_for_object(obj) -> object | None:
+    """Find an object's tenant without accepting an owner as a boundary.
+
+    Several tenant-owned resources (knowledge sources/documents and webhook
+    deliveries) carry their organization through a parent relation. Keeping the
+    lookup here ensures write permissions behave consistently for DRF object
+    actions without widening access based on the resource owner.
+    """
+    organization_id = getattr(obj, "organization_id", None)
+    if organization_id is not None:
+        return organization_id
+
+    collection = getattr(obj, "collection", None)
+    if collection is not None and getattr(collection, "organization_id", None) is not None:
+        return collection.organization_id
+
+    source = getattr(obj, "source", None)
+    if source is not None:
+        source_collection = getattr(source, "collection", None)
+        if source_collection is not None:
+            return getattr(source_collection, "organization_id", None)
+
+    job = getattr(obj, "job", None)
+    if job is not None:
+        return getattr(job, "organization_id", None)
+    return None
+
+
 def membership_required(
     organization_id_getter: Callable[..., Any],
 ) -> Callable:
@@ -155,7 +188,7 @@ class HasOrganizationWriteAccess(permissions.BasePermission):
         return True
 
     def has_object_permission(self, request, view, obj) -> bool:
-        organization_id = getattr(obj, "organization_id", None)
+        organization_id = organization_id_for_object(obj)
         if organization_id is None:
             return False
         if request.method in permissions.SAFE_METHODS:

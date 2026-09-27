@@ -71,19 +71,21 @@ class ConversionViewSet(viewsets.ModelViewSet):
             input_filename = f"input.{input_format}"
 
         estimated_credits = Decimal("10") if output_format != "pdf" else Decimal("20")
+        organization = organization_for_request(request, required=True)
         try:
             CreditService.reserve_credits(
                 user=request.user,
                 amount=estimated_credits,
                 request_id=uuid.uuid4(),
                 reason=f"File conversion {input_format}->{output_format}",
+                organization=organization,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
         job = ConversionJob.objects.create(
             owner=request.user,
-            organization=organization_for_request(request, required=True),
+            organization=organization,
             input_filename=input_filename,
             input_format=input_format,
             output_format=output_format,

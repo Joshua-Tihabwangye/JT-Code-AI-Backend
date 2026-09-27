@@ -43,9 +43,12 @@ class CollectionSerializer(serializers.ModelSerializer):
 
 
 class CollectionCreateSerializer(serializers.ModelSerializer):
+    organization = serializers.UUIDField(source="organization_id", read_only=True)
+
     class Meta:
         model = Collection
         fields = [
+            "organization",
             "name",
             "description",
             "embedding_provider",

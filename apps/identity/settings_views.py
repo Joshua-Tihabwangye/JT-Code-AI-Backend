@@ -12,26 +12,30 @@ from rest_framework.views import APIView
 
 from apps.governance.models import ConsentRecord
 from apps.governance.serializers import ConsentRecordSerializer
-from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 from apps.identity.models import Organization, UserOrganization
 from apps.identity.serializers import OrganizationSerializer
 
 
-def _get_org(user) -> Organization | None:
-    return primary_organization_for_user(user)
+def _get_org(request: Request) -> Organization | None:
+    return organization_for_request(request)
 
 
 class SettingsOrganizationView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
 
     def get(self, request: Request) -> Response:
-        org = _get_org(request.user)
+        org = _get_org(request)
         if not org:
             return Response({"detail": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
         return Response(OrganizationSerializer(org).data)
 
     def patch(self, request: Request) -> Response:
-        org = _get_org(request.user)
+        org = _get_org(request)
         if not org:
             return Response({"detail": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
         serializer = OrganizationSerializer(org, data=request.data, partial=True)
@@ -44,7 +48,7 @@ class SettingsConsentsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request) -> Response:
-        org = _get_org(request.user)
+        org = _get_org(request)
         consents = ConsentRecord.objects.filter(user=request.user)
         if org:
             consents = consents.filter(organization=org)
@@ -59,7 +63,7 @@ class SettingsConsentsView(APIView):
         if requested_status not in ("granted", "denied"):
             return Response({"detail": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
 
-        org = _get_org(request.user)
+        org = _get_org(request)
         if not org:
             return Response({"detail": "No organization found"}, status=status.HTTP_404_NOT_FOUND)
 

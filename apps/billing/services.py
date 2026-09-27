@@ -8,7 +8,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.billing.models import CreditLedger, CreditWallet, Invoice, Payment, Plan, Subscription
-from apps.identity.authorization import primary_organization_for_user
 from apps.identity.models import Organization
 
 
@@ -30,10 +29,12 @@ class CreditService:
 
     @staticmethod
     @transaction.atomic
-    def reserve_credits(user, amount: Decimal, request_id, job_id=None, reason="Reservation") -> CreditLedger:
-        org = primary_organization_for_user(user)
-        if not org:
-            raise ValueError("User must belong to an organization")
+    def reserve_credits(
+        user, amount: Decimal, request_id, job_id=None, reason="Reservation", *, organization: Organization
+    ) -> CreditLedger:
+        if organization is None:
+            raise ValueError("An organization is required for credit reservation")
+        org = organization
 
         wallet = CreditService.get_or_create_wallet(org)
 
@@ -61,10 +62,10 @@ class CreditService:
 
     @staticmethod
     @transaction.atomic
-    def release_reservation(user, request_id) -> CreditLedger | None:
-        org = primary_organization_for_user(user)
-        if not org:
+    def release_reservation(user, request_id, *, organization: Organization) -> CreditLedger | None:
+        if organization is None:
             return None
+        org = organization
 
         wallet = CreditService.get_or_create_wallet(org)
 
@@ -96,10 +97,12 @@ class CreditService:
 
     @staticmethod
     @transaction.atomic
-    def settle_reservation(user, request_id, actual_amount: Decimal) -> CreditLedger:
-        org = primary_organization_for_user(user)
-        if not org:
-            raise ValueError("User must belong to an organization")
+    def settle_reservation(
+        user, request_id, actual_amount: Decimal, *, organization: Organization
+    ) -> CreditLedger:
+        if organization is None:
+            raise ValueError("An organization is required for credit settlement")
+        org = organization
 
         wallet = CreditService.get_or_create_wallet(org)
 

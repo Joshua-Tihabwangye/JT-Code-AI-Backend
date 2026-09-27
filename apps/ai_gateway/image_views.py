@@ -20,7 +20,7 @@ from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ImageThrottle
 from apps.events.outbox import add_outbox_event
 from apps.governance.models import SafetyEvent
-from apps.identity.authorization import primary_organization_for_user
+from apps.identity.authorization import HasOrganizationWriteAccess, organization_for_request
 
 IMAGE_RENDER_ROOT = Path(settings.BASE_DIR) / "generated_images"
 
@@ -56,9 +56,9 @@ def _safety_check(prompt: str) -> str | None:
     return None
 
 
-def _log_safety_event(user, prompt: str, reason: str, request_id: uuid.UUID) -> None:
+def _log_safety_event(user, organization, prompt: str, reason: str, request_id: uuid.UUID) -> None:
     SafetyEvent.objects.create(
-        organization=primary_organization_for_user(user),
+        organization=organization,
         user=user,
         category=SafetyEvent.Category.UNSAFE_OUTPUT,
         severity=SafetyEvent.Severity.HIGH,
@@ -104,11 +104,8 @@ def _resolve_image_model(request: Request) -> Model | None:
     )
 
 
-def _check_quota(request: Request, n: int) -> tuple[bool, str | None]:
-    org = primary_organization_for_user(request.user)
-    if not org:
-        return False, "User must belong to an organization"
-    wallet = CreditService.get_or_create_wallet(org)
+def _check_quota(organization, n: int) -> tuple[bool, str | None]:
+    wallet = CreditService.get_or_create_wallet(organization)
     estimated = 100 * n
     if wallet.balance < estimated:
         return False, "Insufficient credits for image generation"
@@ -172,7 +169,7 @@ def _size_tuple(size: str) -> tuple[int, int]:
 
 
 class ImageGenerationView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [ImageThrottle, BurstThrottle]
 
     def post(self, request: Request) -> Response:
@@ -180,10 +177,11 @@ class ImageGenerationView(APIView):
         if not prompt:
             return Response({"detail": "prompt required"}, status=status.HTTP_400_BAD_REQUEST)
 
+        organization = organization_for_request(request, required=True)
         request_id = uuid.uuid4()
         reason = _safety_check(prompt)
         if reason:
-            _log_safety_event(request.user, prompt, reason, request_id)
+            _log_safety_event(request.user, organization, prompt, reason, request_id)
             return _safety_violation()
 
         try:
@@ -191,7 +189,7 @@ class ImageGenerationView(APIView):
         except (TypeError, ValueError):
             n = DEFAULT_N
 
-        ok, error = _check_quota(request, n)
+        ok, error = _check_quota(organization, n)
         if not ok:
             return Response({"detail": error}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
@@ -216,6 +214,7 @@ class ImageGenerationView(APIView):
             amount=100 * n,
             request_id=request_id,
             reason="Image generation",
+            organization=organization,
         )
         add_outbox_event(
             "images.generated",
@@ -233,7 +232,7 @@ class ImageGenerationView(APIView):
 
 
 class ImageEditView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [ImageThrottle, BurstThrottle]
 
     def post(self, request: Request) -> Response:
@@ -244,13 +243,14 @@ class ImageEditView(APIView):
         if not file:
             return Response({"detail": "file required"}, status=status.HTTP_400_BAD_REQUEST)
 
+        organization = organization_for_request(request, required=True)
         request_id = uuid.uuid4()
         reason = _safety_check(prompt)
         if reason:
-            _log_safety_event(request.user, prompt, reason, request_id)
+            _log_safety_event(request.user, organization, prompt, reason, request_id)
             return _safety_violation()
 
-        ok, error = _check_quota(request, 1)
+        ok, error = _check_quota(organization, 1)
         if not ok:
             return Response({"detail": error}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
@@ -271,6 +271,7 @@ class ImageEditView(APIView):
             amount=100,
             request_id=request_id,
             reason="Image edit",
+            organization=organization,
         )
         add_outbox_event(
             "images.edited",
@@ -284,7 +285,7 @@ class ImageEditView(APIView):
 
 
 class ImageUnderstandingView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [ImageThrottle, BurstThrottle]
 
     def post(self, request: Request) -> Response:
@@ -293,13 +294,14 @@ class ImageUnderstandingView(APIView):
             return Response({"detail": "file required"}, status=status.HTTP_400_BAD_REQUEST)
         prompt = (request.data.get("prompt") or "").strip() or "Describe this image in detail"
 
+        organization = organization_for_request(request, required=True)
         request_id = uuid.uuid4()
         reason = _safety_check(prompt)
         if reason:
-            _log_safety_event(request.user, prompt, reason, request_id)
+            _log_safety_event(request.user, organization, prompt, reason, request_id)
             return _safety_violation()
 
-        ok, error = _check_quota(request, 1)
+        ok, error = _check_quota(organization, 1)
         if not ok:
             return Response({"detail": error}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
@@ -323,6 +325,7 @@ class ImageUnderstandingView(APIView):
             amount=50,
             request_id=request_id,
             reason="Image understanding",
+            organization=organization,
         )
         add_outbox_event(
             "images.understood",

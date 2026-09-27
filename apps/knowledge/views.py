@@ -9,7 +9,11 @@ from rest_framework.response import Response
 from apps.core.throttling import BurstThrottle, EmbeddingThrottle
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
-from apps.identity.authorization import tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 from apps.knowledge.models import Chunk, Citation, Collection, Document, Source, SyncRun
 from apps.knowledge.serializers import (
     ChunkSerializer,
@@ -23,16 +27,33 @@ from apps.knowledge.serializers import (
 )
 
 
+def _selected_organization_id(request: Request):
+    """Return the explicitly selected tenant, or the legacy primary tenant."""
+    organization = organization_for_request(request)
+    return organization.id if organization is not None else None
+
+
+def _tenant_queryset(queryset, request: Request, *, organization_field: str):
+    """Scope a tenant-owned queryset to exactly one organization per request.
+
+    This is necessary for operations such as vector search that take a single
+    organization identifier and must never mix collections from tenants.
+    """
+    organization_id = _selected_organization_id(request)
+    if organization_id is not None:
+        return queryset.filter(**{f"{organization_field}_id": organization_id})
+    return queryset.none()
+
+
 class CollectionViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = CollectionSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Collection.objects.filter(organization_id__in=user_orgs).select_related(
-            "organization", "created_by"
-        )
+        return _tenant_queryset(
+            Collection.objects.all(), self.request, organization_field="organization"
+        ).select_related("organization", "created_by")
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -40,11 +61,8 @@ class CollectionViewSet(viewsets.ModelViewSet):
         return CollectionSerializer
 
     def perform_create(self, serializer):
-        # Verify user has access to organization
-        org = serializer.validated_data["organization"]
-        if not self.request.user.organizations.filter(id=org.id).exists():
-            self.permission_denied(self.request)
-        serializer.save(created_by=self.request.user)
+        organization = organization_for_request(self.request, required=True)
+        serializer.save(organization=organization, created_by=self.request.user)
 
     @action(detail=True, methods=["post"])
     def sync(self, request: Request, id=None):
@@ -66,15 +84,14 @@ class CollectionViewSet(viewsets.ModelViewSet):
 
 
 class SourceViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = SourceSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Source.objects.filter(collection__organization_id__in=user_orgs).select_related(
-            "collection", "collection__organization", "created_by"
-        )
+        return _tenant_queryset(
+            Source.objects.all(), self.request, organization_field="collection__organization"
+        ).select_related("collection", "collection__organization", "created_by")
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -83,8 +100,9 @@ class SourceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         collection = serializer.validated_data["collection"]
-        if not self.request.user.organizations.filter(id=collection.organization_id).exists():
-            self.permission_denied(self.request)
+        organization = organization_for_request(self.request, required=True)
+        if collection.organization_id != organization.id:
+            self.permission_denied(self.request, message="Collection is outside the selected organization.")
         serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=["post"])
@@ -111,15 +129,14 @@ class SourceViewSet(viewsets.ModelViewSet):
 
 
 class DocumentViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = DocumentSerializer
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Document.objects.filter(collection__organization_id__in=user_orgs).select_related(
-            "source", "collection"
-        )
+        return _tenant_queryset(
+            Document.objects.all(), self.request, organization_field="collection__organization"
+        ).select_related("source", "collection")
 
     @action(detail=True, methods=["get"])
     def chunks(self, request: Request, id=None):
@@ -169,10 +186,9 @@ class ChunkViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Chunk.objects.filter(collection__organization_id__in=user_orgs).select_related(
-            "document", "collection"
-        )
+        return _tenant_queryset(
+            Chunk.objects.all(), self.request, organization_field="collection__organization"
+        ).select_related("document", "collection")
 
 
 class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
@@ -181,10 +197,9 @@ class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return SyncRun.objects.filter(source__collection__organization_id__in=user_orgs).select_related(
-            "source", "source__collection"
-        )
+        return _tenant_queryset(
+            SyncRun.objects.all(), self.request, organization_field="source__collection__organization"
+        ).select_related("source", "source__collection")
 
 
 class CitationViewSet(viewsets.ReadOnlyModelViewSet):
@@ -193,10 +208,9 @@ class CitationViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        user_orgs = self.request.user.organizations.values_list("id", flat=True)
-        return Citation.objects.filter(job__organization_id__in=user_orgs).select_related(
-            "job", "document", "chunk"
-        )
+        return _tenant_queryset(
+            Citation.objects.all(), self.request, organization_field="job__organization"
+        ).select_related("job", "document", "chunk")
 
 
 class SearchView(APIView):
@@ -214,13 +228,12 @@ class SearchView(APIView):
         if not query or not str(query).strip():
             return Response({"detail": "query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Resolve and verify access to collections before touching the vector store.
-        user_orgs = request.user.organizations.values_list("id", flat=True)
-        collections = (
-            Collection.objects.filter(id__in=collection_ids, organization_id__in=user_orgs, is_active=True)
-            if collection_ids
-            else Collection.objects.filter(organization_id__in=user_orgs, is_active=True)
-        )
+        # Resolve collections inside exactly one selected tenant before touching
+        # the vector store, which accepts only one organization identifier.
+        organization = organization_for_request(request, required=True)
+        collections = Collection.objects.filter(organization=organization, is_active=True)
+        if collection_ids:
+            collections = collections.filter(id__in=collection_ids)
 
         if not collections.exists():
             return Response({"results": [], "message": "No accessible collections"})
@@ -262,7 +275,7 @@ class SearchView(APIView):
 class RAGQueryView(APIView):
     """RAG query with grounded generation"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
     def post(self, request: Request):
@@ -274,10 +287,10 @@ class RAGQueryView(APIView):
         if not query:
             return Response({"detail": "query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Verify access to collections
-        user_orgs = request.user.organizations.values_list("id", flat=True)
+        # The job and every collection must belong to the selected tenant.
+        organization = organization_for_request(request, required=True)
         collections = Collection.objects.filter(
-            id__in=collection_ids, organization_id__in=user_orgs, is_active=True
+            id__in=collection_ids, organization=organization, is_active=True
         )
 
         if not collections.exists():
@@ -287,8 +300,9 @@ class RAGQueryView(APIView):
             from apps.conversations.models import Conversation
 
             conversation_exists = tenant_scoped_queryset(
-                Conversation.objects.filter(id=conversation_id, owner=request.user),
+                Conversation.objects.filter(id=conversation_id),
                 request.user,
+                organization_id=organization.id,
             ).exists()
             if not conversation_exists:
                 return Response({"detail": "Conversation not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -298,7 +312,7 @@ class RAGQueryView(APIView):
 
         job = Job.objects.create(
             owner=request.user,
-            organization=collections.first().organization,
+            organization=organization,
             task_type=Job.TaskType.RAG_QUERY,
             input_payload={
                 "query": query,
