@@ -21,22 +21,32 @@ def _strict_env() -> dict[str, str]:
         "SUPABASE_JWT_ISSUER": "https://project.supabase.co/auth/v1",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
         "SUPABASE_WEBHOOK_SIGNING_SECRET": "supabase-webhook-secret",
-        "REDIS_URL": "redis://redis.example.com:6379/0",
-        "CELERY_BROKER_URL": "redis://redis.example.com:6379/1",
-        "CELERY_RESULT_BACKEND": "redis://redis.example.com:6379/2",
-        "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.com:9092",
+        "REDIS_URL": "rediss://redis.example.com:6380/0",
+        "CELERY_BROKER_URL": "rediss://redis.example.com:6380/1",
+        "CELERY_RESULT_BACKEND": "rediss://redis.example.com:6380/2",
+        "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.com:9093",
+        "KAFKA_SECURITY_PROTOCOL": "SASL_SSL",
+        "KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
+        "KAFKA_SASL_USERNAME": "jt-code",
+        "KAFKA_SASL_PASSWORD": "kafka-password",
         "IMAGEKIT_PUBLIC_KEY": "public_key",
         "IMAGEKIT_PRIVATE_KEY": "private_key",
         "IMAGEKIT_ENDPOINT_URL": "https://ik.imagekit.io/jt-code",
-        "STRIPE_SECRET_KEY": "sk_live_placeholder_for_validation",
-        "STRIPE_WEBHOOK_SECRET": "whsec_placeholder_for_validation",
+        "STRIPE_SECRET_KEY": "sk_live_9mY7Kq2Vx5Zp8Lr3",
+        "STRIPE_WEBHOOK_SECRET": "whsec_9mY7Kq2Vx5Zp8Lr3",
+        "N8N_BASE_URL": "https://n8n.example.com",
+        "N8N_API_KEY": "n8n-api-key",
+        "N8N_WEBHOOK_SECRET": "n8n-webhook-secret",
+        "N8N_SENTRY_RELAY_SECRET": "n8n-sentry-relay-secret",
+        "SENTRY_DSN": "https://public@example.ingest.sentry.io/1",
+        "SENTRY_ENVIRONMENT": "production",
         "DJANGO_DEBUG": "false",
     }
 
 
 def test_django_logging_configuration_is_loaded():
     assert settings.LOGGING["filters"]["request_context"]["()"] == "apps.core.logging.RequestContextFilter"
-    assert "request_id=%(request_id)s" in settings.LOGGING["formatters"]["jsonish"]["format"]
+    assert settings.LOGGING["formatters"]["json"]["()"] == "apps.core.logging.JSONFormatter"
 
 
 def test_production_validation_accepts_complete_strict_env(monkeypatch):
@@ -54,7 +64,7 @@ def test_production_validation_rejects_insecure_database_and_wildcard_hosts(monk
 
     problems = validate_environment("production")
 
-    assert "DATABASE_URL must include sslmode=require in production." in problems
+    assert "DATABASE_URL must set sslmode to require, verify-ca, or verify-full in deployable environments." in problems
     assert 'DJANGO_ALLOWED_HOSTS may not contain "*" in production/staging.' in problems
 
 

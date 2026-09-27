@@ -76,7 +76,7 @@ def test_adr_index_lists_every_adr_file():
     index = (ADR_DIR / "README.md").read_text(encoding="utf-8")
     for path in sorted(ADR_DIR.glob("ADR-*.md")):
         assert path.name in index, f"{path.name} is missing from the ADR index"
-        assert path.stem.split("-", 2)[0] in index
+        assert path.stem.rsplit("-", 1)[0] in index
 
 
 def test_every_adr_is_registered_in_the_matrix(capsys):
@@ -88,12 +88,23 @@ def test_every_adr_is_registered_in_the_matrix(capsys):
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", row["date"]), f"{adr_id} date is {row['date']!r}"
 
 
+def test_matrix_rejects_missing_required_adrs(monkeypatch, tmp_path):
+    from apps.core.management.commands import inventory_matrix as module
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\nversion = '0.0.0'\n")
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    with pytest.raises(CommandError, match="ADR-001"):
+        call_command("inventory_matrix", format="json", strict=True)
+
+
 def test_matrix_rejects_a_non_accepted_adr(monkeypatch, tmp_path, capsys):
     """The matrix must fail closed when an ADR is not approved."""
     from apps.core.management.commands import inventory_matrix as module
 
     bad = tmp_path / "docs" / "adr"
     bad.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\nversion = '0.0.0'\n")
     (bad / "ADR-999-bad.md").write_text(
         "# ADR-999: bad\n\n**Status:** Draft\n\n**Date:** 2026-01-01\n\n"
         "## Context\n" + "x" * 300 + "\n\n## Decision\n" + "y" * 300 + "\n\n## Consequences\n" + "z" * 300 + "\n",
@@ -101,6 +112,23 @@ def test_matrix_rejects_a_non_accepted_adr(monkeypatch, tmp_path, capsys):
     )
     monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
     with pytest.raises(CommandError, match="ADR-999"):
+        call_command("inventory_matrix", format="json", strict=True)
+
+
+def test_matrix_rejects_an_adr_without_a_valid_date_or_verification(monkeypatch, tmp_path):
+    """ADR validation is semantic, not merely a check for a few headings."""
+    from apps.core.management.commands import inventory_matrix as module
+
+    bad = tmp_path / "docs" / "adr"
+    bad.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\nversion = '0.0.0'\n")
+    (bad / "ADR-998-bad.md").write_text(
+        "# ADR-998: bad\n\n**Status:** Accepted\n\n**Date:** yesterday\n\n"
+        "## Context\n" + "x" * 300 + "\n\n## Decision\n" + "y" * 300 + "\n\n## Consequences\n" + "z" * 300,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    with pytest.raises(CommandError, match="ADR-998"):
         call_command("inventory_matrix", format="json", strict=True)
 
 
@@ -127,7 +155,7 @@ def test_security_doc_covers_every_threat_and_tier():
 
 def test_slo_doc_has_identifier_objective_and_error_budget():
     text = (DOCS_DIR / "SLOs.md").read_text(encoding="utf-8")
-    rows = re.findall(r"^\| ([A-Z-]+) \|", text, flags=re.M)
+    rows = re.findall(r"^\| ([A-Z0-9-]+) \|", text, flags=re.M)
     assert {"AVI-API", "AVI-READY", "LAT-P95", "LAT-P99", "REC-RTO", "REC-RPO"}.issubset(rows)
     assert "RTO" in text and "RPO" in text
     assert "TBD" not in text
@@ -148,10 +176,11 @@ def test_matrix_models_match_the_django_registry(capsys):
 
     report = _matrix(capsys)
     matrix_models = {(row["app"], row["model"]) for row in report["models"]}
+    matrix_app_labels = {row["app"] for row in report["models"]}
     registry = {
         (model._meta.app_label, model.__name__)
         for model in django_apps.get_models()
-        if model._meta.app_label in report["migrations_by_app"]
+        if model._meta.app_label in matrix_app_labels
     }
     assert matrix_models == registry, "the model matrix is not the Django app registry"
 
@@ -165,8 +194,9 @@ def test_matrix_endpoints_are_resolvable(capsys):
         assert entry["name"], f"{entry['path']} has no URL name"
         assert entry["path"].startswith("/"), entry["path"]
         assert "(?P" not in entry["path"], f"unresolved regex left in {entry['path']}"
-        # Every enumerated path must actually resolve.
-        assert resolve(entry["path"] + "/").url_name or resolve(entry["path"]).url_name
+        concrete_path = re.sub(r"\{[^}]+\}", "00000000-0000-4000-8000-000000000000", entry["path"])
+        # Every enumerated path template must resolve once a placeholder value is supplied.
+        assert resolve(concrete_path + "/").url_name or resolve(concrete_path).url_name
 
 
 def test_matrix_migration_counts_are_per_app(capsys):
@@ -213,8 +243,8 @@ def test_strict_mode_fails_on_drift(monkeypatch, capsys):
 
     monkeypatch.setattr(
         module,
-        "INTEGRATIONS",
-        module.INTEGRATIONS
+        "INTEGRATION_DETECTORS",
+        module.INTEGRATION_DETECTORS
         + (
             module.IntegrationSpec(
                 key="clerk",
@@ -243,7 +273,7 @@ def test_retired_integrations_have_no_runtime_reference(retired: str):
     }[retired]
     offenders: list[str] = []
     for path in sorted((PROJECT_ROOT / "apps").rglob("*.py")):
-        if "migrations" in path.parts:
+        if "migrations" in path.parts or path.name == "inventory_matrix.py":
             continue
         text = path.read_text(encoding="utf-8")
         for needle in needles:

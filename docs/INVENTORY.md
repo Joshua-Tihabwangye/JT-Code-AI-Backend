@@ -27,7 +27,6 @@ Resolved from `pyproject.toml` / `requirements.txt`.
 | sentry-sdk[django] | Error monitoring + tracing |
 | gunicorn / uvicorn[standard] / whitenoise | ASGI/WSGI serving + static |
 | openai | OpenAI + OpenAI-compatible Llama chat/embedding |
-| anthropic / cohere | Provider SDKs (registry only for now) |
 | google-generativeai | Gemini chat + embeddings |
 | langgraph / langchain-core | Agent runtime (`apps.agents`) |
 | pgvector | Supabase PostgreSQL vector store (ADR-003) |

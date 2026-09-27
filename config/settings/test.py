@@ -1,7 +1,9 @@
 from config.settings.base import *  # noqa: F403
 from config.settings.validation import validate_settings
 
+SECRET_KEY = "test-only-secret-key-that-is-long-enough-for-django"
 DEBUG = False
+HEALTHCHECK_EXTERNAL_DEPENDENCIES = False
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True

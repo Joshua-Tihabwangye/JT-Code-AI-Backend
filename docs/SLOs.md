@@ -8,8 +8,8 @@ production verification).
 
 | Identifier | Objective | Target window | Error budget |
 |-----------|-----------|---------------|--------------|
-| AVI-API | Availability of `/health/live` (liveness) | ≥ 99.9% monthly | 0.1% |
-| AVI-READY | Availability of `/health/ready` (DB + Redis reachable) | ≥ 99.5% monthly | 0.5% |
+| AVI-API | Availability of `/api/v1/health/live` (liveness) | ≥ 99.9% monthly | 0.1% |
+| AVI-READY | Availability of `/api/v1/health/ready` (DB + Redis reachable) | ≥ 99.5% monthly | 0.5% |
 | LAT-P95 | p95 latency of non-streaming API calls | ≤ 800 ms | measured |
 | LAT-P99 | p99 latency of non-streaming API calls | ≤ 2 s | measured |
 | CHAT-P95 | p95 time-to-complete for chat/generation jobs (incl. fallbacks) | ≤ 15 s | measured |
@@ -21,7 +21,7 @@ production verification).
 
 ## SLI measurement notes
 
-- **Availability:** probe `/health/live` and `/health/ready` every 15 s; an SLI
+- **Availability:** probe `/api/v1/health/live` and `/api/v1/health/ready` every 15 s; an SLI
   error is any non-200 response. Request-based rather than synthetic where the
   frontend gateway exposes healthy request counters.
 - **Latency:** from Sentry transaction `duration`/`http.transaction` traces,

@@ -75,7 +75,12 @@ class IntegrationSpec:
 #:
 #: ``modules`` are what proves *runtime usage*; ``distributions`` is what
 #: proves the package is *declared*. A drift between the two is reported.
-INTEGRATIONS: tuple[IntegrationSpec, ...] = (
+# These are detection rules, not an inventory table: the report rows and every
+# status/evidence field are derived by ``_classify_integrations`` from the
+# runtime AST scan and dependency manifests. A small rule set is necessary
+# for config-only services (for example ImageKit and n8n use ``httpx`` rather
+# than a vendor SDK) and to make ADR retirement guarantees executable.
+INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
     IntegrationSpec(
         key="supabase_auth",
         label="Supabase Auth",
@@ -169,22 +174,6 @@ INTEGRATIONS: tuple[IntegrationSpec, ...] = (
         purpose="Chat/completion and embeddings adapter (apps.ai_gateway, apps.knowledge)",
     ),
     IntegrationSpec(
-        key="anthropic",
-        label="Anthropic",
-        distributions=("anthropic",),
-        modules=("anthropic",),
-        settings_keys=("ANTHROPIC_API_KEY",),
-        purpose="Provider registry adapter (apps.ai_gateway)",
-    ),
-    IntegrationSpec(
-        key="cohere",
-        label="Cohere",
-        distributions=("cohere",),
-        modules=("cohere",),
-        settings_keys=("COHERE_API_KEY",),
-        purpose="Provider registry adapter (apps.ai_gateway)",
-    ),
-    IntegrationSpec(
         key="gemini",
         label="Google Gemini",
         distributions=("google-generativeai",),
@@ -248,6 +237,10 @@ INTEGRATIONS: tuple[IntegrationSpec, ...] = (
         purpose="Removed; Supabase Auth is the sole identity provider",
     ),
 )
+
+#: Architecture-freeze ADRs required by Phase 0. Their contents are parsed
+#: from disk; this set only defines the approved decision identifiers.
+REQUIRED_ADR_IDS = frozenset({"ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005"})
 
 #: Top-level modules that are part of the standard library or the Django
 #: project itself and therefore never reported as third-party.
@@ -435,7 +428,7 @@ def _classify_integrations(
     rows: list[dict[str, Any]] = []
     problems: list[dict[str, str]] = []
 
-    for spec in INTEGRATIONS:
+    for spec in INTEGRATION_DETECTORS:
         module_evidence: dict[str, list[str]] = {}
         for module in spec.modules:
             if module in scan.imports:
@@ -492,7 +485,7 @@ def _classify_integrations(
             }
         )
 
-    known_modules = {module for spec in INTEGRATIONS for module in spec.modules}
+    known_modules = {module for spec in INTEGRATION_DETECTORS for module in spec.modules}
     for module, files in sorted(_third_party_modules(scan).items()):
         if module in known_modules:
             continue
@@ -524,6 +517,10 @@ def _load_url_specs() -> list[dict[str, str]]:
                     continue
                 if "drf_format_suffix" in full or "(?P<format>" in full:
                     continue
+                # DRF routers expose regex patterns; report a stable, readable
+                # route template instead of leaking Django's implementation syntax.
+                full = re.sub(r"\(\?P<([^>]+)>[^)]+\)", r"{\1}", full)
+                full = re.sub(r"<(?:[^:>]+:)?([^>]+)>", r"{\1}", full)
                 normalised = re.sub(r"/?$", "", full)
                 if normalised in seen:
                     continue
@@ -584,28 +581,51 @@ def _load_architecture_decisions() -> list[dict[str, str]]:
         text = path.read_text(encoding="utf-8")
         status = re.search(r"\*\*Status:\*\*\s*([^\n]+)", text)
         date = re.search(r"\*\*Date:\*\*\s*([^\n]+)", text)
+        identifier = "-".join(path.stem.split("-", 2)[:2])
+        title = text.splitlines()[0].lstrip("# ").strip() if text.splitlines() else ""
         rows.append(
             {
-                "id": "-".join(path.stem.split("-", 2)[:2]),
+                "id": identifier,
                 "file": path.name,
-                "title": text.splitlines()[0].lstrip("# ").strip(),
+                "title": title,
                 "status": status.group(1).strip() if status else "unknown",
                 "date": date.group(1).strip() if date else "unknown",
-                "verified": all(f"## {section}" in text for section in ("Context", "Decision", "Consequences")),
+                "verified": (
+                    bool(re.fullmatch(r"ADR-\d{3}", identifier))
+                    and title.startswith(f"{identifier}:")
+                    and bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", date.group(1).strip() if date else ""))
+                    and all(
+                        f"## {section}" in text
+                        for section in ("Context", "Decision", "Consequences", "Verification")
+                    )
+                ),
             }
         )
     return rows
 
 
-def _admission_problems(adr_rows: list[dict[str, str]], env_vars: list[str]) -> list[dict[str, str]]:
+def _admission_problems(adr_rows: list[dict[str, str]]) -> list[dict[str, str]]:
     """Phase 0 exit criteria: every ADR approved and well formed."""
     problems: list[dict[str, str]] = []
     accepted = {"accepted", "adopted", "implemented"}
+    present = {row["id"] for row in adr_rows}
+    for identifier in sorted(REQUIRED_ADR_IDS - present):
+        problems.append({"integration": identifier, "problem": "required Phase 0 ADR is missing"})
     for row in adr_rows:
         if not row["verified"]:
-            problems.append({"integration": row["id"], "problem": "missing Context/Decision/Consequences section"})
+            problems.append(
+                {
+                    "integration": row["id"],
+                    "problem": "invalid ADR id/title/date or missing required Context/Decision/Consequences/Verification section",
+                }
+            )
         if row["status"].lower() not in accepted:
             problems.append({"integration": row["id"], "problem": f"status is {row['status']!r}, expected Accepted"})
+    identifiers = [row["id"] for row in adr_rows]
+    duplicates = sorted({identifier for identifier in identifiers if identifiers.count(identifier) > 1})
+    for identifier in duplicates:
+        problems.append({"integration": identifier, "problem": "duplicate ADR identifier"})
+
     index = PROJECT_ROOT / "docs" / "adr" / "README.md"
     if index.is_file():
         index_text = index.read_text(encoding="utf-8")
@@ -640,7 +660,7 @@ class Command(BaseCommand):
 
         env_vars = sorted(scan.env_vars)
         drift = _dependency_drift(dependencies)
-        problems = list(integration_problems) + _admission_problems(adr_rows, env_vars)
+        problems = list(integration_problems) + _admission_problems(adr_rows)
         problems.extend({"integration": f"package:{d['package']}", "problem": d["problem"]} for d in drift)
 
         report = {
