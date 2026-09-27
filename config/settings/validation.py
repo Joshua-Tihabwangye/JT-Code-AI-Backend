@@ -75,6 +75,7 @@ _INT_ENV = (
     "IMAGEKIT_MAX_UPLOAD_BYTES",
     "IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS",
     "DATABASE_CONN_MAX_AGE",
+    "DATABASE_CONNECT_TIMEOUT_SECONDS",
     "VECTOR_EMBEDDING_DIMENSIONS",
     "RAG_CHUNK_SIZE",
     "RAG_CHUNK_OVERLAP",
@@ -223,6 +224,12 @@ def validate_environment(profile: str) -> list[str]:
         problems.append(
             "DATABASE_URL must set sslmode to require, verify-ca, or verify-full in deployable environments."
         )
+
+    if _val("DATABASE_POOLER_MODE", "direct").lower() not in {"direct", "session", "transaction"}:
+        problems.append("DATABASE_POOLER_MODE must be direct, session, or transaction.")
+    pooler_mode = _val("DATABASE_POOLER_MODE", "direct").lower()
+    if pooler_mode == "transaction" and _val("DATABASE_CONN_MAX_AGE", "60") != "0":
+        problems.append("DATABASE_CONN_MAX_AGE must be 0 when DATABASE_POOLER_MODE=transaction.")
 
     for name in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
         _check_tls_url(problems, name)

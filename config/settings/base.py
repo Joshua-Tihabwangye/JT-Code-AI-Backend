@@ -114,13 +114,22 @@ def runtime_connection_settings(
     redis_url = env("REDIS_URL", redis_default)
     broker_url = env("CELERY_BROKER_URL", broker_default)
     result_url = env("CELERY_RESULT_BACKEND", result_default)
-    database = {
-        "default": dj_database_url.config(
-            default=env("DATABASE_URL", database_default),
-            conn_max_age=int(env("DATABASE_CONN_MAX_AGE", "60")),
-            conn_health_checks=True,
-        )
-    }
+    pooler_mode = env("DATABASE_POOLER_MODE", "direct").lower()
+    conn_max_age = int(env("DATABASE_CONN_MAX_AGE", "60"))
+    if pooler_mode == "transaction":
+        conn_max_age = 0
+    database_config = dj_database_url.config(
+        default=env("DATABASE_URL", database_default),
+        conn_max_age=conn_max_age,
+        conn_health_checks=True,
+    )
+    if database_config.get("ENGINE", "").endswith("postgresql"):
+        options = database_config.setdefault("OPTIONS", {})
+        options.setdefault("connect_timeout", int(env("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
+        if sslrootcert := env("DATABASE_SSLROOTCERT"):
+            options.setdefault("sslrootcert", sslrootcert)
+        options.setdefault("application_name", env("DATABASE_APPLICATION_NAME", "jt-code-api"))
+    database = {"default": database_config}
     caches = {
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",

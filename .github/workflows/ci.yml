@@ -43,6 +43,14 @@ jobs:
       - run: mypy
       - run: python manage.py makemigrations --check --dry-run --settings=config.settings.ci
       - run: python manage.py migrate --noinput --settings=config.settings.ci
+      - name: PostgreSQL restore drill
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+          PGPASSWORD=postgres createdb --host=localhost --username=postgres jtcode_restore
+          python manage.py restore_drill_check \
+            --restore-database-url postgresql://postgres:postgres@localhost:5432/jtcode_restore \
+            --confirm-restore-target --settings=config.settings.ci
       - run: python manage.py check --deploy --settings=config.settings.production
         env:
           DJANGO_DEBUG: 'false'
