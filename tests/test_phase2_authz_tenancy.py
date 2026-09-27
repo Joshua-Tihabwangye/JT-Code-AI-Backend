@@ -8,9 +8,11 @@ import pytest
 from django.conf import settings
 from django.urls import reverse
 
+from apps.ai_gateway.models import Evaluation, Model, Prompt, Provider
 from apps.conversations.models import ChatRequest, Conversation, Message
 from apps.identity.authorization import tenant_scoped_queryset
-from apps.identity.models import Organization
+from apps.identity.models import Organization, Role, UserRole
+from apps.jobs.models import Job
 
 
 def _token(*, sub: str, email: str, secret: str | None = None, issuer: str | None = None) -> str:
@@ -111,3 +113,152 @@ def test_chat_creation_propagates_organization(authenticated_client, user, organ
         role=Message.Role.USER,
         organization=organization,
     ).exists()
+
+
+@pytest.fixture
+def api_model(db):
+    provider = Provider.objects.create(name="Phase 2 Provider", slug="phase-2-provider", type="echo")
+    return Model.objects.create(
+        provider=provider,
+        name="phase-2-model",
+        display_name="Phase 2 Model",
+        modality=Model.Modality.TEXT,
+    )
+
+
+@pytest.mark.django_db
+def test_prompt_and_evaluation_endpoints_hide_other_tenant_resources(api_client, user, api_model):
+    allowed = Organization.objects.create(name="Allowed tenant", slug="allowed-tenant", owner=user)
+    user.organizations.add(allowed)
+    other_user = type(user).objects.create_user(
+        username="other-tenant-user", supabase_user_id="other-tenant-user", email="other@example.com"
+    )
+    forbidden = Organization.objects.create(
+        name="Forbidden tenant", slug="forbidden-tenant", owner=other_user
+    )
+    other_user.organizations.add(forbidden)
+    prompt = Prompt.objects.create(
+        name="Forbidden prompt",
+        slug="forbidden-prompt",
+        category=Prompt.Category.TASK,
+        content="secret",
+        organization=forbidden,
+        created_by=other_user,
+    )
+    evaluation = Evaluation.objects.create(
+        name="Forbidden evaluation",
+        slug="forbidden-evaluation",
+        type=Evaluation.Type.ACCURACY,
+        model=api_model,
+        prompt=prompt,
+        dataset_name="private",
+        dataset_version="1",
+        organization=forbidden,
+        created_by=other_user,
+    )
+    api_client.force_authenticate(user)
+
+    assert api_client.get(reverse("prompt-detail", kwargs={"slug": prompt.slug})).status_code == 404
+    assert (
+        api_client.patch(
+            reverse("prompt-detail", kwargs={"slug": prompt.slug}), {"content": "changed"}
+        ).status_code
+        == 404
+    )
+    assert api_client.delete(reverse("prompt-detail", kwargs={"slug": prompt.slug})).status_code == 404
+    assert api_client.get(reverse("evaluation-detail", kwargs={"slug": evaluation.slug})).status_code == 404
+    assert (
+        api_client.patch(
+            reverse("evaluation-detail", kwargs={"slug": evaluation.slug}), {"dataset_name": "changed"}
+        ).status_code
+        == 404
+    )
+    assert (
+        api_client.delete(reverse("evaluation-detail", kwargs={"slug": evaluation.slug})).status_code == 404
+    )
+
+
+@pytest.mark.django_db
+def test_selected_organization_allows_nonprimary_prompt_creation(api_client, user):
+    first = Organization.objects.create(name="First tenant", slug="first-tenant", owner=user)
+    second = Organization.objects.create(name="Second tenant", slug="second-tenant", owner=user)
+    user.organizations.add(first, second)
+    api_client.force_authenticate(user)
+
+    response = api_client.post(
+        reverse("prompt-list"),
+        {
+            "name": "Second tenant prompt",
+            "slug": "second-tenant-prompt",
+            "category": Prompt.Category.TASK,
+            "content": "hello",
+        },
+        HTTP_X_ORGANIZATION_ID=str(second.id),
+    )
+
+    assert response.status_code == 201, response.content
+    assert Prompt.objects.get(slug="second-tenant-prompt").organization_id == second.id
+
+
+@pytest.mark.django_db
+def test_viewer_role_cannot_mutate_prompts(api_client, user):
+    owner = type(user).objects.create_user(
+        username="role-owner", supabase_user_id="role-owner", email="role-owner@example.com"
+    )
+    organization = Organization.objects.create(name="Role tenant", slug="role-tenant", owner=owner)
+    user.organizations.add(organization)
+    viewer = Role.objects.get(name=Role.RoleType.VIEWER)
+    UserRole.objects.create(user=user, role=viewer, organization=organization)
+    api_client.force_authenticate(user)
+
+    response = api_client.post(
+        reverse("prompt-list"),
+        {"name": "Blocked", "slug": "viewer-blocked", "category": Prompt.Category.TASK, "content": "no"},
+        HTTP_X_ORGANIZATION_ID=str(organization.id),
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_organization_member_can_list_team_conversations(api_client, user):
+    owner = type(user).objects.create_user(
+        username="conversation-owner", supabase_user_id="conversation-owner", email="owner@example.com"
+    )
+    organization = Organization.objects.create(name="Shared tenant", slug="shared-tenant", owner=owner)
+    owner.organizations.add(organization)
+    user.organizations.add(organization)
+    conversation = Conversation.objects.create(
+        owner=owner, organization=organization, title="Team conversation"
+    )
+    api_client.force_authenticate(user)
+
+    response = api_client.get(reverse("conversation-list"))
+
+    assert response.status_code == 200
+    items = response.json().get("results", response.json())
+    assert str(conversation.id) in {item["id"] for item in items}
+
+
+@pytest.mark.django_db
+def test_job_status_callback_reads_configured_secret(api_client, user, monkeypatch):
+    organization = Organization.objects.create(name="Callback tenant", slug="callback-tenant", owner=user)
+    user.organizations.add(organization)
+    job = Job.objects.create(
+        owner=user,
+        organization=organization,
+        task_type=Job.TaskType.GENERAL_QUESTION,
+        input_payload={},
+        trace_id="phase2-callback",
+    )
+    monkeypatch.setattr(settings, "N8N_WEBHOOK_SECRET", "phase2-webhook-secret")
+
+    response = api_client.post(
+        reverse("job-status-callback", kwargs={"job_id": job.id}),
+        {"status": Job.Status.RUNNING},
+        HTTP_X_JT_CODE_WEBHOOK_SECRET="phase2-webhook-secret",
+    )
+
+    assert response.status_code == 200, response.content
+    job.refresh_from_db()
+    assert job.status == Job.Status.RUNNING

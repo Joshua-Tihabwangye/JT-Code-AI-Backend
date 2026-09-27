@@ -18,7 +18,7 @@ from apps.assets.imagekit import (
 from apps.assets.models import Asset
 from apps.assets.serializers import AssetSerializer, CompleteUploadSerializer, SignatureRequestSerializer
 from apps.events.outbox import add_outbox_event
-from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
+from apps.identity.authorization import organization_for_request, tenant_scoped_queryset
 
 
 class AssetListView(ListAPIView):
@@ -26,7 +26,7 @@ class AssetListView(ListAPIView):
 
     def get_queryset(self):
         return (
-            tenant_scoped_queryset(Asset.objects.filter(owner=self.request.user), self.request.user)
+            tenant_scoped_queryset(Asset.objects.all(), self.request.user)
             .exclude(status=Asset.Status.DELETED)
             .order_by("-created_at")
         )
@@ -91,7 +91,7 @@ class CompleteUploadView(APIView):
             with transaction.atomic():
                 asset = Asset.objects.create(
                     owner=request.user,
-                    organization=primary_organization_for_user(request.user),
+                    organization=organization_for_request(request, required=True),
                     imagekit_file_id=file_id,
                     imagekit_file_path=file_path,
                     secure_url=resource.get("url") or serializer.validated_data["url"],

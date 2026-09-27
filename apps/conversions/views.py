@@ -21,20 +21,21 @@ from apps.conversions.serializers import (
     ConversionJobSerializer,
 )
 from apps.events.outbox import add_outbox_event
-from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 
 
 class ConversionViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = ConversionJobSerializer
     lookup_field = "id"
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        return tenant_scoped_queryset(
-            ConversionJob.objects.filter(owner=self.request.user),
-            self.request.user,
-        )
+        return tenant_scoped_queryset(ConversionJob.objects.all(), self.request.user)
 
     def create(self, request: Request) -> Response:
         serializer = ConversionCreateSerializer(data=request.data)
@@ -82,7 +83,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
 
         job = ConversionJob.objects.create(
             owner=request.user,
-            organization=primary_organization_for_user(request.user),
+            organization=organization_for_request(request, required=True),
             input_filename=input_filename,
             input_format=input_format,
             output_format=output_format,

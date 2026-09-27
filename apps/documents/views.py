@@ -21,19 +21,23 @@ from apps.documents.serializers import (
     DocumentSerializer,
 )
 from apps.events.outbox import add_outbox_event
-from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 
 RENDER_ROOT = Path(settings.BASE_DIR) / "rendered_documents"
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = DocumentSerializer
     lookup_field = "id"
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        return tenant_scoped_queryset(Document.objects.filter(owner=self.request.user), self.request.user)
+        return tenant_scoped_queryset(Document.objects.all(), self.request.user)
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -45,14 +49,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
         create_serializer.is_valid(raise_exception=True)
         document = create_serializer.save(
             owner=request.user,
-            organization=primary_organization_for_user(request.user),
+            organization=organization_for_request(request, required=True),
         )
         return Response(DocumentSerializer(document).data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
         serializer.save(
             owner=self.request.user,
-            organization=primary_organization_for_user(self.request.user),
+            organization=organization_for_request(self.request, required=True),
         )
 
     def perform_update(self, serializer):

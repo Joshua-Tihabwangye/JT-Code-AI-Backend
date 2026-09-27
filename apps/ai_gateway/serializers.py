@@ -218,12 +218,13 @@ class PromptSerializer(serializers.ModelSerializer):
             "is_active",
             "tags",
             "metadata",
+            "organization",
             "created_by",
             "created_by_email",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "version", "created_at", "updated_at"]
+        read_only_fields = ["id", "organization", "created_by", "version", "created_at", "updated_at"]
 
 
 class PromptCreateSerializer(serializers.ModelSerializer):
@@ -270,16 +271,26 @@ class EvaluationSerializer(serializers.ModelSerializer):
             "error_message",
             "run_id",
             "metadata",
+            "organization",
             "created_by",
             "created_by_email",
             "created_at",
             "updated_at",
             "completed_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "completed_at"]
+        read_only_fields = ["id", "organization", "created_by", "created_at", "updated_at", "completed_at"]
 
 
 class EvaluationCreateSerializer(serializers.ModelSerializer):
+    def validate_prompt(self, prompt):
+        request = self.context["request"]
+        from apps.identity.authorization import organization_for_request
+
+        organization = organization_for_request(request, required=True)
+        if prompt.organization_id != organization.id:
+            raise serializers.ValidationError("Prompt is not available in the selected organization.")
+        return prompt
+
     class Meta:
         model = Evaluation
         fields = ["name", "slug", "type", "model", "prompt", "dataset_name", "dataset_version", "metadata"]

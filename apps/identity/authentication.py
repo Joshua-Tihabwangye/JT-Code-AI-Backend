@@ -42,15 +42,17 @@ def _verify_with_jwks(token: str) -> dict[str, Any]:
     key = None
     if kid:
         key = next((k for k in jwks["keys"] if k.get("kid") == kid), None)
-    if key is None and jwks["keys"]:
-        key = jwks["keys"][0]
     if key is None:
         raise ValueError("No matching JWKS key for token.")
+
+    algorithm = unverified_header.get("alg")
+    if algorithm not in {"ES256", "RS256"} or key.get("alg", algorithm) != algorithm:
+        raise ValueError("Unsupported JWKS token algorithm.")
 
     return jwt.decode(
         token,
         PyJWK.from_dict(key).key,
-        algorithms=["ES256", "RS256", "HS256"],
+        algorithms=[algorithm],
         audience=settings.SUPABASE_JWT_AUDIENCE or "authenticated",
         issuer=settings.SUPABASE_JWT_ISSUER or None,
         options={"verify_aud": bool(settings.SUPABASE_JWT_AUDIENCE)},
@@ -90,7 +92,11 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
                 raise exceptions.AuthenticationFailed("Supabase token has expired.") from None
             except Exception as exc:
                 last_error = exc
-        if claims is None and settings.SUPABASE_JWT_SECRET:
+            if claims is None:
+                raise exceptions.AuthenticationFailed(
+                    "Invalid or expired Supabase session token."
+                ) from last_error
+        elif settings.SUPABASE_JWT_SECRET:
             try:
                 claims = _verify_with_secret(token)
             except jwt.ExpiredSignatureError:
@@ -106,19 +112,12 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
         if not subject:
             raise exceptions.AuthenticationFailed("Supabase token is missing subject.")
 
-        defaults: dict[str, Any] = {"is_active": True}
+        defaults: dict[str, Any] = {}
         if isinstance(claims.get("email"), str):
             defaults["email"] = claims["email"]
-        if isinstance(claims.get("user_metadata"), dict):
-            metadata = claims["user_metadata"]
-            if isinstance(metadata.get("full_name"), str):
-                defaults["full_name"] = metadata["full_name"]
-            if isinstance(metadata.get("name"), str):
-                defaults["display_name"] = metadata["name"]
-            if isinstance(metadata.get("avatar_url"), str):
-                defaults["avatar_url"] = metadata["avatar_url"]
-
-        user, _ = User.objects.update_or_create(supabase_user_id=subject, defaults=defaults)
+        user, _ = User.objects.get_or_create(supabase_user_id=subject, defaults=defaults)
+        if not user.is_active:
+            raise exceptions.AuthenticationFailed("This user account is disabled.")
         return user, claims
 
     def authenticate_header(self, request) -> str:

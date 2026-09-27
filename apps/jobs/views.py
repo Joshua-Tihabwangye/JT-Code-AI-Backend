@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -14,7 +15,11 @@ from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ResearchThrottle
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
-from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
 from apps.jobs.serializers import (
     CallbackSerializer,
@@ -27,13 +32,13 @@ from apps.jobs.serializers import (
 
 
 class JobViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = JobSerializer
     lookup_field = "id"
 
     def get_queryset(self):
         return (
-            tenant_scoped_queryset(Job.objects.filter(owner=self.request.user), self.request.user)
+            tenant_scoped_queryset(Job.objects.all(), self.request.user)
             .select_related("organization", "conversation", "workflow_run")
             .prefetch_related("steps__provider_attempts", "callbacks")
         )
@@ -44,7 +49,10 @@ class JobViewSet(viewsets.ModelViewSet):
         return JobSerializer
 
     def perform_create(self, serializer):
-        job = serializer.save(owner=self.request.user)
+        job = serializer.save(
+            owner=self.request.user,
+            organization=organization_for_request(self.request, required=True),
+        )
         # Reserve credits for the job
         self._reserve_credits(job)
         # Enqueue job for n8n processing
@@ -192,7 +200,7 @@ class JobStepViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return tenant_scoped_queryset(
-            JobStep.objects.filter(job__owner=self.request.user),
+            JobStep.objects.all(),
             self.request.user,
             organization_field="job__organization",
             owner_field="job__owner",
@@ -206,7 +214,7 @@ class WorkflowRunViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return tenant_scoped_queryset(
-            WorkflowRun.objects.filter(job__owner=self.request.user),
+            WorkflowRun.objects.all(),
             self.request.user,
             organization_field="job__organization",
             owner_field="job__owner",
@@ -220,7 +228,7 @@ class CallbackViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return tenant_scoped_queryset(
-            Callback.objects.filter(job__owner=self.request.user),
+            Callback.objects.all(),
             self.request.user,
             organization_field="job__organization",
             owner_field="job__owner",
@@ -236,7 +244,7 @@ class JobStatusCallbackView(APIView):
     def post(self, request: Request, job_id: uuid.UUID):
         # Verify webhook signature
         secret = request.headers.get("X-JT-Code-Webhook-Secret")
-        if secret != self.settings.N8N_WEBHOOK_SECRET:
+        if secret != settings.N8N_WEBHOOK_SECRET:
             return Response({"detail": "Invalid webhook secret"}, status=status.HTTP_401_UNAUTHORIZED)
 
         try:
@@ -373,7 +381,7 @@ class ResearchJobsView(APIView):
 
         job = Job.objects.create(
             owner=request.user,
-            organization=primary_organization_for_user(request.user),
+            organization=organization_for_request(request, required=True),
             task_type=Job.TaskType.SEARCH_RESEARCH,
             idempotency_key=f"research:{request_id}",
             input_payload={

@@ -143,3 +143,27 @@ def test_es256_jwks_token_authenticates(api_client, monkeypatch):
     response = api_client.get(reverse("auth-ping"))
     assert response.status_code == 200
     assert response.json()["supabaseUserId"] == "es256-user"
+
+
+@pytest.mark.django_db
+def test_jwks_failure_does_not_fall_back_to_hmac(api_client, user, monkeypatch):
+    monkeypatch.setattr(auth_module.settings, "SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setattr(auth_module, "_fetch_jwks", lambda: (_ for _ in ()).throw(ValueError("offline")))
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {_make_token()}")
+
+    response = api_client.get(reverse("auth-ping"))
+
+    assert response.status_code == 401
+
+
+@pytest.mark.django_db
+def test_disabled_user_is_not_reactivated_by_a_valid_token(api_client, user):
+    user.is_active = False
+    user.save(update_fields=["is_active"])
+    api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {_make_token()}")
+
+    response = api_client.get(reverse("auth-ping"))
+
+    user.refresh_from_db()
+    assert response.status_code == 401
+    assert user.is_active is False

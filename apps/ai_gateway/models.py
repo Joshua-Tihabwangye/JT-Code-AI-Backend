@@ -224,6 +224,9 @@ class Prompt(models.Model):
     is_active = models.BooleanField(default=True)
     tags = models.JSONField(default=list, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.PROTECT, related_name="prompts"
+    )
     created_by = models.ForeignKey(
         "identity.User", on_delete=models.SET_NULL, related_name="created_prompts", null=True
     )
@@ -269,6 +272,9 @@ class Evaluation(models.Model):
     error_message = models.TextField(blank=True)
     run_id = models.CharField(max_length=100, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.PROTECT, related_name="evaluations"
+    )
     created_by = models.ForeignKey(
         "identity.User", on_delete=models.SET_NULL, related_name="created_evaluations", null=True
     )

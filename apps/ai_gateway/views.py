@@ -25,7 +25,11 @@ from apps.ai_gateway.service import ModelSelectionError, select_model
 from apps.core.throttling import BurstThrottle, EmbeddingThrottle
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
-from apps.identity.authorization import primary_organization_for_user
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 from apps.jobs.models import Job, WorkflowRun
 from apps.jobs.tasks import execute_job_task
 
@@ -129,17 +133,28 @@ class ModelRunViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class PromptViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = PromptSerializer
     lookup_field = "slug"
 
     def get_queryset(self):
-        return Prompt.objects.filter(is_active=True)
+        organization = organization_for_request(self.request)
+        return tenant_scoped_queryset(
+            Prompt.objects.filter(is_active=True),
+            self.request.user,
+            organization_id=organization.id if organization else None,
+        )
 
     def get_serializer_class(self):
         if self.action == "create":
             return PromptCreateSerializer
         return PromptSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(
+            created_by=self.request.user,
+            organization=organization_for_request(self.request, required=True),
+        )
 
     @action(detail=True, methods=["post"])
     def clone(self, request: Request, slug=None):
@@ -156,23 +171,35 @@ class PromptViewSet(viewsets.ModelViewSet):
             is_active=True,
             tags=prompt.tags,
             metadata=prompt.metadata,
+            organization=prompt.organization,
             created_by=request.user,
         )
         return Response(PromptSerializer(new_prompt).data, status=status.HTTP_201_CREATED)
 
 
 class EvaluationViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = EvaluationSerializer
     lookup_field = "slug"
 
     def get_queryset(self):
-        return Evaluation.objects.select_related("model", "prompt", "created_by")
+        organization = organization_for_request(self.request)
+        return tenant_scoped_queryset(
+            Evaluation.objects.select_related("model", "prompt", "created_by", "organization"),
+            self.request.user,
+            organization_id=organization.id if organization else None,
+        )
 
     def get_serializer_class(self):
         if self.action == "create":
             return EvaluationCreateSerializer
         return EvaluationSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(
+            created_by=self.request.user,
+            organization=organization_for_request(self.request, required=True),
+        )
 
     @action(detail=True, methods=["post"])
     def run(self, request: Request, slug=None):
@@ -227,7 +254,7 @@ class CompletionView(APIView):
 
         job = Job.objects.create(
             owner=request.user,
-            organization=primary_organization_for_user(request.user),
+            organization=organization_for_request(request, required=True),
             task_type=task_type,
             trace_id=getattr(request, "trace_id", "") or f"job-{uuid.uuid4().hex}",
             input_payload={
@@ -314,7 +341,7 @@ class EmbeddingView(APIView):
 
         job = Job.objects.create(
             owner=request.user,
-            organization=primary_organization_for_user(request.user),
+            organization=organization_for_request(request, required=True),
             task_type=Job.TaskType.RAG_QUERY,  # Reuse or add EMBEDDING task type
             input_payload={
                 "texts": texts,

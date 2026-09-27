@@ -7,6 +7,7 @@ from django.db import IntegrityError, close_old_connections, transaction
 from django.http import StreamingHttpResponse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -19,32 +20,38 @@ from apps.conversations.serializers import (
 from apps.conversations.tasks import process_chat_request
 from apps.core.throttling import BurstThrottle, ChatThrottle
 from apps.events.outbox import add_outbox_event
-from apps.identity.authorization import primary_organization_for_user, tenant_scoped_queryset
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = ConversationSerializer
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         return tenant_scoped_queryset(
-            Conversation.objects.filter(owner=self.request.user),
+            Conversation.objects.all(),
             self.request.user,
         ).order_by("-updated_at")
 
     def perform_create(self, serializer):
         serializer.save(
-            owner=self.request.user, organization=primary_organization_for_user(self.request.user)
+            owner=self.request.user, organization=organization_for_request(self.request, required=True)
         )
 
 
 class ChatRequestViewSet(viewsets.GenericViewSet):
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = ChatRequestSerializer
     throttle_classes = [ChatThrottle, BurstThrottle]
 
     def get_queryset(self):
         return tenant_scoped_queryset(
-            ChatRequest.objects.filter(owner=self.request.user),
+            ChatRequest.objects.all(),
             self.request.user,
         ).select_related("conversation")
 
@@ -52,7 +59,7 @@ class ChatRequestViewSet(viewsets.GenericViewSet):
         serializer = ChatRequestCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         conversation = tenant_scoped_queryset(
-            Conversation.objects.filter(id=serializer.validated_data["conversationId"], owner=request.user),
+            Conversation.objects.filter(id=serializer.validated_data["conversationId"]),
             request.user,
         ).first()
         if not conversation:
@@ -104,14 +111,15 @@ class ChatRequestViewSet(viewsets.GenericViewSet):
     def stream(self, request: Request, pk=None):
         item = self.get_object()
         request_id = str(item.id)
-        owner_id = request.user.id
 
         def event_stream():
             last_status = None
             started = time.monotonic()
             while time.monotonic() - started < 90:
                 close_old_connections()
-                current = ChatRequest.objects.filter(id=request_id, owner_id=owner_id).first()
+                current = tenant_scoped_queryset(
+                    ChatRequest.objects.filter(id=request_id), request.user
+                ).first()
                 if not current:
                     yield 'event: failed\ndata: {"message":"Request not found."}\n\n'
                     return
