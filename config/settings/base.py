@@ -8,6 +8,7 @@ import dj_database_url
 import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+from kombu import Queue
 from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.redis import RedisIntegration
@@ -132,14 +133,20 @@ def runtime_connection_settings(
         if pooler_mode == "transaction":
             database_config.setdefault("DISABLE_SERVER_SIDE_CURSORS", True)
     database = {"default": database_config}
-    caches = {
-        "default": {
+
+    def redis_cache(key_prefix: str, timeout: int) -> dict[str, Any]:
+        return {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             "LOCATION": redis_url,
-            "TIMEOUT": 300,
+            "TIMEOUT": timeout,
             "OPTIONS": {"socket_connect_timeout": 3, "socket_timeout": 3},
-            "KEY_PREFIX": "jt-code",
+            "KEY_PREFIX": key_prefix,
         }
+
+    caches = {
+        "default": redis_cache("jt-code:cache", 300),
+        "rate_limits": redis_cache("jt-code:rate-limit", 3600),
+        "job_locks": redis_cache("jt-code:job-lock", 900),
     }
     return database, caches, redis_url, broker_url, result_url
 
@@ -170,6 +177,7 @@ CACHES: dict[str, Any] = {}
 REDIS_URL = ""
 CELERY_BROKER_URL = ""
 CELERY_RESULT_BACKEND = ""
+JOB_STALLED_TIMEOUT_SECONDS = int(env("JOB_STALLED_TIMEOUT_SECONDS", "660"))
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TRACK_STARTED = True
@@ -197,6 +205,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.billing.tasks.process_webhooks",
         "schedule": 60.0,
     },
+    "recover-stalled-jobs": {
+        "task": "apps.jobs.tasks.recover_stalled_jobs",
+        "schedule": 60.0,
+    },
     "expire-old-jobs": {
         "task": "apps.jobs.tasks.expire_old_jobs",
         "schedule": 3600.0,
@@ -207,6 +219,24 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
+
+CELERY_TASK_DEFAULT_QUEUE = "jobs.default"
+CELERY_TASK_QUEUES = (
+    Queue("jobs.default"),
+    Queue("jobs.analysis"),
+    Queue("jobs.ingestion"),
+    Queue("jobs.visualization"),
+)
+CELERY_TASK_ROUTES = {
+    "apps.jobs.tasks.execute_job_task": {"queue": "jobs.analysis"},
+    "apps.knowledge.tasks.*": {"queue": "jobs.ingestion"},
+    "apps.documents.*": {"queue": "jobs.visualization"},
+    "apps.conversions.*": {"queue": "jobs.visualization"},
+}
+CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
+CELERY_TASK_RESULT_EXPIRES = 3600
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET")
 SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE")

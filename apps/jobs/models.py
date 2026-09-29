@@ -38,6 +38,13 @@ class Job(models.Model):
     task_type = models.CharField(max_length=50, choices=TaskType.choices)
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.QUEUED)
     input_payload = models.JSONField()
+    queue_name = models.CharField(max_length=64, default="jobs.default", db_index=True)
+    celery_task_id = models.CharField(max_length=255, blank=True, db_index=True)
+    progress_percent = models.PositiveSmallIntegerField(default=0)
+    retry_count = models.PositiveIntegerField(default=0)
+    max_retries = models.PositiveIntegerField(default=3)
+    last_retry_at = models.DateTimeField(null=True, blank=True)
+    cancel_requested_at = models.DateTimeField(null=True, blank=True)
     entitlement_snapshot = models.JSONField(default=dict, blank=True)
     reserved_credits = models.DecimalField(max_digits=20, decimal_places=6, default=0)
     actual_credits = models.DecimalField(max_digits=20, decimal_places=6, null=True, blank=True)
@@ -63,6 +70,7 @@ class Job(models.Model):
             models.Index(fields=("task_type", "-created_at")),
             models.Index(fields=("request_id",)),
             models.Index(fields=("idempotency_key",)),
+            models.Index(fields=("queue_name", "status", "-created_at")),
         ]
         constraints = [
             models.UniqueConstraint(fields=("owner", "idempotency_key"), name="uniq_job_idempotency"),

@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from celery import current_app
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -20,6 +22,8 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
+from apps.jobs.dispatch import enqueue_job
+from apps.jobs.metrics import queue_depths
 from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
 from apps.jobs.serializers import (
     CallbackSerializer,
@@ -91,33 +95,7 @@ class JobViewSet(viewsets.ModelViewSet):
         return estimates.get(task_type, Decimal("10"))
 
     def _enqueue_job(self, job: Job):
-        # Create workflow run record
-        WorkflowRun.objects.create(
-            job=job,
-            n8n_workflow_id=f"{job.task_type.lower()}",
-            input_payload=job.input_payload,
-        )
-
-        # Enqueue outbox event for n8n
-        enqueue_outbox_event(
-            topic=f"{job._meta.model._meta.app_label}.job.created",
-            event_key=str(job.request_id),
-            payload={
-                "job_id": str(job.id),
-                "request_id": str(job.request_id),
-                "task_type": job.task_type,
-                "input_payload": job.input_payload,
-                "owner_id": str(job.owner_id),
-                "organization_id": str(job.organization_id) if job.organization_id else None,
-                "reserved_credits": str(job.reserved_credits),
-                "callback_url": job.callback_url,
-                "deadline": job.deadline.isoformat() if job.deadline else None,
-            },
-            headers={
-                "trace_id": job.trace_id,
-                "request_id": str(job.request_id),
-            },
-        )
+        enqueue_job(job)
 
     @action(detail=True, methods=["post"])
     def cancel(self, request: Request, id=None):
@@ -127,9 +105,12 @@ class JobViewSet(viewsets.ModelViewSet):
                 {"detail": "Job cannot be cancelled in current status"}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        job.cancel_requested_at = timezone.now()
         job.status = Job.Status.CANCELLED
         job.completed_at = timezone.now()
-        job.save(update_fields=["status", "completed_at"])
+        job.save(update_fields=["cancel_requested_at", "status", "completed_at", "updated_at"])
+        if job.celery_task_id:
+            current_app.control.revoke(job.celery_task_id, terminate=False)
 
         # Release reserved credits
         CreditService.release_reservation(
@@ -194,6 +175,12 @@ class JobViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=["get"], url_path="queue-metrics")
+    def queue_metrics(self, request: Request) -> Response:
+        if not request.user.is_staff:
+            raise PermissionDenied("Staff access is required for queue metrics.")
+        return Response({"queues": queue_depths()})
 
 
 class JobStepViewSet(viewsets.ReadOnlyModelViewSet):
@@ -263,6 +250,8 @@ class JobStatusCallbackView(APIView):
         job.status = data["status"]
 
         if data["status"] in [Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.CANCELLED]:
+            if data["status"] == Job.Status.COMPLETED:
+                job.progress_percent = 100
             job.completed_at = timezone.now()
 
         if "result" in data:
@@ -273,6 +262,10 @@ class JobStatusCallbackView(APIView):
             job.error_message = data["error_message"]
         if "n8n_execution_id" in data:
             job.n8n_execution_id = data["n8n_execution_id"]
+        if "progress_percent" in data:
+            job.progress_percent = data["progress_percent"]
+        if data["status"] == Job.Status.CANCELLED:
+            job.cancel_requested_at = timezone.now()
 
         job.save()
 
@@ -285,7 +278,7 @@ class JobStatusCallbackView(APIView):
                 wr.steps_completed = data["steps_completed"]
             if "total_steps" in data:
                 wr.total_steps = data["total_steps"]
-            if data["status"] in [Job.Status.COMPLETED, Job.Status.FAILED]:
+            if data["status"] in [Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.CANCELLED]:
                 wr.status = data["status"]
                 wr.completed_at = timezone.now()
                 if "result" in data:
@@ -402,20 +395,7 @@ class ResearchJobsView(APIView):
             request_id=request_id,
         )
 
-        enqueue_outbox_event(
-            topic="jobs.job.created",
-            event_key=str(job.request_id),
-            payload={
-                "job_id": str(job.id),
-                "request_id": str(job.request_id),
-                "task_type": job.task_type,
-                "query": query,
-                "depth": depth,
-                "collection_ids": [str(c) for c in collections],
-                "owner_id": str(job.owner_id),
-                "reserved_credits": str(estimated_credits),
-            },
-        )
+        enqueue_job(job)
 
         return Response(
             {

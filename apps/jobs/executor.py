@@ -212,14 +212,25 @@ HANDLERS = {
 }
 
 
+def _cancelled(job: Job) -> bool:
+    job.refresh_from_db(fields=["status", "cancel_requested_at"])
+    return job.status == Job.Status.CANCELLED or job.cancel_requested_at is not None
+
+
 def _mark_started(job: Job) -> JobStep:
     job.status = Job.Status.RUNNING
     job.started_at = timezone.now()
-    job.save(update_fields=["status", "started_at", "updated_at"])
+    job.progress_percent = max(job.progress_percent, 5)
+    job.save(update_fields=["status", "started_at", "progress_percent", "updated_at"])
+    active_step = job.steps.filter(status=JobStep.Status.RUNNING).order_by("-step_order").first()
+    if active_step:
+        active_step.started_at = job.started_at
+        active_step.save(update_fields=["started_at", "updated_at"])
+        return active_step
     return JobStep.objects.create(
         job=job,
         name=job.task_type,
-        step_order=0,
+        step_order=job.steps.count(),
         status=JobStep.Status.RUNNING,
         started_at=timezone.now(),
     )
@@ -231,7 +242,8 @@ def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
         job.status = Job.Status.COMPLETED
         job.result = result
         job.completed_at = timezone.now()
-        job.save(update_fields=["status", "result", "completed_at", "updated_at"])
+        job.progress_percent = 100
+        job.save(update_fields=["status", "result", "completed_at", "progress_percent", "updated_at"])
         step.status = JobStep.Status.COMPLETED
         step.output_payload = result
         step.provider = usage.get("provider", "")
@@ -292,13 +304,23 @@ def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
 
 
 def execute_job(job: Job) -> dict:
-    """Run ``job`` with the internal executor and update all lifecycle state."""
-    handler = HANDLERS.get(job.task_type)
-    if handler is None:
-        return {"skipped": True, "task_type": job.task_type, "reason": "no_native_handler"}
-    step = _mark_started(job)
+    """Run ``job`` once while preserving durable status and cancellation state."""
+    with transaction.atomic():
+        job = Job.objects.select_for_update().get(id=job.id)
+        if _cancelled(job):
+            return {"status": "cancelled", "task_type": job.task_type, "idempotent": True}
+        if job.status in {Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.EXPIRED}:
+            return {"status": job.status, "task_type": job.task_type, "idempotent": True}
+        if job.status == Job.Status.RUNNING:
+            return {"status": "running", "task_type": job.task_type, "idempotent": True}
+        handler = HANDLERS.get(job.task_type)
+        if handler is None:
+            return {"skipped": True, "task_type": job.task_type, "reason": "no_native_handler"}
+        step = _mark_started(job)
     try:
         result = handler(job)
+    except (TimeoutError, ConnectionError):
+        raise
     except AIGatewayError as exc:
         _finalize_failure(job, step, code=exc.code, message=str(exc))
         return {"status": "failed", "task_type": job.task_type, "error_code": exc.code}
@@ -306,5 +328,10 @@ def execute_job(job: Job) -> dict:
         sentry_sdk.capture_exception(exc)
         _finalize_failure(job, step, code="JOB_EXECUTION_FAILED", message=str(exc))
         return {"status": "failed", "task_type": job.task_type, "error_code": "JOB_EXECUTION_FAILED"}
+    if _cancelled(job):
+        step.status = JobStep.Status.SKIPPED
+        step.completed_at = timezone.now()
+        step.save(update_fields=["status", "completed_at", "updated_at"])
+        return {"status": "cancelled", "task_type": job.task_type}
     _finalize_success(job, step, result)
     return {"status": "completed", "task_type": job.task_type}

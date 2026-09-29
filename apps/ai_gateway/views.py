@@ -30,8 +30,8 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
-from apps.jobs.models import Job, WorkflowRun
-from apps.jobs.tasks import execute_job_task
+from apps.jobs.dispatch import enqueue_job
+from apps.jobs.models import Job
 
 
 class ProviderViewSet(viewsets.ReadOnlyModelViewSet):
@@ -282,11 +282,6 @@ class CompletionView(APIView):
         viewset.request = request
         viewset._reserve_credits(job)
 
-        WorkflowRun.objects.create(
-            job=job,
-            n8n_workflow_id="ai-agent",
-            input_payload=job.input_payload,
-        )
         enqueue_outbox_event(
             topic="ai_gateway.job.created",
             event_key=str(job.request_id),
@@ -299,7 +294,7 @@ class CompletionView(APIView):
             },
             headers={"trace_id": job.trace_id},
         )
-        execute_job_task.delay(str(job.id))
+        enqueue_job(job)
 
         return Response(
             {
