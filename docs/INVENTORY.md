@@ -115,7 +115,7 @@ Router-based (list/detail/actions) and explicit paths:
   `images/<id>/download/`
 - **core:** `health/live/`, `health/startup/`, `health/ready/`, `monitoring/n8n-error/`
 
-Admin/schema/docs: `/admin/`, `/api/schema/`, `/api/docs/`.
+Admin/schema/docs: `/admin/`, `/api/v1/schema/`, `/api/v1/docs/` (legacy schema aliases remain available).
 
 ## 4. Data models (by app)
 

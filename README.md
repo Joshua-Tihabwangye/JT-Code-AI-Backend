@@ -223,8 +223,8 @@ See `.env.example` for all available variables. Key variables:
 - `/api/v1/health/ready/` - Readiness probe (database, Redis, Celery broker and Kafka in deployable profiles)
 
 ### API Documentation
-- OpenAPI schema at `/api/schema/`
-- Swagger UI at `/api/docs/`
+- Versioned OpenAPI schema at `/api/v1/schema/`
+- Versioned Swagger UI at `/api/v1/docs/`
 
 ## Testing
 

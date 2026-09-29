@@ -22,7 +22,10 @@ def process_chat_request(self, request_id: str) -> None:
             request.error_code = ""
             request.save(update_fields=("output_text", "status", "error_code", "updated_at"))
             Message.objects.create(
-                conversation=request.conversation, role=Message.Role.ASSISTANT, content=output
+                conversation=request.conversation,
+                organization=request.organization,
+                role=Message.Role.ASSISTANT,
+                content=output,
             )
             add_outbox_event(
                 "chat.request.completed",

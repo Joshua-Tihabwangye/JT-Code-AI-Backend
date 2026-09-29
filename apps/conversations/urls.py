@@ -1,8 +1,8 @@
 from rest_framework.routers import DefaultRouter
 
-from apps.conversations.views import ChatRequestViewSet, ConversationViewSet
+from apps.conversations.runtime_views import ChatRequestRuntimeViewSet, ConversationRuntimeViewSet
 
 router = DefaultRouter()
-router.register("conversations", ConversationViewSet, basename="conversation")
-router.register("chat/requests", ChatRequestViewSet, basename="chat-request")
+router.register("conversations", ConversationRuntimeViewSet, basename="conversation")
+router.register("chat/requests", ChatRequestRuntimeViewSet, basename="chat-request")
 urlpatterns = router.urls

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.conversations.models import ChatRequest, Conversation, Message
+from apps.conversations.models import ChatRequest, Conversation, ConversationFeedback, Message
 
 
 @admin.register(Conversation)
@@ -26,5 +26,14 @@ class ChatRequestAdmin(admin.ModelAdmin):
     list_display = ("id", "owner", "conversation", "task_type", "status", "created_at")
     list_filter = ("status", "task_type", "created_at")
     search_fields = ("owner__email", "idempotency_key", "trace_id")
+    readonly_fields = ("id", "created_at", "updated_at")
+    ordering = ("-created_at",)
+
+
+@admin.register(ConversationFeedback)
+class ConversationFeedbackAdmin(admin.ModelAdmin):
+    list_display = ("id", "conversation", "owner", "rating", "created_at")
+    list_filter = ("rating", "created_at")
+    search_fields = ("conversation__title", "owner__email", "comment")
     readonly_fields = ("id", "created_at", "updated_at")
     ordering = ("-created_at",)
