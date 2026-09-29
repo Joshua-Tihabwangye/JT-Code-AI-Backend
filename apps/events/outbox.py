@@ -1,5 +1,10 @@
+"""Transactional outbox helpers for versioned domain events."""
+
+from __future__ import annotations
+
 from django.conf import settings
 
+from apps.events.contracts import event_type_for_topic
 from apps.events.models import OutboxEvent
 
 
@@ -27,3 +32,8 @@ def enqueue_outbox_event(
         payload=payload,
         headers=headers or {},
     )
+
+
+def event_type(event: OutboxEvent) -> str:
+    """Return the stable contract name for an outbox event topic."""
+    return event_type_for_topic(event.topic, settings.KAFKA_TOPIC_PREFIX)

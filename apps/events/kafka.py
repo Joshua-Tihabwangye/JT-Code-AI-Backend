@@ -6,6 +6,8 @@ from functools import lru_cache
 from confluent_kafka import Producer
 from django.conf import settings
 
+from apps.events.contracts import EventEnvelope, transport_headers
+
 
 @lru_cache(maxsize=1)
 def producer() -> Producer:
@@ -28,13 +30,13 @@ def producer() -> Producer:
     return Producer(config)
 
 
-def publish(topic: str, key: str, payload: dict, headers: dict[str, str] | None = None) -> None:
+def publish(topic: str, key: str, envelope: EventEnvelope, headers: dict[str, str] | None = None) -> None:
     p = producer()
     p.produce(
         topic=topic,
         key=key.encode(),
-        value=json.dumps(payload, separators=(",", ":"), default=str).encode(),
-        headers=[(name, value.encode()) for name, value in (headers or {}).items()],
+        value=json.dumps(envelope.as_dict(), separators=(",", ":"), default=str).encode(),
+        headers=[(name, value.encode()) for name, value in transport_headers(envelope, headers).items()],
     )
     remaining = p.flush(10)
     if remaining:
