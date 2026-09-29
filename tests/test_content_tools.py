@@ -96,7 +96,14 @@ def test_render_document_foreign_owner_forbidden(authenticated_client, user):
     owner_user = user.__class__.objects.create_user(
         username="other-owner", supabase_user_id="other-owner-id", email="owner@example.com"
     )
-    document = Document.objects.create(owner=owner_user, title="Not Yours", content="x")
+    foreign_org = Organization.objects.create(name="Foreign document org", owner=owner_user)
+    owner_user.organizations.add(foreign_org)
+    document = Document.objects.create(
+        owner=owner_user,
+        organization=foreign_org,
+        title="Not Yours",
+        content="x",
+    )
     response = authenticated_client.post(f"/api/v1/documents/{document.id}/render/", {"format": "pdf"})
     assert response.status_code == 404
 

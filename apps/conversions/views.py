@@ -158,7 +158,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
 @permission_classes([IsAuthenticated])
 def conversion_download(request: Request, id: uuid.UUID) -> FileResponse:
     job = tenant_scoped_queryset(
-        ConversionJob.objects.filter(id=id, owner=request.user),
+        ConversionJob.objects.filter(id=id),
         request.user,
     ).first()
     if not job or job.status != ConversionJob.Status.COMPLETED or not job.output_path:

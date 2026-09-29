@@ -5,7 +5,7 @@ import uuid
 from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -84,6 +84,11 @@ class ModelPolicyViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = ModelPolicySerializer
     lookup_field = "slug"
+
+    def get_permissions(self):
+        if self.action in {"create", "update", "partial_update", "destroy"}:
+            return [IsAuthenticated(), IsAdminUser()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         return ModelPolicy.objects.filter(is_active=True).select_related(
@@ -229,7 +234,7 @@ class EvaluationViewSet(viewsets.ModelViewSet):
 class CompletionView(APIView):
     """AI completion endpoint - routes to appropriate model based on policy"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
     def post(self, request: Request):
@@ -310,7 +315,7 @@ class CompletionView(APIView):
 class EmbeddingView(APIView):
     """Generate embeddings for text"""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
     def post(self, request: Request):
@@ -354,6 +359,7 @@ class EmbeddingView(APIView):
         from apps.jobs.views import JobViewSet
 
         viewset = JobViewSet()
+        viewset.request = request
         viewset._reserve_credits(job)
         viewset._enqueue_job(job)
 
@@ -373,16 +379,17 @@ class AIModelsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request):
-        user_orgs = request.user.organizations.all()
-        if not user_orgs.exists():
+        organization = organization_for_request(request)
+        if organization is None:
             return Response({"models": []})
 
-        # Get user's plan
+        # Entitlements must come from the explicitly selected tenant, never
+        # whichever organization happens to be returned first by the database.
         from apps.billing.models import Subscription
 
         subscription = (
             Subscription.objects.filter(
-                organization__in=user_orgs,
+                organization=organization,
                 status__in=[Subscription.Status.ACTIVE, Subscription.Status.TRIALING],
             )
             .select_related("plan")

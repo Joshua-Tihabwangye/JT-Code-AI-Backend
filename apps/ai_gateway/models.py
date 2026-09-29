@@ -235,9 +235,7 @@ class Prompt(models.Model):
 
     class Meta:
         ordering = ("category", "name")
-        constraints = [
-            models.UniqueConstraint(fields=("organization", "slug"), name="uniq_prompt_org_slug")
-        ]
+        constraints = [models.UniqueConstraint(fields=("organization", "slug"), name="uniq_prompt_org_slug")]
 
     def __str__(self):
         return f"{self.name} ({self.category}) v{self.version}"
@@ -293,3 +291,25 @@ class Evaluation(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.type}) - {self.status}"
+
+
+class GeneratedImage(models.Model):
+    """Tenant-owned metadata for locally served generated images.
+
+    ImageKit URLs are authorized by ImageKit. Local fallback files need a
+    database ownership record so an opaque UUID never becomes authorization.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.CASCADE, related_name="generated_images"
+    )
+    owner = models.ForeignKey("identity.User", on_delete=models.CASCADE, related_name="generated_images")
+    storage_url = models.URLField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("organization", "-created_at"))]
+
+    def __str__(self):
+        return f"Generated image {self.id}"

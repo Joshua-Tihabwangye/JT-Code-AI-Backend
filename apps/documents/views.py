@@ -175,7 +175,7 @@ def document_download(request: Request, id: uuid.UUID) -> FileResponse:
     if fmt not in {"pdf", "docx"}:
         raise Http404
     document = tenant_scoped_queryset(
-        Document.objects.filter(id=id, owner=request.user),
+        Document.objects.filter(id=id),
         request.user,
     ).first()
     if not document or not document.download_url:

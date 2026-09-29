@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_DB: jtcode
           POSTGRES_USER: postgres
@@ -42,6 +42,7 @@ jobs:
       - run: ruff format --check .
       - run: mypy
       - run: python manage.py makemigrations --check --dry-run --settings=config.settings.ci
+      - run: python manage.py inventory_matrix --strict --settings=config.settings.ci
       - run: python manage.py migrate --noinput --settings=config.settings.ci
       - name: Seed restore-drill fixture
         run: python manage.py seed_restore_drill_fixture --settings=config.settings.ci

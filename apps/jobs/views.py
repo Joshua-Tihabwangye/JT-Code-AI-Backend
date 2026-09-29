@@ -332,7 +332,7 @@ class JobStatusCallbackView(APIView):
 class ResearchJobsView(APIView):
     """Start a deep research job with cost estimate, source policy and async execution."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [ResearchThrottle, BurstThrottle]
 
     def post(self, request: Request) -> Response:

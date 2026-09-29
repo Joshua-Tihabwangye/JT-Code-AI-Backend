@@ -79,9 +79,9 @@ def test_restore_drill_fixture_populates_every_canonical_table():
 
 
 def test_phase3_backfill_migration_covers_all_legacy_tenant_models():
-    migration = (
-        PROJECT_ROOT / "apps/governance/migrations/0006_backfill_legacy_tenant_rows.py"
-    ).read_text(encoding="utf-8")
+    migration = (PROJECT_ROOT / "apps/governance/migrations/0006_backfill_legacy_tenant_rows.py").read_text(
+        encoding="utf-8"
+    )
 
     for model_name in (
         "Asset",

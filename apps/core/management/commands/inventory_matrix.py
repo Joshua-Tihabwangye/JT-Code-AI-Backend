@@ -423,9 +423,9 @@ def _load_dependencies() -> dict[str, dict[str, str]]:
 def _dependency_drift(dependencies: dict[str, dict[str, str]]) -> list[dict[str, str]]:
     """Dependencies declared in only one of the two manifest files.
 
-    ``pyproject.toml`` is authoritative because ``Dockerfile`` installs with
-    ``pip install .``; anything present only in ``requirements.txt`` is absent
-    from the production image.
+    ``pyproject.toml`` is authoritative for the installable application.
+    ``requirements.txt`` remains a compatibility export and must not claim a
+    package absent from the project metadata.
     """
     drift: list[dict[str, str]] = []
     for name, entry in dependencies.items():
@@ -437,7 +437,7 @@ def _dependency_drift(dependencies: dict[str, dict[str, str]]) -> list[dict[str,
             drift.append(
                 {
                     "package": name,
-                    "problem": "declared in requirements.txt only (missing from the Docker image)",
+                    "problem": "declared in requirements.txt only (missing from pyproject.toml)",
                 }
             )
     return drift

@@ -15,10 +15,10 @@ _JWKS_FETCHED_AT = 0.0
 _JWKS_TTL_SECONDS = 3600
 
 
-def _fetch_jwks() -> dict[str, Any]:
+def _fetch_jwks(*, force_refresh: bool = False) -> dict[str, Any]:
     global _JWKS_CACHE, _JWKS_FETCHED_AT
     now = time.monotonic()
-    if _JWKS_CACHE is not None and now - _JWKS_FETCHED_AT < _JWKS_TTL_SECONDS:
+    if not force_refresh and _JWKS_CACHE is not None and now - _JWKS_FETCHED_AT < _JWKS_TTL_SECONDS:
         return _JWKS_CACHE
 
     jwks_url = settings.SUPABASE_URL.rstrip("/") + "/auth/v1/.well-known/jwks.json"
@@ -43,7 +43,13 @@ def _verify_with_jwks(token: str) -> dict[str, Any]:
     if kid:
         key = next((k for k in jwks["keys"] if k.get("kid") == kid), None)
     if key is None:
-        raise ValueError("No matching JWKS key for token.")
+        # Supabase may rotate signing keys before the normal cache TTL. Refresh
+        # once for an unknown key while continuing to fail closed on errors.
+        jwks = _fetch_jwks(force_refresh=True)
+        if kid:
+            key = next((candidate for candidate in jwks["keys"] if candidate.get("kid") == kid), None)
+        if key is None:
+            raise ValueError("No matching JWKS key for token.")
 
     algorithm = unverified_header.get("alg")
     if algorithm not in {"ES256", "RS256"} or key.get("alg", algorithm) != algorithm:

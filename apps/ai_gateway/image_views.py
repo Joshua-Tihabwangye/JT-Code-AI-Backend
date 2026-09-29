@@ -14,13 +14,17 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.ai_gateway.models import Model, Provider
+from apps.ai_gateway.models import GeneratedImage, Model, Provider
 from apps.assets.imagekit import upload_bytes_to_imagekit
 from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ImageThrottle
 from apps.events.outbox import add_outbox_event
 from apps.governance.models import SafetyEvent
-from apps.identity.authorization import HasOrganizationWriteAccess, organization_for_request
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    organization_for_request,
+    tenant_scoped_queryset,
+)
 
 IMAGE_RENDER_ROOT = Path(settings.BASE_DIR) / "generated_images"
 
@@ -148,7 +152,7 @@ def _wrap_text(text: str, width: int) -> list[str]:
     return lines
 
 
-def _save_image(content: bytes, image_id: uuid.UUID) -> str:
+def _save_image(content: bytes, image_id: uuid.UUID, *, organization, owner) -> str:
     imagekit_url = upload_bytes_to_imagekit(
         content,
         file_name=f"{image_id}.png",
@@ -156,12 +160,15 @@ def _save_image(content: bytes, image_id: uuid.UUID) -> str:
         content_type="image/png",
     )
     if imagekit_url:
-        return imagekit_url
-    IMAGE_RENDER_ROOT.mkdir(parents=True, exist_ok=True)
-    path = IMAGE_RENDER_ROOT / f"{image_id}.png"
-    with open(path, "wb") as fh:
-        fh.write(content)
-    return f"/images/{image_id}/download/"
+        url = imagekit_url
+    else:
+        IMAGE_RENDER_ROOT.mkdir(parents=True, exist_ok=True)
+        path = IMAGE_RENDER_ROOT / f"{image_id}.png"
+        with open(path, "wb") as fh:
+            fh.write(content)
+        url = f"/images/{image_id}/download/"
+    GeneratedImage.objects.create(id=image_id, organization=organization, owner=owner, storage_url=url)
+    return url
 
 
 def _size_tuple(size: str) -> tuple[int, int]:
@@ -206,7 +213,7 @@ class ImageGenerationView(APIView):
                     {"detail": "No image model is configured. Set up an AI image provider first."},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-            url = _save_image(content, image_id)
+            url = _save_image(content, image_id, organization=organization, owner=request.user)
             generated.append({"url": url, "id": str(image_id)})
 
         CreditService.reserve_credits(
@@ -264,7 +271,7 @@ class ImageEditView(APIView):
 
         image_id = uuid.uuid4()
         content = _generate_placeholder(f"{prompt} (edited)", size, str(image_id))
-        url = _save_image(content, image_id)
+        url = _save_image(content, image_id, organization=organization, owner=request.user)
 
         CreditService.reserve_credits(
             user=request.user,
@@ -342,6 +349,9 @@ class ImageUnderstandingView(APIView):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def generated_image_download(request: Request, id: uuid.UUID) -> FileResponse:
+    image = tenant_scoped_queryset(GeneratedImage.objects.filter(id=id), request.user).first()
+    if image is None:
+        raise Http404
     path = IMAGE_RENDER_ROOT / f"{id}.png"
     if not path.exists():
         raise Http404

@@ -11,9 +11,7 @@ class Conversation(models.Model):
     )
     organization = models.ForeignKey(
         "identity.Organization",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE,
         related_name="conversations",
     )
     title = models.CharField(max_length=255, default="New conversation")
@@ -34,7 +32,7 @@ class Message(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="messages")
     organization = models.ForeignKey(
-        "identity.Organization", on_delete=models.SET_NULL, null=True, blank=True, related_name="messages"
+        "identity.Organization", on_delete=models.CASCADE, related_name="messages"
     )
     role = models.CharField(max_length=16, choices=Role.choices)
     content = models.TextField()
@@ -59,9 +57,7 @@ class ChatRequest(models.Model):
     )
     organization = models.ForeignKey(
         "identity.Organization",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
+        on_delete=models.CASCADE,
         related_name="chat_requests",
     )
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name="requests")

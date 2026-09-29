@@ -1,4 +1,4 @@
-.PHONY: help install migrate run worker beat test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic compose-up compose-down compose-logs compose-build setup-dev start-dev
+.PHONY: help install migrate run worker beat test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -6,7 +6,7 @@ help:
 	@echo ""
 	@echo "Setup:"
 	@echo "  setup-dev     Run full development setup (install, migrate, createsuperuser, collectstatic)"
-	@echo "  start-dev     Start all development services (Docker + Django + Celery)"
+	@echo "  start-dev     Run migrations after external services are available"
 	@echo "  install       Install Python dependencies with pip"
 	@echo ""
 	@echo "Database:"
@@ -30,13 +30,6 @@ help:
 	@echo "  check         Run all checks (lint + format + typecheck + test)"
 	@echo "  ci-local      Run the same gates as GitHub Actions where possible"
 	@echo "  restore-drill Run local Phase 3 restore verification"
-	@echo ""
-	@echo "Docker:"
-	@echo "  compose-up    Start all services with Docker Compose"
-	@echo "  compose-down  Stop all Docker Compose services"
-	@echo "  compose-logs  View Docker Compose logs"
-	@echo "  compose-build Build Docker images"
-	@echo ""
 	@echo "Maintenance:"
 	@echo "  collectstatic Collect static files"
 	@echo "  clean         Remove cache and build artifacts"
@@ -120,22 +113,6 @@ ci-local:
 
 restore-drill:
 	python manage.py restore_drill_check --prepare-test-db --settings=config.settings.test
-
-# Docker
-compose-up:
-	docker compose up -d
-
-compose-down:
-	docker compose down
-
-compose-logs:
-	docker compose logs -f
-
-compose-build:
-	docker compose build
-
-compose-ps:
-	docker compose ps
 
 # Maintenance
 collectstatic:

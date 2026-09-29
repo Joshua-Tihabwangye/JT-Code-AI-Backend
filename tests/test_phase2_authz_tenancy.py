@@ -325,9 +325,7 @@ def test_collection_creation_uses_selected_tenant_and_requires_editor_role(api_c
         supabase_user_id="collection-owner",
         email="collection-owner@example.com",
     )
-    organization = Organization.objects.create(
-        name="Knowledge tenant", slug="knowledge-tenant", owner=owner
-    )
+    organization = Organization.objects.create(name="Knowledge tenant", slug="knowledge-tenant", owner=owner)
     owner.organizations.add(organization)
     user.organizations.add(organization)
     api_client.force_authenticate(user)
@@ -374,12 +372,20 @@ def test_prompt_slugs_are_unique_per_organization(api_model, user):
     user.organizations.add(first, second)
 
     first_prompt = Prompt.objects.create(
-        name="Shared slug", slug="shared", category=Prompt.Category.TASK, content="one",
-        organization=first, created_by=user
+        name="Shared slug",
+        slug="shared",
+        category=Prompt.Category.TASK,
+        content="one",
+        organization=first,
+        created_by=user,
     )
     second_prompt = Prompt.objects.create(
-        name="Shared slug", slug="shared", category=Prompt.Category.TASK, content="two",
-        organization=second, created_by=user
+        name="Shared slug",
+        slug="shared",
+        category=Prompt.Category.TASK,
+        content="two",
+        organization=second,
+        created_by=user,
     )
 
     assert first_prompt.slug == second_prompt.slug == "shared"
@@ -395,23 +401,43 @@ def test_evaluation_slugs_are_unique_per_organization(api_model, user):
     )
     user.organizations.add(first, second)
     first_prompt = Prompt.objects.create(
-        name="First prompt", slug="first-prompt", category=Prompt.Category.TASK, content="one",
-        organization=first, created_by=user
+        name="First prompt",
+        slug="first-prompt",
+        category=Prompt.Category.TASK,
+        content="one",
+        organization=first,
+        created_by=user,
     )
     second_prompt = Prompt.objects.create(
-        name="Second prompt", slug="second-prompt", category=Prompt.Category.TASK, content="two",
-        organization=second, created_by=user
+        name="Second prompt",
+        slug="second-prompt",
+        category=Prompt.Category.TASK,
+        content="two",
+        organization=second,
+        created_by=user,
     )
 
     first_evaluation = Evaluation.objects.create(
-        name="Shared evaluation", slug="shared-evaluation", type=Evaluation.Type.ACCURACY,
-        model=api_model, prompt=first_prompt, dataset_name="one", dataset_version="1",
-        organization=first, created_by=user
+        name="Shared evaluation",
+        slug="shared-evaluation",
+        type=Evaluation.Type.ACCURACY,
+        model=api_model,
+        prompt=first_prompt,
+        dataset_name="one",
+        dataset_version="1",
+        organization=first,
+        created_by=user,
     )
     second_evaluation = Evaluation.objects.create(
-        name="Shared evaluation", slug="shared-evaluation", type=Evaluation.Type.ACCURACY,
-        model=api_model, prompt=second_prompt, dataset_name="two", dataset_version="1",
-        organization=second, created_by=user
+        name="Shared evaluation",
+        slug="shared-evaluation",
+        type=Evaluation.Type.ACCURACY,
+        model=api_model,
+        prompt=second_prompt,
+        dataset_name="two",
+        dataset_version="1",
+        organization=second,
+        created_by=user,
     )
 
     assert first_evaluation.slug == second_evaluation.slug == "shared-evaluation"

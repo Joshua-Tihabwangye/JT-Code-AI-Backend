@@ -16,8 +16,6 @@ class Asset(models.Model):
         "identity.Organization",
         on_delete=models.CASCADE,
         related_name="assets",
-        null=True,
-        blank=True,
     )
     imagekit_file_id = models.CharField(max_length=500, unique=True)
     imagekit_file_path = models.CharField(max_length=1000, blank=True)

@@ -15,7 +15,7 @@ Production-oriented Django boilerplate for JT-Code. This is the backend reposito
 - **Outbox Pattern**: PostgreSQL transactional outbox for reliable event publishing
 - **Monitoring**: Sentry for Django, Celery, Redis and Kafka error monitoring
 - **API Docs**: OpenAPI/Swagger via drf-spectacular
-- **Development**: Docker Compose, Ruff, MyPy, pytest, GitHub Actions
+- **Development**: managed/local PostgreSQL, Redis and Kafka; Ruff, MyPy, pytest, GitHub Actions
 
 ## Project Structure
 
@@ -56,8 +56,6 @@ jt-code backend/
 ├── manage.py                   # Django management script
 ├── pyproject.toml              # Project metadata & dependencies (Poetry)
 ├── requirements.txt            # Pip-compatible dependencies
-├── Dockerfile
-├── docker-compose.yml
 ├── Makefile                    # Common development commands
 ├── .env.example
 ├── .env
@@ -81,8 +79,7 @@ jt-code backend/
 
 - Python 3.12+
 - Poetry (recommended) or pip
-- Docker & Docker Compose (for PostgreSQL, Redis, Kafka)
-- PostgreSQL 15+ (if not using Docker)
+- PostgreSQL 17+ with pgvector, Redis, and Kafka (managed or locally installed)
 
 ### Local Development
 
@@ -109,8 +106,7 @@ pip install -e '.[dev]'
 python manage.py migrate
 python manage.py createsuperuser
 
-# Start dependencies (PostgreSQL, Redis, Kafka)
-docker compose up -d postgres redis kafka
+# Ensure PostgreSQL with pgvector, Redis, and Kafka are available using your managed or local services.
 
 # Run migrations
 python manage.py migrate
@@ -138,7 +134,7 @@ The API will be available at:
 ```bash
 make help           # Show all available commands
 make setup-dev      # Full development setup
-make start-dev      # Start all services (Docker + Django + Celery)
+make start-dev      # Run migrations after external services are available
 make migrate        # Run migrations
 make run            # Start Django dev server
 make worker         # Start Celery worker
@@ -151,8 +147,6 @@ make typecheck      # Run mypy type checking
 make check          # Run all checks (lint + format + typecheck + test)
 make shell          # Open Django shell
 make createsuperuser # Create admin user
-make compose-up     # Start Docker services
-make compose-down   # Stop Docker services
 make clean          # Remove cache and build artifacts
 ```
 
@@ -288,9 +282,10 @@ python manage.py collectstatic --noinput
 ```
 Files served via WhiteNoise in production.
 
-### Docker
+### Application server
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+python manage.py collectstatic --noinput
+gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 2
 ```
 
 ## Architecture

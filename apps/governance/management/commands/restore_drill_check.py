@@ -189,6 +189,9 @@ class Command(BaseCommand):
                 cursor.fetchone()
                 cursor.execute("SELECT has_table_privilege(%s, %s, 'SELECT')", [ANALYTICS_ROLE, view_name])
                 checks[f"target_select_{view_name}"] = bool(cursor.fetchone()[0])
+            for table_name in CANONICAL_TABLES:
+                cursor.execute("SELECT has_table_privilege(%s, %s, 'SELECT')", [ANALYTICS_ROLE, table_name])
+                checks[f"target_no_table_select_{table_name}"] = not bool(cursor.fetchone()[0])
         return checks
 
     @staticmethod

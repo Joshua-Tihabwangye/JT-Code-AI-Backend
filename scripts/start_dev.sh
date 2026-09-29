@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
-# Start all development services
+# Prepare the Django backend for local development.
 
 set -e
 
-echo "🚀 Starting development services..."
-
-# Check if docker-compose is available
-if command -v docker-compose >/dev/null 2>&1; then
-    echo "🐳 Starting Docker services (PostgreSQL, Redis, Kafka)..."
-    docker-compose up -d postgres redis kafka zookeeper
-    
-    echo "⏳ Waiting for services to be ready..."
-    sleep 5
-else
-    echo "⚠️  Docker Compose not found. Make sure PostgreSQL, Redis, and Kafka are running manually."
-fi
+echo "🚀 Preparing JT-Code backend development..."
+echo "Ensure PostgreSQL/pgvector, Redis, and Kafka are available through your managed or local services."
 
 # Run migrations
 echo "🗄️  Running migrations..."

@@ -21,8 +21,6 @@ class ConversionJob(models.Model):
         "identity.Organization",
         on_delete=models.CASCADE,
         related_name="conversion_jobs",
-        null=True,
-        blank=True,
     )
     input_filename = models.CharField(max_length=500)
     input_format = models.CharField(max_length=20)

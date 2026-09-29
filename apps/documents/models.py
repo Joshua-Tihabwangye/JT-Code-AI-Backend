@@ -23,8 +23,6 @@ class Document(models.Model):
         "identity.Organization",
         on_delete=models.CASCADE,
         related_name="documents",
-        null=True,
-        blank=True,
     )
     title = models.CharField(max_length=500)
     template = models.CharField(max_length=100, default="general")

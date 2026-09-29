@@ -129,6 +129,8 @@ def runtime_connection_settings(
         if sslrootcert := env("DATABASE_SSLROOTCERT"):
             options.setdefault("sslrootcert", sslrootcert)
         options.setdefault("application_name", env("DATABASE_APPLICATION_NAME", "jt-code-api"))
+        if pooler_mode == "transaction":
+            database_config.setdefault("DISABLE_SERVER_SIDE_CURSORS", True)
     database = {"default": database_config}
     caches = {
         "default": {

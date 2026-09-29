@@ -360,7 +360,7 @@ def test_repeated_research_jobs_get_unique_idempotency_keys(authenticated_client
 def test_chat_throttle_blocks_burst(authenticated_client, user, org):
     from apps.conversations.models import Conversation
 
-    conversation = Conversation.objects.create(owner=user, title="Throttle test")
+    conversation = Conversation.objects.create(owner=user, organization=org, title="Throttle test")
     cache.clear()
     responses = []
     for _ in range(31):

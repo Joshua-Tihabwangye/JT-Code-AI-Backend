@@ -6,7 +6,14 @@ from apps.identity.settings_views import (
     SettingsExportView,
     SettingsOrganizationView,
 )
-from apps.identity.views import AuthPingView, MeView, SettingsProfileView
+from apps.identity.views import (
+    AuthPingView,
+    MeView,
+    OrganizationInviteAcceptView,
+    OrganizationMemberDetailView,
+    OrganizationMembersView,
+    SettingsProfileView,
+)
 from apps.identity.webhooks import supabase_webhook
 
 urlpatterns = [
@@ -17,5 +24,16 @@ urlpatterns = [
     path("settings/consents/", SettingsConsentsView.as_view(), name="settings-consents"),
     path("settings/export/", SettingsExportView.as_view(), name="settings-export"),
     path("settings/account/", SettingsAccountView.as_view(), name="settings-account"),
+    path("organizations/members/", OrganizationMembersView.as_view(), name="organization-members"),
+    path(
+        "organizations/members/<uuid:user_id>/",
+        OrganizationMemberDetailView.as_view(),
+        name="organization-member-detail",
+    ),
+    path(
+        "organizations/invites/<uuid:invite_id>/accept/",
+        OrganizationInviteAcceptView.as_view(),
+        name="organization-invite-accept",
+    ),
     path("webhooks/supabase/", supabase_webhook, name="supabase-webhook"),
 ]
