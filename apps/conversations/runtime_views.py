@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from uuid import uuid4
 
 import sentry_sdk
 from asgiref.sync import sync_to_async
@@ -29,6 +30,7 @@ from apps.conversations.serializers import (
     ConversationSerializer,
     MessageSerializer,
 )
+from apps.conversations.streaming import chat_status_channel, notify_chat_status
 from apps.conversations.tasks import process_chat_request
 from apps.core.exceptions import IdempotencyConflict
 from apps.core.pagination import CreatedCursorPagination, UpdatedCursorPagination
@@ -64,19 +66,16 @@ def _request_fingerprint(conversation: Conversation, content: str, timezone_name
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _dispatch_chat_request(chat_request_id: str, task_id: str) -> None:
+    """Publish a pre-recorded task id after commit.
 
-def _dispatch_chat_request(chat_request_id: str) -> None:
-    """Enqueue after commit and retain the broker task id for cancellation/audit."""
+    Re-publication uses the same id and is safe because the worker claims the
+    durable request row before generating a response.
+    """
     try:
-        result = process_chat_request.delay(chat_request_id)
+        process_chat_request.apply_async(args=[chat_request_id], task_id=task_id)
     except Exception as exc:  # noqa: BLE001 - beat will retry a safely persisted request
         sentry_sdk.capture_exception(exc)
-        return
-    task_id = getattr(result, "id", "")
-    if task_id:
-        ChatRequest.objects.filter(
-            id=chat_request_id, status=ChatRequest.Status.QUEUED
-        ).update(celery_task_id=task_id)
 
 
 def create_chat_request(
@@ -90,6 +89,7 @@ def create_chat_request(
     """Create a canonical chat request, or safely replay its previous result."""
     idempotency_key = _idempotency_key(request)
     fingerprint = _request_fingerprint(conversation, content, timezone_name, locale)
+    celery_task_id = str(uuid4())
     try:
         with transaction.atomic():
             chat_request = ChatRequest.objects.create(
@@ -102,6 +102,7 @@ def create_chat_request(
                 timezone=timezone_name,
                 locale=locale,
                 trace_id=getattr(request, "trace_id", ""),
+                celery_task_id=celery_task_id,
             )
             Message.objects.create(
                 conversation=conversation,
@@ -120,7 +121,11 @@ def create_chat_request(
                 },
                 headers={"request_id": getattr(request, "request_id", "")},
             )
-            transaction.on_commit(lambda request_id=str(chat_request.id): _dispatch_chat_request(request_id))
+            transaction.on_commit(
+                lambda request_id=str(chat_request.id), task_id=celery_task_id: _dispatch_chat_request(
+                    request_id, task_id
+                )
+            )
     except IntegrityError:
         chat_request = ChatRequest.objects.get(
             organization=conversation.organization,
@@ -355,6 +360,7 @@ class ChatRequestRuntimeViewSet(
                         "status": item.status,
                     },
                 )
+                transaction.on_commit(lambda request_id=str(item.id): notify_chat_status(request_id))
                 if item.celery_task_id:
                     transaction.on_commit(
                         lambda task_id=item.celery_task_id: current_app.control.revoke(task_id)
@@ -382,44 +388,98 @@ class ChatRequestRuntimeViewSet(
                 close_old_connections()
 
         async def event_stream():
-            """ASGI-safe SSE: no request thread sleeps while a response is pending."""
+            """ASGI-safe, Redis-notified SSE with bounded database reconciliation."""
             loop = asyncio.get_running_loop()
             deadline = loop.time() + max(1, settings.CHAT_SSE_MAX_SECONDS)
             poll_interval = max(0.1, settings.CHAT_SSE_POLL_SECONDS)
             heartbeat_interval = max(poll_interval, settings.CHAT_SSE_HEARTBEAT_SECONDS)
+            reconciliation_interval = max(poll_interval, settings.CHAT_SSE_RECONCILIATION_SECONDS)
             emitted_event_id = last_event_id
             last_heartbeat = loop.time()
-            while loop.time() < deadline:
-                state = await sync_to_async(load_state, thread_sensitive=True)()
-                if state is None:
-                    yield 'event: failed\ndata: {"code":"not_found","message":"Request not found."}\n\n'
-                    return
-                current, event_id = state
-                terminal = current.status in {
-                    ChatRequest.Status.COMPLETED,
-                    ChatRequest.Status.FAILED,
-                    ChatRequest.Status.CANCELLED,
-                }
-                if event_id != emitted_event_id:
-                    data = ChatRequestSerializer(current).data
-                    event = {
-                        ChatRequest.Status.COMPLETED: "completed",
-                        ChatRequest.Status.FAILED: "failed",
-                        ChatRequest.Status.CANCELLED: "cancelled",
-                    }.get(current.status, "status")
-                    yield f"id: {event_id}\nevent: {event}\ndata: {json.dumps(data)}\n\n"
-                    emitted_event_id = event_id
-                if terminal:
-                    return
-                now = loop.time()
-                if now - last_heartbeat >= heartbeat_interval:
-                    yield "event: heartbeat\ndata: {}\n\n"
-                    last_heartbeat = now
-                await asyncio.sleep(min(poll_interval, max(0, deadline - loop.time())))
-            yield (
-                'event: timeout\ndata: {"code":"stream_timeout",'
-                '"message":"Streaming window expired; poll the request endpoint."}\n\n'
-            )
+            last_reconciled = 0.0
+            redis_client = pubsub = None
+            try:
+                if settings.REDIS_URL:
+                    from redis.asyncio import Redis
+
+                    redis_client = Redis.from_url(
+                        settings.REDIS_URL,
+                        socket_connect_timeout=3,
+                        socket_timeout=3,
+                        decode_responses=True,
+                    )
+                    pubsub = redis_client.pubsub()
+                    await pubsub.subscribe(chat_status_channel(request_id))
+                while loop.time() < deadline:
+                    now = loop.time()
+                    if last_reconciled == 0 or now - last_reconciled >= reconciliation_interval:
+                        state = await sync_to_async(load_state, thread_sensitive=True)()
+                        last_reconciled = now
+                        if state is None:
+                            yield (
+                                'event: failed\ndata: {"code":"not_found","message":"Request not found."}\n\n'
+                            )
+                            return
+                        current, event_id = state
+                        terminal = current.status in {
+                            ChatRequest.Status.COMPLETED,
+                            ChatRequest.Status.FAILED,
+                            ChatRequest.Status.CANCELLED,
+                        }
+                        if event_id != emitted_event_id:
+                            data = ChatRequestSerializer(current).data
+                            event = {
+                                ChatRequest.Status.COMPLETED: "completed",
+                                ChatRequest.Status.FAILED: "failed",
+                                ChatRequest.Status.CANCELLED: "cancelled",
+                            }.get(current.status, "status")
+                            yield f"id: {event_id}\nevent: {event}\ndata: {json.dumps(data)}\n\n"
+                            emitted_event_id = event_id
+                        if terminal:
+                            return
+                    now = loop.time()
+                    until_heartbeat = max(0.1, heartbeat_interval - (now - last_heartbeat))
+                    until_reconcile = max(0.1, reconciliation_interval - (now - last_reconciled))
+                    timeout = min(until_heartbeat, until_reconcile, max(0.1, deadline - now))
+                    if pubsub is not None:
+                        message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=timeout)
+                        if message is not None:
+                            last_reconciled = 0.0
+                    else:
+                        await asyncio.sleep(timeout)
+                    now = loop.time()
+                    if now - last_heartbeat >= heartbeat_interval:
+                        yield "event: heartbeat\ndata: {}\n\n"
+                        last_heartbeat = now
+                yield (
+                    'event: timeout\ndata: {"code":"stream_timeout",'
+                    '"message":"Streaming window expired; poll the request endpoint."}\n\n'
+                )
+            except Exception as exc:  # noqa: BLE001 - retain correct fallback during Redis outage
+                sentry_sdk.capture_exception(exc)
+                yield 'event: degraded\ndata: {"code":"stream_degraded"}\n\n'
+                while loop.time() < deadline:
+                    state = await sync_to_async(load_state, thread_sensitive=True)()
+                    if state is None:
+                        return
+                    current, event_id = state
+                    if event_id != emitted_event_id:
+                        data = ChatRequestSerializer(current).data
+                        yield f"id: {event_id}\nevent: status\ndata: {json.dumps(data)}\n\n"
+                        emitted_event_id = event_id
+                    if current.status in {
+                        ChatRequest.Status.COMPLETED,
+                        ChatRequest.Status.FAILED,
+                        ChatRequest.Status.CANCELLED,
+                    }:
+                        return
+                    await asyncio.sleep(poll_interval)
+            finally:
+                if pubsub is not None:
+                    await pubsub.unsubscribe(chat_status_channel(request_id))
+                    await pubsub.aclose()
+                if redis_client is not None:
+                    await redis_client.aclose()
 
         response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
         response["Cache-Control"] = "no-cache, no-store"

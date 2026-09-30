@@ -28,6 +28,11 @@ class CreditService:
         return wallet
 
     @staticmethod
+    def _locked_wallet(organization: Organization) -> CreditWallet:
+        CreditService.get_or_create_wallet(organization)
+        return CreditWallet.objects.select_for_update().get(organization=organization)
+
+    @staticmethod
     @transaction.atomic
     def reserve_credits(
         user, amount: Decimal, request_id, job_id=None, reason="Reservation", *, organization: Organization
@@ -36,7 +41,10 @@ class CreditService:
             raise ValueError("An organization is required for credit reservation")
         org = organization
 
-        wallet = CreditService.get_or_create_wallet(org)
+        wallet = CreditService._locked_wallet(org)
+        idempotency_key = f"reserve_{request_id}"
+        if ledger := CreditLedger.objects.filter(wallet=wallet, idempotency_key=idempotency_key).first():
+            return ledger
 
         if wallet.available_balance < amount:
             raise ValueError(
@@ -54,7 +62,7 @@ class CreditService:
             description=reason,
             request_id=request_id,
             job_id=job_id,
-            idempotency_key=f"reserve_{request_id}",
+            idempotency_key=idempotency_key,
             balance_after=wallet.available_balance,
         )
 
@@ -67,19 +75,20 @@ class CreditService:
             return None
         org = organization
 
-        wallet = CreditService.get_or_create_wallet(org)
+        wallet = CreditService._locked_wallet(org)
+        idempotency_key = f"release_{request_id}"
+        if released := CreditLedger.objects.filter(wallet=wallet, idempotency_key=idempotency_key).first():
+            return released
 
-        # Find the reservation ledger entry
         reservation = CreditLedger.objects.filter(
             wallet=wallet,
             request_id=request_id,
-            direction=CreditLedger.Direction.DEBIT,
+            idempotency_key=f"reserve_{request_id}",
         ).first()
-
         if not reservation:
             return None
 
-        wallet.reserved_balance -= reservation.credits
+        wallet.reserved_balance = max(Decimal("0"), wallet.reserved_balance - reservation.credits)
         wallet.save(update_fields=["reserved_balance", "updated_at"])
 
         ledger = CreditLedger.objects.create(
@@ -89,7 +98,7 @@ class CreditService:
             reason=CreditLedger.Reason.ADJUSTMENT,
             description=f"Released reservation: {reservation.description}",
             request_id=request_id,
-            idempotency_key=f"release_{request_id}",
+            idempotency_key=idempotency_key,
             balance_after=wallet.available_balance,
         )
 
@@ -104,27 +113,30 @@ class CreditService:
             raise ValueError("An organization is required for credit settlement")
         org = organization
 
-        wallet = CreditService.get_or_create_wallet(org)
+        wallet = CreditService._locked_wallet(org)
+        idempotency_key = f"settle_{request_id}"
+        if settled := CreditLedger.objects.filter(wallet=wallet, idempotency_key=idempotency_key).first():
+            return settled
 
-        # Find the reservation
         reservation = CreditLedger.objects.filter(
             wallet=wallet,
             request_id=request_id,
-            direction=CreditLedger.Direction.DEBIT,
+            idempotency_key=f"reserve_{request_id}",
         ).first()
-
         if not reservation:
             raise ValueError("No reservation found for request_id")
+        if CreditLedger.objects.filter(wallet=wallet, idempotency_key=f"release_{request_id}").exists():
+            raise ValueError("Reservation was already released for request_id")
+        if actual_amount > reservation.credits:
+            raise ValueError("Actual credit usage cannot exceed the reserved amount")
 
-        # Calculate difference
         reserved = reservation.credits
         difference = reserved - actual_amount
 
-        # Release unused reservation
-        wallet.reserved_balance -= reserved
-        wallet.save(update_fields=["reserved_balance", "updated_at"])
+        wallet.reserved_balance = max(Decimal("0"), wallet.reserved_balance - reserved)
+        wallet.balance -= actual_amount
+        wallet.save(update_fields=["reserved_balance", "balance", "updated_at"])
 
-        # Create settlement entry for actual usage
         ledger = CreditLedger.objects.create(
             wallet=wallet,
             direction=CreditLedger.Direction.DEBIT,
@@ -132,11 +144,10 @@ class CreditService:
             reason=CreditLedger.Reason.USAGE_CHAT,
             description=f"Settled usage (reserved: {reserved}, actual: {actual_amount})",
             request_id=request_id,
-            idempotency_key=f"settle_{request_id}",
+            idempotency_key=idempotency_key,
             balance_after=wallet.available_balance,
         )
 
-        # If there was over-reservation, credit back the difference
         if difference > 0:
             CreditLedger.objects.create(
                 wallet=wallet,
@@ -146,10 +157,8 @@ class CreditService:
                 description=f"Refunded over-reservation: {difference}",
                 request_id=request_id,
                 idempotency_key=f"refund_{request_id}",
-                balance_after=wallet.available_balance + difference,
+                balance_after=wallet.available_balance,
             )
-            wallet.balance += difference
-            wallet.save(update_fields=["balance", "updated_at"])
 
         return ledger
 

@@ -18,7 +18,9 @@ CACHES = {
         "KEY_PREFIX": "jt-code:job-lock",
     },
 }
-DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
+DATABASES, _, _, _, _ = runtime_connection_settings(  # noqa: F405
+    database_url=env("TEST_DATABASE_URL", required=True)  # noqa: F405
+)
 
 # Provide default Supabase settings so tests can authenticate deterministically
 # (never inherit live project values from the environment during tests)
@@ -27,6 +29,8 @@ SUPABASE_JWT_AUDIENCE = "authenticated"
 SUPABASE_JWT_ISSUER = ""
 SUPABASE_URL = ""
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET", "")  # noqa: F405
+WEBHOOK_ALLOWED_HOSTS = ["callbacks.example.test"]
+WEBHOOK_SIGNING_SECRET = "test-outbound-callback-signing-secret"  # nosec B105
 
 # Deterministic, offline embedding provider for the test suite. The pgvector
 # store itself is Postgres-only and unavailable on the SQLite test database.

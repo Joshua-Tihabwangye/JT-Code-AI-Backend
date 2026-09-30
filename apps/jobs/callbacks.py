@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.utils import timezone
 
 from apps.jobs.models import Callback, Job
@@ -39,6 +40,7 @@ def create_terminal_callback(job: Job) -> Callback | None:
         url=job.callback_url,
         defaults={
             "payload": callback_payload(job),
+            "max_attempts": settings.WEBHOOK_MAX_RETRIES,
             "next_retry_at": timezone.now(),
             "expires_at": timezone.now() + timedelta(days=7),
         },

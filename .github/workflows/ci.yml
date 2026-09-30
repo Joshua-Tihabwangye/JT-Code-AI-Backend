@@ -8,29 +8,15 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_DB: jtcode
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres -d jtcode"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      redis:
-        image: redis:7.4
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DJANGO_SETTINGS_MODULE: config.settings.ci
       DJANGO_SECRET_KEY: ci-Key9aB3dE5fG7hI1jK2LmN4oP6qR8sT0uVxYz-0123456789
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/jtcode
-      REDIS_URL: redis://localhost:6379/0
-      CELERY_BROKER_URL: redis://localhost:6379/1
-      CELERY_RESULT_BACKEND: redis://localhost:6379/2
+      DATABASE_URL: ${{ secrets.SUPABASE_CI_DATABASE_URL }}
+      TEST_DATABASE_URL: ${{ secrets.SUPABASE_CI_DATABASE_URL }}
+      RESTORE_DATABASE_URL: ${{ secrets.SUPABASE_CI_RESTORE_DATABASE_URL }}
+      REDIS_URL: ${{ secrets.CI_REDIS_URL }}
+      CELERY_BROKER_URL: ${{ secrets.CI_CELERY_BROKER_URL }}
+      CELERY_RESULT_BACKEND: ${{ secrets.CI_CELERY_RESULT_BACKEND }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,6 +27,13 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
+      - name: Verify isolated Supabase CI targets
+        run: |
+          test -n "$DATABASE_URL"
+          test -n "$TEST_DATABASE_URL"
+          test -n "$RESTORE_DATABASE_URL"
+          test "$DATABASE_URL" = "$TEST_DATABASE_URL"
+          test "$DATABASE_URL" != "$RESTORE_DATABASE_URL"
       - run: python manage.py makemigrations --check --dry-run --settings=config.settings.ci
       - run: python manage.py inventory_matrix --strict --settings=config.settings.ci
       - run: python manage.py migrate --noinput --settings=config.settings.ci
@@ -50,9 +43,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes postgresql-client
-          PGPASSWORD=postgres createdb --host=localhost --username=postgres jtcode_restore
           python manage.py restore_drill_check \
-            --restore-database-url postgresql://postgres:postgres@localhost:5432/jtcode_restore \
+            --restore-database-url "$RESTORE_DATABASE_URL" \
             --confirm-restore-target --require-source-data --settings=config.settings.ci
       - run: python manage.py check --deploy --settings=config.settings.production
         env:

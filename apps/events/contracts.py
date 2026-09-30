@@ -57,6 +57,8 @@ def build_envelope(
     headers: dict[str, Any] | None = None,
 ) -> EventEnvelope:
     headers = headers or {}
+    if not isinstance(payload, dict):
+        raise EventContractError("Event payload must be an object.")
     request_id = str(headers.get("request_id") or request_id_var.get() or "")
     trace_id = str(headers.get("trace_id") or trace_id_var.get() or "")
     return EventEnvelope(
@@ -85,19 +87,28 @@ def parse_envelope(value: dict[str, Any]) -> EventEnvelope:
     missing = required.difference(value)
     if missing:
         raise EventContractError(f"Event envelope is missing required fields: {sorted(missing)}")
-    if value["schema_version"] != SCHEMA_VERSION:
+    if type(value["schema_version"]) is not int or value["schema_version"] != SCHEMA_VERSION:
         raise EventContractError(f"Unsupported event schema version: {value['schema_version']!r}")
     if not isinstance(value["data"], dict):
         raise EventContractError("Event envelope data must be an object.")
     try:
-        uuid.UUID(str(value["event_id"]))
-        datetime.fromisoformat(str(value["occurred_at"]).replace("Z", "+00:00"))
+        event_id = str(uuid.UUID(str(value["event_id"])))
+        occurred_at = datetime.fromisoformat(str(value["occurred_at"]).replace("Z", "+00:00"))
     except (TypeError, ValueError) as exc:
         raise EventContractError("Event envelope has invalid event_id or occurred_at.") from exc
-    if not isinstance(value["event_type"], str) or not value["event_type"]:
+    if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+        raise EventContractError("Event envelope occurred_at must include a timezone offset.")
+    if (
+        not isinstance(value["event_type"], str)
+        or not value["event_type"].strip()
+        or value["event_type"] != value["event_type"].strip()
+    ):
         raise EventContractError("Event envelope event_type must be a non-empty string.")
+    for field in ("request_id", "trace_id", "causation_id"):
+        if field in value and not isinstance(value[field], str):
+            raise EventContractError(f"Event envelope {field} must be a string.")
     return EventEnvelope(
-        event_id=str(value["event_id"]),
+        event_id=event_id,
         event_type=value["event_type"],
         schema_version=value["schema_version"],
         occurred_at=str(value["occurred_at"]),
@@ -118,4 +129,4 @@ def transport_headers(envelope: EventEnvelope, headers: dict[str, Any] | None = 
         "trace_id": envelope.trace_id,
         "causation_id": envelope.causation_id,
     }
-    return {**base, **{str(key): str(value) for key, value in (headers or {}).items()}}
+    return {**{str(key): str(value) for key, value in (headers or {}).items()}, **base}

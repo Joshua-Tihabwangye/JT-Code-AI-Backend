@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from decimal import Decimal
 
 from celery import current_app
 from django.conf import settings
-from django.utils import timezone
+from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -16,7 +17,6 @@ from rest_framework.response import Response
 from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ResearchThrottle
 from apps.core.views import APIView
-from apps.events.outbox import enqueue_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
     organization_for_request,
@@ -33,6 +33,7 @@ from apps.jobs.serializers import (
     JobStepSerializer,
     WorkflowRunSerializer,
 )
+from apps.jobs.transitions import InvalidJobTransition, apply_status_update
 
 
 class JobViewSet(viewsets.ModelViewSet):
@@ -53,14 +54,13 @@ class JobViewSet(viewsets.ModelViewSet):
         return JobSerializer
 
     def perform_create(self, serializer):
-        job = serializer.save(
-            owner=self.request.user,
-            organization=organization_for_request(self.request, required=True),
-        )
-        # Reserve credits for the job
-        self._reserve_credits(job)
-        # Enqueue job for n8n processing
-        self._enqueue_job(job)
+        with transaction.atomic():
+            job = serializer.save(
+                owner=self.request.user,
+                organization=organization_for_request(self.request, required=True),
+            )
+            self._reserve_credits(job)
+            self._enqueue_job(job)
 
     def _reserve_credits(self, job: Job):
         # Calculate estimated cost based on task type
@@ -99,35 +99,25 @@ class JobViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def cancel(self, request: Request, id=None):
-        job = self.get_object()
-        if job.status not in [Job.Status.QUEUED, Job.Status.RUNNING, Job.Status.VALIDATING]:
+        current_job = self.get_object()
+        if current_job.status not in [
+            Job.Status.QUEUED,
+            Job.Status.RUNNING,
+            Job.Status.VALIDATING,
+            Job.Status.WAITING_APPROVAL,
+        ]:
             return Response(
                 {"detail": "Job cannot be cancelled in current status"}, status=status.HTTP_400_BAD_REQUEST
             )
-
-        job.cancel_requested_at = timezone.now()
-        job.status = Job.Status.CANCELLED
-        job.completed_at = timezone.now()
-        job.save(update_fields=["cancel_requested_at", "status", "completed_at", "updated_at"])
+        try:
+            job, changed = apply_status_update(current_job.id, {"status": Job.Status.CANCELLED})
+        except InvalidJobTransition:
+            return Response(
+                {"detail": "Job cannot be cancelled in current status"}, status=status.HTTP_409_CONFLICT
+            )
+        # Revoke only after the durable cancellation and its outbox record commit.
         if job.celery_task_id:
             current_app.control.revoke(job.celery_task_id, terminate=False)
-
-        # Release reserved credits
-        CreditService.release_reservation(
-            user=request.user, request_id=job.request_id, organization=job.organization
-        )
-
-        # Enqueue cancellation event
-        enqueue_outbox_event(
-            topic="jobs.job.cancelled",
-            event_key=str(job.request_id),
-            payload={"job_id": str(job.id), "request_id": str(job.request_id)},
-            headers={"trace_id": job.trace_id},
-        )
-        from apps.jobs.callbacks import create_terminal_callback
-
-        create_terminal_callback(job)
-
         return Response(JobSerializer(job, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
@@ -235,98 +225,19 @@ class JobStatusCallbackView(APIView):
     authentication_classes = []
 
     def post(self, request: Request, job_id: uuid.UUID):
-        # Verify webhook signature
         secret = request.headers.get("X-JT-Code-Webhook-Secret")
-        if secret != settings.N8N_WEBHOOK_SECRET:
+        expected_secret = settings.N8N_WEBHOOK_SECRET
+        if not expected_secret or not secret or not secrets.compare_digest(secret, expected_secret):
             return Response({"detail": "Invalid webhook secret"}, status=status.HTTP_401_UNAUTHORIZED)
-
-        try:
-            job = Job.objects.get(id=job_id)
-        except Job.DoesNotExist:
-            return Response({"detail": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
-
         serializer = JobStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        old_status = job.status
-        job.status = data["status"]
-
-        if data["status"] in [Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.CANCELLED]:
-            if data["status"] == Job.Status.COMPLETED:
-                job.progress_percent = 100
-            job.completed_at = timezone.now()
-
-        if "result" in data:
-            job.result = data["result"]
-        if "error_code" in data:
-            job.error_code = data["error_code"]
-        if "error_message" in data:
-            job.error_message = data["error_message"]
-        if "n8n_execution_id" in data:
-            job.n8n_execution_id = data["n8n_execution_id"]
-        if "progress_percent" in data:
-            job.progress_percent = data["progress_percent"]
-        if data["status"] == Job.Status.CANCELLED:
-            job.cancel_requested_at = timezone.now()
-
-        job.save()
-
-        # Update workflow run if exists
-        if hasattr(job, "workflow_run"):
-            wr = job.workflow_run
-            if "progress_percent" in data:
-                wr.progress_percent = data["progress_percent"]
-            if "steps_completed" in data:
-                wr.steps_completed = data["steps_completed"]
-            if "total_steps" in data:
-                wr.total_steps = data["total_steps"]
-            if data["status"] in [Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.CANCELLED]:
-                wr.status = data["status"]
-                wr.completed_at = timezone.now()
-                if "result" in data:
-                    wr.output_payload = data["result"]
-                if "error_message" in data:
-                    wr.error_message = data["error_message"]
-            wr.save()
-
-        # Handle credit settlement
-        if data["status"] == Job.Status.COMPLETED:
-            actual_credits = data.get("actual_credits", job.reserved_credits)
-            job.actual_credits = actual_credits
-            job.save(update_fields=["actual_credits"])
-
-            CreditService.settle_reservation(
-                user=job.owner,
-                request_id=job.request_id,
-                actual_amount=actual_credits,
-                organization=job.organization,
-            )
-        elif data["status"] in [Job.Status.FAILED, Job.Status.CANCELLED]:
-            CreditService.release_reservation(
-                user=job.owner, request_id=job.request_id, organization=job.organization
-            )
-
-        # Enqueue completion event
-        if job.status in [Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.CANCELLED]:
-            from apps.jobs.callbacks import create_terminal_callback
-
-            create_terminal_callback(job)
-        enqueue_outbox_event(
-            topic=f"jobs.job.{data['status']}",
-            event_key=str(job.request_id),
-            payload={
-                "job_id": str(job.id),
-                "request_id": str(job.request_id),
-                "old_status": old_status,
-                "new_status": data["status"],
-                "result": data.get("result"),
-                "error": data.get("error_message"),
-            },
-            headers={"trace_id": job.trace_id},
-        )
-
-        return Response(JobSerializer(job).data)
+        try:
+            job, _ = apply_status_update(job_id, serializer.validated_data)
+        except Job.DoesNotExist:
+            return Response({"detail": "Job not found"}, status=status.HTTP_404_NOT_FOUND)
+        except InvalidJobTransition as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        return Response(JobSerializer(job, context={"request": request}).data)
 
 
 class ResearchJobsView(APIView):

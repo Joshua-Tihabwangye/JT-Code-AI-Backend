@@ -101,14 +101,16 @@ ASGI_APPLICATION = "config.asgi.application"
 
 
 def runtime_connection_settings(
-    *, development: bool = False
+    *, development: bool = False, database_url: str | None = None
 ) -> tuple[dict[str, Any], dict[str, Any], str, str, str]:
     """Build stateful connection settings for a named environment profile.
 
-    Base settings deliberately contain no localhost/default deployment wiring;
-    each profile must opt into its own development convenience values.
+    Supabase PostgreSQL is required for every deployable profile. Development
+    may opt into local Redis only; it never falls back to SQLite.
     """
-    database_default = f"sqlite:///{BASE_DIR / 'db.sqlite3'}" if development else ""
+    resolved_database_url = database_url if database_url is not None else env("DATABASE_URL")
+    if not resolved_database_url:
+        raise ImproperlyConfigured("DATABASE_URL is required; configure Supabase PostgreSQL explicitly.")
     redis_default = "redis://localhost:6379/0" if development else ""
     broker_default = "redis://localhost:6379/1" if development else ""
     result_default = "redis://localhost:6379/2" if development else ""
@@ -120,7 +122,7 @@ def runtime_connection_settings(
     if pooler_mode == "transaction":
         conn_max_age = 0
     database_config = dj_database_url.config(
-        default=env("DATABASE_URL", database_default),
+        default=resolved_database_url,
         conn_max_age=conn_max_age,
         conn_health_checks=True,
     )
@@ -182,6 +184,7 @@ CHAT_REQUEST_STALLED_TIMEOUT_SECONDS = int(env("CHAT_REQUEST_STALLED_TIMEOUT_SEC
 CHAT_MAX_CONTEXT_MESSAGES = int(env("CHAT_MAX_CONTEXT_MESSAGES", "40"))
 CHAT_SSE_HEARTBEAT_SECONDS = float(env("CHAT_SSE_HEARTBEAT_SECONDS", "15"))
 CHAT_SSE_MAX_SECONDS = int(env("CHAT_SSE_MAX_SECONDS", "300"))
+CHAT_SSE_RECONCILIATION_SECONDS = float(env("CHAT_SSE_RECONCILIATION_SECONDS", "30"))
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TRACK_STARTED = True
@@ -338,6 +341,8 @@ WEBHOOK_MAX_RETRIES = int(env("WEBHOOK_MAX_RETRIES", "5"))
 WEBHOOK_RETRY_BASE_DELAY = int(env("WEBHOOK_RETRY_BASE_DELAY", "60"))
 WEBHOOK_RETRY_MAX_SECONDS = int(env("WEBHOOK_RETRY_MAX_SECONDS", "3600"))
 WEBHOOK_DELIVERY_TIMEOUT_SECONDS = float(env("WEBHOOK_DELIVERY_TIMEOUT_SECONDS", "10"))
+WEBHOOK_ALLOWED_HOSTS = env_list("WEBHOOK_ALLOWED_HOSTS")
+WEBHOOK_SIGNING_SECRET = env("WEBHOOK_SIGNING_SECRET")
 KAFKA_CONSUMER_GROUP_PREFIX = env("KAFKA_CONSUMER_GROUP_PREFIX", "jt-code")
 
 REST_FRAMEWORK = {

@@ -121,6 +121,7 @@ def _search_research(job: Job) -> dict:
         },
     }
 
+
 def _knowledge_ingestion(job: Job) -> dict:
     """Run an existing tenant-owned knowledge document through its indexer."""
     from apps.knowledge.models import Document
@@ -148,8 +149,6 @@ def _knowledge_ingestion(job: Job) -> dict:
         "chunk_count": document.chunk_count,
         "vectors_stored": bool(document.vector_ids),
     }
-
-
 
 
 def _serialize_agent_messages(messages) -> list[dict]:
@@ -319,6 +318,9 @@ def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
             progress_percent=100,
             completed_at=job.completed_at,
         )
+        from apps.jobs.transitions import settle_terminal_credits
+
+        settle_terminal_credits(job)
         from apps.jobs.callbacks import create_terminal_callback
 
         create_terminal_callback(job)
@@ -351,6 +353,9 @@ def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
             error_message=message,
             completed_at=job.completed_at,
         )
+        from apps.jobs.transitions import settle_terminal_credits
+
+        settle_terminal_credits(job)
         from apps.jobs.callbacks import create_terminal_callback
 
         create_terminal_callback(job)

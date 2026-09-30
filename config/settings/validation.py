@@ -44,6 +44,8 @@ _REQUIRED_STRICT = (
     "N8N_WEBHOOK_SECRET",
     "N8N_SENTRY_RELAY_SECRET",
     "STRIPE_SECRET_KEY",
+    "WEBHOOK_ALLOWED_HOSTS",
+    "WEBHOOK_SIGNING_SECRET",
     "STRIPE_WEBHOOK_SECRET",
     "SENTRY_DSN",
     "SENTRY_ENVIRONMENT",
@@ -58,6 +60,7 @@ _SECRET_ENV = (
     "KAFKA_SASL_PASSWORD",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
+    "WEBHOOK_SIGNING_SECRET",
     "IMAGEKIT_PRIVATE_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
@@ -89,6 +92,8 @@ _INT_ENV = (
     "SAFETY_EVENT_RETENTION_DAYS",
     "WEBHOOK_MAX_RETRIES",
     "WEBHOOK_RETRY_BASE_DELAY",
+    "WEBHOOK_RETRY_MAX_SECONDS",
+    "CHAT_SSE_MAX_SECONDS",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
@@ -100,6 +105,10 @@ _FLOAT_ENV = (
     "RAG_URL_FETCH_TIMEOUT_SECONDS",
     "SENTRY_TRACES_SAMPLE_RATE",
     "SENTRY_PROFILES_SAMPLE_RATE",
+    "CHAT_SSE_HEARTBEAT_SECONDS",
+    "CHAT_SSE_POLL_SECONDS",
+    "CHAT_SSE_RECONCILIATION_SECONDS",
+    "WEBHOOK_DELIVERY_TIMEOUT_SECONDS",
 )
 _FRACTION_ENV = {
     "VECTOR_MIN_SIMILARITY": (0.0, 1.0),
@@ -224,6 +233,12 @@ def validate_environment(profile: str) -> list[str]:
         problems.append("DJANGO_ALLOWED_HOSTS is required in production/staging.")
     elif any(host == "*" for host in hosts):
         problems.append('DJANGO_ALLOWED_HOSTS may not contain "*" in production/staging.')
+
+    callback_hosts = _origins(_val("WEBHOOK_ALLOWED_HOSTS"))
+    if not callback_hosts:
+        problems.append("WEBHOOK_ALLOWED_HOSTS is required in production/staging.")
+    elif any("://" in host or "/" in host or host == "*" for host in callback_hosts):
+        problems.append("WEBHOOK_ALLOWED_HOSTS must contain DNS hostnames, not URLs or wildcard-all entries.")
 
     database_url = _val("DATABASE_URL")
     database = urlparse(database_url)

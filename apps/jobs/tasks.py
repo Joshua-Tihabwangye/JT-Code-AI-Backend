@@ -9,6 +9,9 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
+
+from apps.jobs.webhooks import signed_callback_request, validate_callback_url
 
 
 def retry_delay_seconds(retry_count: int) -> int:
@@ -175,14 +178,18 @@ def process_callbacks() -> dict[str, int]:
         if callback is None:
             continue
         try:
+            validate_callback_url(callback.url)
+            body, headers = signed_callback_request(callback)
             response = httpx.post(
                 callback.url,
-                json=callback.payload,
-                headers={"Idempotency-Key": str(callback.id), "User-Agent": "JT-Code-Callback/1.0"},
+                content=body,
+                headers=headers,
                 timeout=settings.WEBHOOK_DELIVERY_TIMEOUT_SECONDS,
                 follow_redirects=False,
             )
             outcome = _mark_callback_response(callback.id, response)
+        except ValidationError as exc:
+            outcome = _mark_callback_failure(callback.id, error=str(exc), permanent=True)
         except httpx.HTTPError as exc:
             outcome = _mark_callback_failure(callback.id, error=str(exc))
         except Exception as exc:  # noqa: BLE001 - external callback isolation
@@ -253,6 +260,7 @@ def _mark_callback_failure(
     error: str,
     response_status: int | None = None,
     response_body: str = "",
+    permanent: bool = False,
 ) -> str:
     from apps.jobs.models import Callback
 
@@ -261,15 +269,20 @@ def _mark_callback_failure(
         if callback.status != Callback.Status.DELIVERING:
             return callback.status
         now = timezone.now()
-        exhausted = callback.attempts >= callback.max_attempts or callback.expires_at <= now
+        exhausted = permanent or callback.attempts >= callback.max_attempts or callback.expires_at <= now
         callback.status = Callback.Status.FAILED if exhausted else Callback.Status.PENDING
         callback.last_error = error[:2000]
         callback.response_status = response_status
         callback.response_body = response_body[:4000]
-        callback.next_retry_at = None if exhausted else now + timedelta(
-            seconds=min(
-                settings.WEBHOOK_RETRY_MAX_SECONDS,
-                settings.WEBHOOK_RETRY_BASE_DELAY * (2 ** max(callback.attempts - 1, 0)),
+        callback.next_retry_at = (
+            None
+            if exhausted
+            else now
+            + timedelta(
+                seconds=min(
+                    settings.WEBHOOK_RETRY_MAX_SECONDS,
+                    settings.WEBHOOK_RETRY_BASE_DELAY * (2 ** max(callback.attempts - 1, 0)),
+                )
             )
         )
         callback.save(
@@ -288,28 +301,21 @@ def _mark_callback_failure(
 @shared_task
 def check_job_deadlines():
     """Check for expired jobs"""
-    from apps.events.outbox import enqueue_outbox_event
     from apps.jobs.models import Job
+    from apps.jobs.transitions import InvalidJobTransition, apply_status_update
 
     expired_jobs = Job.objects.filter(
         status__in=[Job.Status.QUEUED, Job.Status.RUNNING, Job.Status.VALIDATING], deadline__lt=timezone.now()
-    )
+    ).values_list("id", flat=True)
 
-    for job in expired_jobs:
-        job.status = Job.Status.EXPIRED
-        job.completed_at = timezone.now()
-        job.error_message = "Job deadline exceeded"
-        job.save(update_fields=["status", "completed_at", "error_message"])
-
-        from apps.jobs.callbacks import create_terminal_callback
-
-        create_terminal_callback(job)
-        enqueue_outbox_event(
-            topic="jobs.job.expired",
-            event_key=str(job.request_id),
-            payload={"job_id": str(job.id), "request_id": str(job.request_id)},
-            headers={"trace_id": job.trace_id},
-        )
+    for job_id in expired_jobs:
+        try:
+            apply_status_update(
+                job_id,
+                {"status": Job.Status.EXPIRED, "error_message": "Job deadline exceeded"},
+            )
+        except InvalidJobTransition:
+            continue
 
 
 @shared_task

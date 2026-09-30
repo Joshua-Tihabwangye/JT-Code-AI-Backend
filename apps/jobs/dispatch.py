@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from django.conf import settings
 from django.db import transaction
 
 from apps.events.outbox import enqueue_outbox_event
@@ -43,6 +42,7 @@ def is_native_job(job: Job) -> bool:
     return job.task_type in NATIVE_TASK_TYPES
 
 
+@transaction.atomic
 def enqueue_job(job: Job) -> None:
     """Persist dispatch intent before making work visible to a worker or integration."""
     queue_name = queue_for_task_type(job.task_type)
@@ -73,16 +73,14 @@ def enqueue_job(job: Job) -> None:
         },
         headers={"trace_id": job.trace_id, "request_id": str(job.request_id)},
     )
+
     # Every accepted generic Job must reach a terminal state. The worker runs
     # supported handlers and explicitly fails unsupported types; no job is
     # left indefinitely queued awaiting an undocumented external consumer.
     def dispatch() -> None:
         _dispatch_job(str(job.id), queue_name)
 
-    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
-        dispatch()
-    else:
-        transaction.on_commit(dispatch)
+    transaction.on_commit(dispatch)
 
 
 def _dispatch_job(job_id: str, queue_name: str) -> bool:

@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.jobs.models import Callback, Job, JobStep, ProviderAttempt, WorkflowRun
+from apps.jobs.webhooks import validate_callback_url
 
 
 class ProviderAttemptSerializer(serializers.ModelSerializer):
@@ -192,6 +193,9 @@ class JobCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"Invalid task_type. Must be one of: {valid_types}")
         return value
 
+    def validate_callback_url(self, value):
+        return validate_callback_url(value) if value else value
+
 
 class JobStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Job.Status.choices)
@@ -202,3 +206,4 @@ class JobStatusUpdateSerializer(serializers.Serializer):
     progress_percent = serializers.IntegerField(required=False, min_value=0, max_value=100)
     steps_completed = serializers.IntegerField(required=False, min_value=0)
     total_steps = serializers.IntegerField(required=False, min_value=0)
+    actual_credits = serializers.DecimalField(required=False, min_value=0, max_digits=20, decimal_places=6)

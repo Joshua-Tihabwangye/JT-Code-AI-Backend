@@ -38,7 +38,7 @@ def conversation(user, conversation_organization):
 def test_message_submission_replays_only_an_identical_request(
     authenticated_client, conversation, monkeypatch
 ):
-    monkeypatch.setattr("apps.conversations.runtime_views.process_chat_request.delay", lambda *_: None)
+    monkeypatch.setattr("apps.conversations.runtime_views.process_chat_request.apply_async", lambda **_: None)
     url = reverse("conversation-messages", kwargs={"pk": conversation.id})
 
     first = authenticated_client.post(
@@ -209,9 +209,7 @@ def test_chat_worker_uses_governed_gateway_and_records_auditable_result(user, co
 
 
 @pytest.mark.django_db
-def test_chat_worker_surfaces_permanent_gateway_failure_without_retry(
-    user, conversation, settings
-):
+def test_chat_worker_surfaces_permanent_gateway_failure_without_retry(user, conversation, settings):
     settings.AI_PROVIDER = "disabled"
     request = ChatRequest.objects.create(
         owner=user,
@@ -297,16 +295,20 @@ def test_stalled_chat_recovery_requeues_only_stale_non_cancelled_work(
         started_at=timezone.now() - timedelta(minutes=2),
         cancel_requested_at=timezone.now(),
     )
-    monkeypatch.setattr(
-        "apps.conversations.tasks.process_chat_request.apply_async",
-        lambda **_: SimpleNamespace(id="recovered-task"),
-    )
+    dispatched = []
+
+    def fake_apply_async(*, args, task_id):
+        dispatched.append({"args": args, "task_id": task_id})
+        return SimpleNamespace(id=task_id)
+
+    monkeypatch.setattr("apps.conversations.tasks.process_chat_request.apply_async", fake_apply_async)
 
     assert recover_stalled_chat_requests() == 1
     stale.refresh_from_db()
     cancelled.refresh_from_db()
     assert stale.status == ChatRequest.Status.QUEUED
-    assert stale.celery_task_id == "recovered-task"
+    assert stale.celery_task_id == dispatched[0]["task_id"]
+    assert dispatched == [{"args": [str(stale.id)], "task_id": stale.celery_task_id}]
     assert stale.error_code == "WORKER_RECOVERY"
     assert cancelled.status == ChatRequest.Status.RUNNING
 
@@ -316,8 +318,8 @@ def test_broker_outage_keeps_chat_request_durable_until_periodic_dispatch(
     authenticated_client, conversation, monkeypatch, django_capture_on_commit_callbacks
 ):
     monkeypatch.setattr(
-        "apps.conversations.runtime_views.process_chat_request.delay",
-        lambda *_: (_ for _ in ()).throw(ConnectionError("broker unavailable")),
+        "apps.conversations.runtime_views.process_chat_request.apply_async",
+        lambda **_: (_ for _ in ()).throw(ConnectionError("broker unavailable")),
     )
     with django_capture_on_commit_callbacks(execute=True):
         response = authenticated_client.post(
@@ -329,13 +331,21 @@ def test_broker_outage_keeps_chat_request_durable_until_periodic_dispatch(
     request = ChatRequest.objects.get(id=response.json()["id"])
     assert response.status_code == 202, response.content
     assert request.status == ChatRequest.Status.QUEUED
-    assert request.celery_task_id == ""
+    durable_task_id = request.celery_task_id
+    assert durable_task_id
+
+    dispatches = []
+
+    def fake_apply_async(*, args, task_id):
+        dispatches.append({"args": args, "task_id": task_id})
+        return SimpleNamespace(id=task_id)
 
     monkeypatch.setattr(
         "apps.conversations.tasks.process_chat_request.apply_async",
-        lambda **_: SimpleNamespace(id="recovered-publish-task"),
+        fake_apply_async,
     )
     assert dispatch_queued_chat_requests() == 1
 
     request.refresh_from_db()
-    assert request.celery_task_id == "recovered-publish-task"
+    assert request.celery_task_id == durable_task_id
+    assert dispatches == [{"args": [str(request.id)], "task_id": durable_task_id}]
