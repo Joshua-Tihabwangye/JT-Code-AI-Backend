@@ -211,19 +211,19 @@ CELERY_BEAT_SCHEDULE = {
     },
     "recover-stalled-jobs": {
         "task": "apps.jobs.tasks.recover_stalled_jobs",
+        "schedule": 60.0,
+    },
     "dispatch-queued-jobs": {
         "task": "apps.jobs.tasks.dispatch_queued_jobs",
         "schedule": 30.0,
     },
-        "schedule": 60.0,
-    },
     "recover-stalled-chat-requests": {
         "task": "apps.conversations.tasks.recover_stalled_chat_requests",
+        "schedule": 60.0,
+    },
     "dispatch-queued-chat-requests": {
         "task": "apps.conversations.tasks.dispatch_queued_chat_requests",
         "schedule": 30.0,
-    },
-        "schedule": 60.0,
     },
     "expire-old-jobs": {
         "task": "apps.jobs.tasks.expire_old_jobs",
@@ -335,6 +335,8 @@ CONSENT_VERSION = env("CONSENT_VERSION", "1.0")
 # Integrations
 WEBHOOK_MAX_RETRIES = int(env("WEBHOOK_MAX_RETRIES", "5"))
 WEBHOOK_RETRY_BASE_DELAY = int(env("WEBHOOK_RETRY_BASE_DELAY", "60"))
+WEBHOOK_RETRY_MAX_SECONDS = int(env("WEBHOOK_RETRY_MAX_SECONDS", "3600"))
+WEBHOOK_DELIVERY_TIMEOUT_SECONDS = float(env("WEBHOOK_DELIVERY_TIMEOUT_SECONDS", "10"))
 KAFKA_CONSUMER_GROUP_PREFIX = env("KAFKA_CONSUMER_GROUP_PREFIX", "jt-code")
 
 REST_FRAMEWORK = {

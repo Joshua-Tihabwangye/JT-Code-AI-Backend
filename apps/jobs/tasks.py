@@ -3,7 +3,11 @@ from __future__ import annotations
 import random
 from datetime import timedelta
 
+import httpx
 from celery import shared_task
+from django.conf import settings
+from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 
@@ -136,28 +140,149 @@ def dispatch_queued_jobs() -> int:
 
 
 @shared_task
-def process_callbacks():
-    """Process pending callbacks"""
+def process_callbacks() -> dict[str, int]:
+    """Deliver terminal callbacks using durable leases and bounded retries."""
     from apps.jobs.models import Callback
 
-    callbacks = Callback.objects.filter(
-        status=Callback.Status.PENDING, next_retry_at__lte=timezone.now(), attempts__lt=5
-    )[:100]
-
-    for callback in callbacks:
+    now = timezone.now()
+    Callback.objects.filter(
+        status__in=[Callback.Status.PENDING, Callback.Status.DELIVERING],
+        expires_at__lte=now,
+    ).update(status=Callback.Status.EXPIRED, last_error="Callback delivery window expired.")
+    lease_cutoff = now - timedelta(seconds=settings.WEBHOOK_DELIVERY_TIMEOUT_SECONDS * 2)
+    Callback.objects.filter(
+        status=Callback.Status.DELIVERING,
+        delivery_started_at__lt=lease_cutoff,
+        expires_at__gt=now,
+    ).update(
+        status=Callback.Status.PENDING,
+        next_retry_at=now + timedelta(seconds=settings.WEBHOOK_RETRY_BASE_DELAY),
+        last_error="Callback delivery lease expired; retrying.",
+    )
+    callback_ids = list(
+        Callback.objects.filter(
+            status=Callback.Status.PENDING,
+            next_retry_at__lte=now,
+            expires_at__gt=now,
+            attempts__lt=F("max_attempts"),
+        )
+        .order_by("next_retry_at", "created_at")
+        .values_list("id", flat=True)[:100]
+    )
+    delivered = retried = failed = 0
+    for callback_id in callback_ids:
+        callback = _claim_callback(callback_id)
+        if callback is None:
+            continue
         try:
-            # This would make HTTP request to callback.url
-            # For now, just mark as delivered
-            callback.status = Callback.Status.DELIVERED
-            callback.delivered_at = timezone.now()
-            callback.save(update_fields=["status", "delivered_at"])
-        except Exception as e:
-            callback.attempts += 1
-            callback.last_error = str(e)
-            callback.last_attempt_at = timezone.now()
-            # Exponential backoff
-            callback.next_retry_at = timezone.now() + timezone.timedelta(minutes=2**callback.attempts)
-            callback.save(update_fields=["attempts", "last_error", "last_attempt_at", "next_retry_at"])
+            response = httpx.post(
+                callback.url,
+                json=callback.payload,
+                headers={"Idempotency-Key": str(callback.id), "User-Agent": "JT-Code-Callback/1.0"},
+                timeout=settings.WEBHOOK_DELIVERY_TIMEOUT_SECONDS,
+                follow_redirects=False,
+            )
+            outcome = _mark_callback_response(callback.id, response)
+        except httpx.HTTPError as exc:
+            outcome = _mark_callback_failure(callback.id, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - external callback isolation
+            outcome = _mark_callback_failure(callback.id, error=str(exc))
+        if outcome == Callback.Status.DELIVERED:
+            delivered += 1
+        elif outcome == Callback.Status.FAILED:
+            failed += 1
+        else:
+            retried += 1
+    return {"delivered": delivered, "retried": retried, "failed": failed}
+
+
+def _claim_callback(callback_id):
+    from apps.jobs.models import Callback
+
+    now = timezone.now()
+    with transaction.atomic():
+        callback = Callback.objects.select_for_update().filter(id=callback_id).first()
+        if (
+            callback is None
+            or callback.status != Callback.Status.PENDING
+            or callback.next_retry_at is None
+            or callback.next_retry_at > now
+            or callback.expires_at <= now
+            or callback.attempts >= callback.max_attempts
+        ):
+            return None
+        callback.status = Callback.Status.DELIVERING
+        callback.attempts += 1
+        callback.last_attempt_at = now
+        callback.delivery_started_at = now
+        callback.save(
+            update_fields=[
+                "status",
+                "attempts",
+                "last_attempt_at",
+                "delivery_started_at",
+                "updated_at",
+            ]
+        )
+        return callback
+
+
+def _mark_callback_response(callback_id, response: httpx.Response) -> str:
+    if 200 <= response.status_code < 300:
+        from apps.jobs.models import Callback
+
+        Callback.objects.filter(id=callback_id, status=Callback.Status.DELIVERING).update(
+            status=Callback.Status.DELIVERED,
+            response_status=response.status_code,
+            response_body=response.text[:4000],
+            delivered_at=timezone.now(),
+            last_error="",
+        )
+        return Callback.Status.DELIVERED
+    return _mark_callback_failure(
+        callback_id,
+        error=f"Callback returned HTTP {response.status_code}",
+        response_status=response.status_code,
+        response_body=response.text,
+    )
+
+
+def _mark_callback_failure(
+    callback_id,
+    *,
+    error: str,
+    response_status: int | None = None,
+    response_body: str = "",
+) -> str:
+    from apps.jobs.models import Callback
+
+    with transaction.atomic():
+        callback = Callback.objects.select_for_update().get(id=callback_id)
+        if callback.status != Callback.Status.DELIVERING:
+            return callback.status
+        now = timezone.now()
+        exhausted = callback.attempts >= callback.max_attempts or callback.expires_at <= now
+        callback.status = Callback.Status.FAILED if exhausted else Callback.Status.PENDING
+        callback.last_error = error[:2000]
+        callback.response_status = response_status
+        callback.response_body = response_body[:4000]
+        callback.next_retry_at = None if exhausted else now + timedelta(
+            seconds=min(
+                settings.WEBHOOK_RETRY_MAX_SECONDS,
+                settings.WEBHOOK_RETRY_BASE_DELAY * (2 ** max(callback.attempts - 1, 0)),
+            )
+        )
+        callback.save(
+            update_fields=[
+                "status",
+                "last_error",
+                "response_status",
+                "response_body",
+                "next_retry_at",
+                "updated_at",
+            ]
+        )
+        return callback.status
 
 
 @shared_task

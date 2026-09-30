@@ -3,6 +3,7 @@
 from datetime import timedelta
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from django.conf import settings
 from django.utils import timezone
@@ -19,7 +20,13 @@ from apps.jobs.dispatch import (
 from apps.jobs.executor import HANDLERS, _mark_started, execute_job
 from apps.jobs.metrics import queue_depths
 from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
-from apps.jobs.tasks import dispatch_queued_jobs, execute_job_task, recover_stalled_jobs, retry_delay_seconds
+from apps.jobs.tasks import (
+    dispatch_queued_jobs,
+    execute_job_task,
+    process_callbacks,
+    recover_stalled_jobs,
+    retry_delay_seconds,
+)
 
 
 @pytest.fixture
@@ -276,3 +283,86 @@ def test_terminal_job_creates_one_durable_callback(user, org, monkeypatch):
     job.refresh_from_db()
     assert create_terminal_callback(job).id == callback.id
     assert Callback.objects.filter(job=job).count() == 1
+
+
+@pytest.mark.django_db
+def test_callback_delivery_records_success_and_idempotency_header(user, org, monkeypatch):
+    job = make_job(user, org)
+    callback = Callback.objects.create(
+        job=job,
+        url="https://callbacks.example.test/success",
+        payload={"event": "jobs.job.completed"},
+        next_retry_at=timezone.now() - timedelta(seconds=1),
+        expires_at=timezone.now() + timedelta(days=1),
+    )
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("apps.jobs.tasks.httpx.post", fake_post)
+
+    assert process_callbacks() == {"delivered": 1, "retried": 0, "failed": 0}
+    callback.refresh_from_db()
+    assert callback.status == Callback.Status.DELIVERED
+    assert callback.attempts == 1
+    assert callback.response_status == 204
+    assert callback.delivered_at is not None
+    assert captured["headers"]["Idempotency-Key"] == str(callback.id)
+    assert captured["follow_redirects"] is False
+
+
+@pytest.mark.django_db
+def test_callback_failure_is_retried_then_marked_failed(user, org, monkeypatch):
+    job = make_job(user, org)
+    callback = Callback.objects.create(
+        job=job,
+        url="https://callbacks.example.test/failure",
+        payload={"event": "jobs.job.failed"},
+        next_retry_at=timezone.now() - timedelta(seconds=1),
+        expires_at=timezone.now() + timedelta(days=1),
+        max_attempts=2,
+    )
+
+    def failing_post(url, **kwargs):
+        return httpx.Response(503, text="try later", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("apps.jobs.tasks.httpx.post", failing_post)
+    assert process_callbacks() == {"delivered": 0, "retried": 1, "failed": 0}
+    callback.refresh_from_db()
+    assert callback.status == Callback.Status.PENDING
+    assert callback.attempts == 1
+    assert callback.response_status == 503
+    assert callback.next_retry_at is not None
+
+    callback.next_retry_at = timezone.now() - timedelta(seconds=1)
+    callback.save(update_fields=["next_retry_at"])
+    assert process_callbacks() == {"delivered": 0, "retried": 0, "failed": 1}
+    callback.refresh_from_db()
+    assert callback.status == Callback.Status.FAILED
+    assert callback.attempts == 2
+    assert callback.response_body == "try later"
+
+
+@pytest.mark.django_db
+def test_stale_callback_delivery_lease_is_reclaimed_without_sending(user, org, monkeypatch):
+    job = make_job(user, org)
+    callback = Callback.objects.create(
+        job=job,
+        url="https://callbacks.example.test/lease",
+        payload={"event": "jobs.job.completed"},
+        status=Callback.Status.DELIVERING,
+        delivery_started_at=timezone.now() - timedelta(minutes=2),
+        expires_at=timezone.now() + timedelta(days=1),
+        next_retry_at=timezone.now() + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "apps.jobs.tasks.httpx.post", lambda *_args, **_kwargs: pytest.fail("unexpected send")
+    )
+
+    assert process_callbacks() == {"delivered": 0, "retried": 0, "failed": 0}
+    callback.refresh_from_db()
+    assert callback.status == Callback.Status.PENDING
+    assert callback.next_retry_at is not None
