@@ -12,17 +12,20 @@ from apps.ai_gateway.views import (
     CompletionView,
     EmbeddingView,
     EvaluationViewSet,
+    ModelAliasViewSet,
     ModelPolicyViewSet,
     ModelRunViewSet,
     ModelViewSet,
     PromptViewSet,
     ProviderViewSet,
+    SystemCapabilitiesView,
 )
 
 router = DefaultRouter()
 router.register(r"providers", ProviderViewSet, basename="provider")
 router.register(r"models", ModelViewSet, basename="model")
 router.register(r"policies", ModelPolicyViewSet, basename="policy")
+router.register(r"model-aliases", ModelAliasViewSet, basename="model-alias")
 router.register(r"runs", ModelRunViewSet, basename="run")
 router.register(r"prompts", PromptViewSet, basename="prompt")
 router.register(r"evaluations", EvaluationViewSet, basename="evaluation")
@@ -30,6 +33,7 @@ router.register(r"evaluations", EvaluationViewSet, basename="evaluation")
 urlpatterns = [
     path("", include(router.urls)),
     path("completion/", CompletionView.as_view(), name="completion"),
+    path("system/capabilities/", SystemCapabilitiesView.as_view(), name="system-capabilities"),
     path("embeddings/", EmbeddingView.as_view(), name="embeddings"),
     path("available-models/", AIModelsView.as_view(), name="available-models"),
     path("images/generations/", ImageGenerationView.as_view(), name="image-generation"),

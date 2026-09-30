@@ -54,12 +54,14 @@ def _run_completion(job: Job, messages: list[ChatMessage]) -> dict:
         task_type=job.task_type,
         model_id=payload.get("model_id"),
         policy_slug=payload.get("policy_slug"),
+        model_alias=payload.get("model_alias"),
         temperature=payload.get("temperature", 0.7),
         max_tokens=payload.get("max_tokens"),
         tools=payload.get("tools"),
         request_id=str(job.request_id),
         trace_id=job.trace_id or "",
         job_id=str(job.id),
+        organization_id=job.organization_id,
     )
     usage = {
         "input_tokens": outcome.usage.input_tokens,
@@ -68,6 +70,8 @@ def _run_completion(job: Job, messages: list[ChatMessage]) -> dict:
         "cost_usd": str(outcome.run.provider_cost_usd),
         "model": outcome.model.name,
         "provider": outcome.provider.type,
+        "model_alias": outcome.model_alias,
+        "model_run_id": str(outcome.run.id),
     }
     return {"answer": outcome.content, "usage": usage}
 

@@ -143,6 +143,7 @@ def _build_graph(ctx: _AgentContext):
             request_id=ctx.request_id,
             trace_id=ctx.trace_id,
             job_id=ctx.job_id,
+            organization_id=ctx.organization_id,
         )
         ctx.model_calls += 1
         ctx.model_runs.append(str(outcome.run.id))

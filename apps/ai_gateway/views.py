@@ -9,10 +9,11 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.ai_gateway.models import Evaluation, Model, ModelPolicy, ModelRun, Prompt, Provider
+from apps.ai_gateway.models import Evaluation, Model, ModelAlias, ModelPolicy, ModelRun, Prompt, Provider
 from apps.ai_gateway.serializers import (
     EvaluationCreateSerializer,
     EvaluationSerializer,
+    ModelAliasSerializer,
     ModelListSerializer,
     ModelPolicySerializer,
     ModelRunSerializer,
@@ -134,7 +135,7 @@ class ModelRunViewSet(viewsets.ReadOnlyModelViewSet):
         if organization is None:
             return ModelRun.objects.none()
         job_ids = Job.objects.filter(organization=organization).values_list("id", flat=True)
-        return ModelRun.objects.filter(Q(job_id__in=job_ids) | Q(request_id__in=[])).select_related(
+        return ModelRun.objects.filter(Q(organization=organization) | Q(job_id__in=job_ids)).select_related(
             "provider", "model", "policy"
         )
 
@@ -242,6 +243,7 @@ class CompletionView(APIView):
         messages = request.data.get("messages", [])
         model_id = request.data.get("model_id")
         policy_slug = request.data.get("policy_slug")
+        model_alias = request.data.get("model_alias")
         stream = request.data.get("stream", False)
         temperature = request.data.get("temperature", 0.7)
         max_tokens = request.data.get("max_tokens")
@@ -255,6 +257,7 @@ class CompletionView(APIView):
                 task_type=task_type,
                 model_id=model_id,
                 policy_slug=policy_slug,
+                model_alias=model_alias,
             )
         except ModelSelectionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
@@ -269,6 +272,7 @@ class CompletionView(APIView):
                 "model": model.name,
                 "model_id": str(model.id) if model_id else None,
                 "policy_slug": policy_slug,
+                "model_alias": model_alias,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "tools": tools,
@@ -302,6 +306,8 @@ class CompletionView(APIView):
                 "request_id": str(job.request_id),
                 "status": "queued",
                 "model": model.name,
+                "modelAlias": model_alias
+                or (policy.model_alias.slug if policy and policy.model_alias else ""),
             },
             status=status.HTTP_202_ACCEPTED,
         )
@@ -403,3 +409,25 @@ class AIModelsView(APIView):
                 "plan": subscription.plan.name if subscription else "free",
             }
         )
+
+
+class ModelAliasViewSet(viewsets.ReadOnlyModelViewSet):
+    """Client-facing model names. Provider models behind an alias are not exposed."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = ModelAliasSerializer
+    lookup_field = "slug"
+
+    def get_queryset(self):
+        return ModelAlias.objects.filter(is_active=True).order_by("slug")
+
+
+class SystemCapabilitiesView(APIView):
+    """Enabled AI capabilities: aliases, their capabilities and provider availability."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request) -> Response:
+        from apps.ai_gateway.registry import system_capabilities
+
+        return Response(system_capabilities())

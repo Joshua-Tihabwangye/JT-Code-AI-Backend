@@ -47,6 +47,8 @@ def _strict_env() -> dict[str, str]:
         "STRIPE_WEBHOOK_SECRET": "whsec_ci9mY7Kq2Vx5Zp8Lr3",
         "SENTRY_DSN": "https://public@example.ingest.sentry.io/1",
         "SENTRY_ENVIRONMENT": "production",
+        "AI_PROVIDER": "disabled",
+        "GEMINI_API_KEY": "gemini-production-key-9mY7Kq2V",
         "DJANGO_DEBUG": "false",
     }
 

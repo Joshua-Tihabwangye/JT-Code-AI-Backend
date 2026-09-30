@@ -139,7 +139,12 @@ def test_generate_completion_falls_back_to_echo_and_records_run():
     assert outcome.run.model.name == "echo-chat"
     assert outcome.run.status == ModelRun.Status.COMPLETED
     assert outcome.fallback_used is True
-    assert outcome.run.retry_count >= 1
+    # Fallbacks are per-attempt records; retry_count counts same-model retries only.
+    attempts = outcome.run.metadata["attempts"]
+    assert attempts[-1]["model"] == "echo-chat"
+    assert all(a["error_code"] == "AI_PROVIDER_NOT_CONFIGURED" for a in attempts[:-1])
+    assert outcome.run.retry_count == 0
+    assert outcome.run.model_alias == "default-chat"
     assert outcome.run.input_tokens > 0 and outcome.run.output_tokens > 0
     assert outcome.run.provider_cost_usd >= Decimal("0")
     assert outcome.run.latency_ms is not None

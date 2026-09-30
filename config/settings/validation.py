@@ -65,6 +65,7 @@ _SECRET_ENV = (
     "IMAGEKIT_PRIVATE_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
+    "LLAMA_API_KEY",
     "SENTRY_DSN",
 )
 _BOOL_ENV = (
@@ -97,6 +98,9 @@ _INT_ENV = (
     "WEBHOOK_RETRY_MAX_SECONDS",
     "CHAT_SSE_MAX_SECONDS",
     "CHAT_DISPATCH_GRACE_SECONDS",
+    "AI_REQUEST_TIMEOUT_SECONDS",
+    "AI_MAX_RETRIES",
+    "AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
     "CHAT_REQUEST_STALLED_TIMEOUT_SECONDS",
     "CHAT_MAX_CONTEXT_MESSAGES",
     "JOB_STALLED_TIMEOUT_SECONDS",
@@ -118,6 +122,8 @@ _FLOAT_ENV = (
     "SENTRY_TRACES_SAMPLE_RATE",
     "SENTRY_PROFILES_SAMPLE_RATE",
     "CHAT_SSE_HEARTBEAT_SECONDS",
+    "AI_RETRY_BASE_SECONDS",
+    "AI_RETRY_MAX_BACKOFF_SECONDS",
     "CHAT_SSE_POLL_SECONDS",
     "CHAT_SSE_RECONCILIATION_SECONDS",
     "WEBHOOK_DELIVERY_TIMEOUT_SECONDS",
@@ -204,6 +210,30 @@ def _check_tls_url(problems: list[str], name: str) -> None:
         problems.append(f"{name} must use a TLS redis URL (rediss://) in deployable environments.")
 
 
+_GEMINI_THRESHOLDS = frozenset(
+    {"BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "OFF"}
+)
+
+
+def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
+    threshold = _val("GEMINI_SAFETY_THRESHOLD")
+    if threshold and threshold not in _GEMINI_THRESHOLDS:
+        problems.append(f"GEMINI_SAFETY_THRESHOLD must be one of {sorted(_GEMINI_THRESHOLDS)}.")
+    llama_base = _val("LLAMA_API_BASE")
+    if strict and llama_base and urlparse(llama_base).scheme != "https":
+        problems.append("LLAMA_API_BASE must use HTTPS in deployable environments.")
+    if not strict:
+        return
+    if _val("AI_PROVIDER").lower() == "echo":
+        problems.append("AI_PROVIDER=echo is a development stub and is not allowed in staging/production.")
+    if not _val("GEMINI_API_KEY") and not (_val("LLAMA_API_KEY") and llama_base):
+        problems.append(
+            "Configure GEMINI_API_KEY or LLAMA_API_KEY (with LLAMA_API_BASE); the AI gateway has no provider."
+        )
+    if _val("GEMINI_SAFETY_THRESHOLD") in {"BLOCK_NONE", "OFF"}:
+        problems.append("GEMINI_SAFETY_THRESHOLD must not disable Gemini safety filtering in production.")
+
+
 def validate_environment(profile: str) -> list[str]:
     """Return all invalid configuration conditions for ``profile`` without leaking values."""
     if profile not in _PROFILES:
@@ -229,6 +259,7 @@ def validate_environment(profile: str) -> list[str]:
             problems.append(f"{name} must be at least 1.")
     for name in _URL_LIST_ENV:
         _check_origins(problems, name, require_https=strict)
+    _check_ai_gateway(problems, strict=strict)
     if not strict:
         return problems
 

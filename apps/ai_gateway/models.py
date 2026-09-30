@@ -16,6 +16,7 @@ class Provider(models.Model):
         REPLICATE = "replicate", "Replicate"
         HUGGINGFACE = "huggingface", "HuggingFace"
         OLLAMA = "ollama", "Ollama (Local)"
+        LLAMA = "llama", "Llama (OpenAI-compatible)"
         ECHO = "echo", "Echo (Development)"
         CUSTOM = "custom", "Custom"
 
@@ -103,6 +104,47 @@ class Model(models.Model):
         return f"{self.provider.name} / {self.name} ({self.modality})"
 
 
+class ModelAlias(models.Model):
+    """A stable, client-facing model name mapped to ordered provider models.
+
+    Clients and policies address aliases; operators swap providers by changing
+    the alias targets, never the client contract.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    slug = models.SlugField(max_length=64, unique=True)
+    description = models.TextField(blank=True)
+    required_capabilities = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("slug",)
+
+    def __str__(self):
+        return self.slug
+
+
+class ModelAliasTarget(models.Model):
+    """One model in an alias's ordered fallback chain (lower priority first)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    alias = models.ForeignKey(ModelAlias, on_delete=models.CASCADE, related_name="targets")
+    model = models.ForeignKey(Model, on_delete=models.PROTECT, related_name="alias_targets")
+    priority = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ("alias", "priority")
+        constraints = [
+            models.UniqueConstraint(fields=("alias", "model"), name="uniq_alias_target_model"),
+            models.UniqueConstraint(fields=("alias", "priority"), name="uniq_alias_target_priority"),
+        ]
+
+    def __str__(self):
+        return f"{self.alias.slug}[{self.priority}] -> {self.model.name}"
+
+
 class ModelPolicy(models.Model):
     class RoutingStrategy(models.TextChoices):
         COST_OPTIMIZED = "cost_optimized", "Cost Optimized"
@@ -127,6 +169,10 @@ class ModelPolicy(models.Model):
     )
     primary_model = models.ForeignKey(Model, on_delete=models.PROTECT, related_name="primary_policies")
     fallback_models = models.ManyToManyField(Model, related_name="fallback_policies", blank=True)
+    # When set, the alias targets replace primary_model/fallback_models as the chain.
+    model_alias = models.ForeignKey(
+        ModelAlias, on_delete=models.SET_NULL, related_name="policies", null=True, blank=True
+    )
     fallback_policy = models.CharField(
         max_length=20, choices=FallbackPolicy.choices, default=FallbackPolicy.CHEAPER
     )
@@ -170,6 +216,10 @@ class ModelRun(models.Model):
     policy = models.ForeignKey(
         ModelPolicy, on_delete=models.SET_NULL, related_name="model_runs", null=True, blank=True
     )
+    model_alias = models.CharField(max_length=64, blank=True, db_index=True)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.SET_NULL, related_name="model_runs", null=True, blank=True
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED)
     input_tokens = models.PositiveBigIntegerField(default=0)
     output_tokens = models.PositiveBigIntegerField(default=0)
@@ -197,6 +247,7 @@ class ModelRun(models.Model):
             models.Index(fields=("job_id",)),
             models.Index(fields=("provider", "model", "-created_at")),
             models.Index(fields=("trace_id",)),
+            models.Index(fields=("organization", "-created_at")),
         ]
 
     def __str__(self):

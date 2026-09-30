@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.ai_gateway.models import Evaluation, Model, ModelPolicy, ModelRun, Prompt, Provider
+from apps.ai_gateway.models import Evaluation, Model, ModelAlias, ModelPolicy, ModelRun, Prompt, Provider
 
 
 class ProviderSerializer(serializers.ModelSerializer):
@@ -164,6 +164,7 @@ class ModelRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = ModelRun
         fields = [
+            "model_alias",
             "id",
             "request_id",
             "job_id",
@@ -294,3 +295,20 @@ class EvaluationCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Evaluation
         fields = ["name", "slug", "type", "model", "prompt", "dataset_name", "dataset_version", "metadata"]
+
+
+class ModelAliasSerializer(serializers.ModelSerializer):
+    """Stable alias contract; the provider models behind it are an operator concern."""
+
+    requiredCapabilities = serializers.JSONField(source="required_capabilities", read_only=True)
+    isDefault = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ModelAlias
+        fields = ["slug", "description", "requiredCapabilities", "isDefault"]
+        read_only_fields = fields
+
+    def get_isDefault(self, alias: ModelAlias) -> bool:
+        from django.conf import settings
+
+        return alias.slug == settings.AI_DEFAULT_MODEL_ALIAS
