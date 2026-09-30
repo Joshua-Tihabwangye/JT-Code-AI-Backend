@@ -7,7 +7,7 @@ from typing import Any
 
 from django.db import IntegrityError, transaction
 
-from apps.events.contracts import EventEnvelope
+from apps.events.contracts import EventEnvelope, parse_envelope
 from apps.events.models import ConsumedEvent, DeadLetterEvent
 from apps.events.outbox import add_outbox_event
 
@@ -79,32 +79,76 @@ def dead_letter_event(
     offset: int | None = None,
 ) -> DeadLetterEvent:
     """Persist a rejected event and publish a versioned DLQ notification via outbox."""
-    dead_letter = DeadLetterEvent.objects.create(
-        consumer_group=consumer_group,
-        event_id=str(payload.get("event_id") or ""),
-        event_type=str(payload.get("event_type") or ""),
-        topic=topic,
-        partition=partition,
-        offset=offset,
-        payload=payload,
-        headers=headers,
-        error=error[:2000],
-    )
-    add_outbox_event(
-        event_name="events.dead_lettered",
-        event_key=str(dead_letter.id),
-        payload={
-            "dead_letter_id": str(dead_letter.id),
-            "consumer_group": consumer_group,
-            "source_topic": topic,
-            "event_id": dead_letter.event_id,
-            "event_type": dead_letter.event_type,
-            "error": dead_letter.error,
-        },
-        headers={
-            "request_id": headers.get("request_id", ""),
-            "trace_id": headers.get("trace_id", ""),
-            "causation_id": dead_letter.event_id,
-        },
-    )
+    with transaction.atomic():
+        if partition is not None and offset is not None:
+            dead_letter, created = DeadLetterEvent.objects.get_or_create(
+                consumer_group=consumer_group,
+                topic=topic,
+                partition=partition,
+                offset=offset,
+                defaults={
+                    "event_id": str(payload.get("event_id") or ""),
+                    "event_type": str(payload.get("event_type") or ""),
+                    "payload": payload,
+                    "headers": headers,
+                    "error": error[:2000],
+                },
+            )
+        else:
+            dead_letter = DeadLetterEvent.objects.create(
+                consumer_group=consumer_group,
+                event_id=str(payload.get("event_id") or ""),
+                event_type=str(payload.get("event_type") or ""),
+                topic=topic,
+                partition=partition,
+                offset=offset,
+                payload=payload,
+                headers=headers,
+                error=error[:2000],
+            )
+            created = True
+        if created:
+            add_outbox_event(
+                event_name="events.dead_lettered",
+                event_key=str(dead_letter.id),
+                payload={
+                    "dead_letter_id": str(dead_letter.id),
+                    "consumer_group": consumer_group,
+                    "source_topic": topic,
+                    "event_id": dead_letter.event_id,
+                    "event_type": dead_letter.event_type,
+                    "error": dead_letter.error,
+                },
+                headers={
+                    "request_id": headers.get("request_id", ""),
+                    "trace_id": headers.get("trace_id", ""),
+                    "causation_id": dead_letter.event_id,
+                },
+            )
+    return dead_letter
+
+
+def replay_dead_letter(*, dead_letter_id, actor: str = "") -> DeadLetterEvent:
+    """Create a new outbox event from a valid DLQ envelope after operator review."""
+    from django.utils import timezone
+
+    with transaction.atomic():
+        dead_letter = DeadLetterEvent.objects.select_for_update().get(id=dead_letter_id)
+        if dead_letter.replayed_at is not None:
+            raise ValueError("This dead-letter event has already been replayed.")
+        envelope = parse_envelope(dead_letter.payload)
+        add_outbox_event(
+            event_name=envelope.event_type,
+            event_key=envelope.event_id,
+            payload=envelope.data,
+            headers={
+                **dead_letter.headers,
+                "request_id": envelope.request_id,
+                "trace_id": envelope.trace_id,
+                "causation_id": envelope.event_id,
+                "replayed_by": actor,
+            },
+        )
+        dead_letter.replayed_at = timezone.now()
+        dead_letter.save(update_fields=("replayed_at",))
     return dead_letter

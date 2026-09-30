@@ -6,6 +6,7 @@ from django.db import models
 class OutboxEvent(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
+        PUBLISHING = "publishing", "Publishing"
         PUBLISHED = "published", "Published"
         FAILED = "failed", "Failed"
 
@@ -17,6 +18,8 @@ class OutboxEvent(models.Model):
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
     attempts = models.PositiveIntegerField(default=0)
     available_at = models.DateTimeField(auto_now_add=True)
+    publishing_started_at = models.DateTimeField(null=True, blank=True)
+    publishing_token = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     published_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
@@ -72,6 +75,12 @@ class DeadLetterEvent(models.Model):
     class Meta:
         ordering = ("-created_at",)
         indexes = [models.Index(fields=("consumer_group", "-created_at"))]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("consumer_group", "topic", "partition", "offset"),
+                name="uniq_dead_letter_source_offset",
+            ),
+        ]
 
     def __str__(self):
         return f"DLQ {self.topic} ({self.consumer_group})"

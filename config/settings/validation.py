@@ -84,6 +84,7 @@ _INT_ENV = (
     "RAG_MAX_EXTRACTED_BYTES",
     "EVENT_OUTBOX_MAX_ATTEMPTS",
     "EVENT_OUTBOX_MAX_BACKOFF_SECONDS",
+    "EVENT_OUTBOX_LEASE_SECONDS",
     "AUDIT_EVENT_RETENTION_DAYS",
     "SAFETY_EVENT_RETENTION_DAYS",
     "WEBHOOK_MAX_RETRIES",
@@ -198,7 +199,11 @@ def validate_environment(profile: str) -> list[str]:
     for name in _THROTTLE_ENV:
         if (value := _val(name)) and not _RATE_RE.fullmatch(value):
             problems.append(f"{name} does not match <count>/<period>, got {value!r}.")
-    for name in ("EVENT_OUTBOX_MAX_ATTEMPTS", "EVENT_OUTBOX_MAX_BACKOFF_SECONDS"):
+    for name in (
+        "EVENT_OUTBOX_MAX_ATTEMPTS",
+        "EVENT_OUTBOX_MAX_BACKOFF_SECONDS",
+        "EVENT_OUTBOX_LEASE_SECONDS",
+    ):
         if (value := _val(name)) and value.isdigit() and int(value) < 1:
             problems.append(f"{name} must be at least 1.")
     for name in _URL_LIST_ENV:

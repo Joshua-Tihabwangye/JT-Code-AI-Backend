@@ -25,7 +25,7 @@ Topics are `<KAFKA_TOPIC_PREFIX>.<event_type>` when created with `add_outbox_eve
 
 ## Publishing and failure policy
 
-Celery Beat runs `publish_outbox_batch` every two seconds. A failed delivery remains pending, receives exponential backoff capped by `EVENT_OUTBOX_MAX_BACKOFF_SECONDS`, and is marked failed after `EVENT_OUTBOX_MAX_ATTEMPTS`. Failed outbox rows are retained for investigation; they are never silently discarded.
+Celery Beat runs `publish_outbox_batch` every two seconds. It claims a short, token-bound publisher lease in PostgreSQL, then sends to Kafka after the database transaction ends; a crashed worker's lease expires after `EVENT_OUTBOX_LEASE_SECONDS` and is safely reclaimed. This is deliberately **at-least-once** delivery: a crash after Kafka accepts the record but before the local confirmation can publish it again, so consumers must use the event ID idempotency ledger. A failed delivery remains pending, receives exponential backoff capped by `EVENT_OUTBOX_MAX_BACKOFF_SECONDS`, and is marked failed after `EVENT_OUTBOX_MAX_ATTEMPTS`. Failed outbox rows are retained for investigation; they are never silently discarded.
 
 ## Consumers
 
@@ -50,9 +50,9 @@ The resulting group is `<KAFKA_CONSUMER_GROUP_PREFIX>.billing-projection`. Offse
 
 ## Dead letters and replay
 
-Malformed, unsupported, or handler-failed events are stored in `DeadLetterEvent`, then a versioned `events.dead_lettered` outbox event is emitted. The source Kafka offset is committed only after this database write succeeds, preventing poison-message loops without losing diagnostic data.
+Malformed, unsupported, or handler-failed events are stored in `DeadLetterEvent`, then a versioned `events.dead_lettered` outbox event is emitted in the same database transaction. The source Kafka offset is committed only after this database write succeeds, preventing poison-message loops without losing diagnostic data. A source topic/partition/offset can create only one durable dead letter.
 
-Investigate `DeadLetterEvent` through Django admin. Replay is a deliberate operator action: correct the faulty handler or contract first, then publish a new event with a new `event_id`. Do not mutate a consumed message or delete its idempotency record to force a retry.
+Investigate `DeadLetterEvent` through Django admin. Replay is a deliberate operator action: correct the faulty handler or contract first, then run `python manage.py replay_dead_letter <uuid> --confirm --actor <operator>`. The command accepts only a valid version-1 envelope, publishes a new outbox event (therefore a new event ID), records the original as causation, and permits exactly one replay. Do not mutate a consumed message or delete its idempotency record to force a retry.
 
 ## Production drill
 
