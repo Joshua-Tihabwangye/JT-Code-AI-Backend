@@ -150,31 +150,7 @@ class JobSerializer(serializers.ModelSerializer):
             "workflow_run",
             "callbacks",
         ]
-        read_only_fields = [
-            "id",
-            "request_id",
-            "owner",
-            "organization",
-            "reserved_credits",
-            "actual_credits",
-            "result",
-            "error_code",
-            "error_message",
-            "trace_id",
-            "queue_name",
-            "celery_task_id",
-            "progress_percent",
-            "retry_count",
-            "max_retries",
-            "last_retry_at",
-            "cancel_requested_at",
-            "n8n_workflow_id",
-            "n8n_execution_id",
-            "started_at",
-            "completed_at",
-            "created_at",
-            "updated_at",
-        ]
+        read_only_fields = fields
 
 
 class JobCreateSerializer(serializers.ModelSerializer):
@@ -188,9 +164,13 @@ class JobCreateSerializer(serializers.ModelSerializer):
         }
 
     def validate_task_type(self, value):
-        valid_types = [choice[0] for choice in Job.TaskType.choices]
-        if value not in valid_types:
-            raise serializers.ValidationError(f"Invalid task_type. Must be one of: {valid_types}")
+        from apps.jobs.dispatch import NATIVE_TASK_TYPES
+
+        # Only accept work a worker can execute; unsupported types would reserve
+        # credits and then fail with UNSUPPORTED_TASK_TYPE.
+        supported = sorted(NATIVE_TASK_TYPES)
+        if value not in supported:
+            raise serializers.ValidationError(f"Unsupported task_type. Must be one of: {supported}")
         return value
 
     def validate_callback_url(self, value):

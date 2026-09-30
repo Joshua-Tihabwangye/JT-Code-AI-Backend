@@ -204,7 +204,7 @@ class APIKeySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "prefix", "key_hash", "last_used_at", "created_at", "updated_at"]
 
-    def get_full_key(self, obj):
+    def get_full_key(self, obj) -> str | None:
         # Only return full key on creation
         request = self.context.get("request")
         if request and request.method == "POST":

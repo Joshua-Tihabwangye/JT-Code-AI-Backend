@@ -137,7 +137,8 @@ def test_extract_file_without_content_raises():
         extract_source_text(source_type="file", config={})
 
 
-def test_vector_store_unavailable_on_sqlite():
+def test_vector_store_unavailable_when_pgvector_disabled(settings):
+    settings.PGVECTOR_ENABLED = False
     assert vectorstore.vector_store_enabled() is False
     with pytest.raises(vectorstore.VectorStoreUnavailable):
         vectorstore.require_vector_store()
@@ -169,7 +170,8 @@ def test_search_excludes_collections_outside_org(api_client, user, collection):
 
 
 @pytest.mark.django_db
-def test_search_returns_503_when_pgvector_unavailable(api_client, user, collection):
+def test_search_returns_503_when_pgvector_unavailable(api_client, user, collection, settings):
+    settings.PGVECTOR_ENABLED = False
     api_client.force_authenticate(user=user)
     response = api_client.post(
         reverse("knowledge-search"),
@@ -236,8 +238,9 @@ def test_process_document_indexes_text_source(db, text_source):
     assert document.last_error == ""
     assert Chunk.objects.filter(document=document).count() == document.chunk_count
     assert OutboxEvent.objects.filter(topic__endswith="knowledge.document.indexed").exists()
-    # pgvector store is unavailable on the SQLite test DB, so no vector_ids.
-    assert document.vector_ids == []
+    # Supabase pgvector stores one embedding per chunk.
+    assert len(document.vector_ids) == document.chunk_count
+    assert not Chunk.objects.filter(document=document, embedding__isnull=True).exists()
 
 
 @pytest.mark.django_db

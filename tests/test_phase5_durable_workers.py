@@ -74,7 +74,9 @@ def test_enqueue_job_persists_queue_workflow_event_and_task_id(
     assert job.celery_task_id == "celery-phase5-task"
     assert calls == [{"args": [str(job.id)], "queue": ANALYSIS_QUEUE}]
     assert WorkflowRun.objects.filter(job=job).exists()
-    assert OutboxEvent.objects.filter(topic="jobs.job.created", event_key=str(job.request_id)).exists()
+    assert OutboxEvent.objects.filter(
+        topic__endswith=".jobs.job.created", event_key=str(job.request_id)
+    ).exists()
 
 
 @pytest.mark.django_db

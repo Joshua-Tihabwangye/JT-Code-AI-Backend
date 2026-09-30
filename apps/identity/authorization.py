@@ -35,7 +35,7 @@ def organization_for_request(request, *, required: bool = False) -> Organization
     if organization_id:
         try:
             organization = Organization.objects.get(id=organization_id)
-        except (Organization.DoesNotExist, ValueError):
+        except Organization.DoesNotExist, ValueError:
             raise PermissionDenied("The selected organization does not exist.") from None
         require_organization_membership(request.user, organization.id)
         return organization

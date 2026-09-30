@@ -10,6 +10,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
 from rest_framework import status
+from rest_framework.authentication import BaseAuthentication
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -29,7 +30,7 @@ def _check(name: str, operation: Callable[[], None]) -> str:
 
 class LiveView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes: list[type[BaseAuthentication]] = []
 
     def get(self, request: Request) -> Response:
         logger.info("liveness probe completed")
@@ -42,7 +43,7 @@ class StartupView(LiveView):
 
 class ReadyView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes: list[type[BaseAuthentication]] = []
 
     def get(self, request: Request) -> Response:
         def database() -> None:
@@ -64,7 +65,9 @@ class ReadyView(APIView):
             def kafka() -> None:
                 from confluent_kafka.admin import AdminClient
 
-                AdminClient({"bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS}).list_topics(timeout=2)
+                from apps.events.kafka import kafka_client_config
+
+                AdminClient(kafka_client_config()).list_topics(timeout=2)
 
             checks["kafka"] = _check("kafka", kafka)
         ready = all(value == "ok" for value in checks.values())
@@ -76,7 +79,7 @@ class ReadyView(APIView):
 
 class N8nSentryRelayView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes: list = []
+    authentication_classes: list[type[BaseAuthentication]] = []
 
     def post(self, request: Request) -> Response:
         expected = settings.N8N_SENTRY_RELAY_SECRET

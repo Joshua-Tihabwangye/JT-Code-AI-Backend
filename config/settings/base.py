@@ -185,6 +185,9 @@ CHAT_MAX_CONTEXT_MESSAGES = int(env("CHAT_MAX_CONTEXT_MESSAGES", "40"))
 CHAT_SSE_HEARTBEAT_SECONDS = float(env("CHAT_SSE_HEARTBEAT_SECONDS", "15"))
 CHAT_SSE_MAX_SECONDS = int(env("CHAT_SSE_MAX_SECONDS", "300"))
 CHAT_SSE_RECONCILIATION_SECONDS = float(env("CHAT_SSE_RECONCILIATION_SECONDS", "30"))
+# How long a QUEUED chat request may wait (after publish/backoff) before the
+# safety-net dispatcher republishes it.
+CHAT_DISPATCH_GRACE_SECONDS = int(env("CHAT_DISPATCH_GRACE_SECONDS", "60"))
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TRACK_STARTED = True
@@ -195,14 +198,22 @@ CELERY_BEAT_SCHEDULE = {
     "publish-kafka-outbox": {
         "task": "apps.events.tasks.publish_outbox_batch",
         "schedule": 2.0,
+        "options": {"expires": 10},
+    },
+    "prune-published-outbox-events": {
+        "task": "apps.events.tasks.prune_published_outbox_events",
+        "schedule": 3600.0,
+        "options": {"expires": 600},
     },
     "process-job-callbacks": {
         "task": "apps.jobs.tasks.process_callbacks",
         "schedule": 30.0,
+        "options": {"expires": 30},
     },
     "check-job-deadlines": {
         "task": "apps.jobs.tasks.check_job_deadlines",
         "schedule": 60.0,
+        "options": {"expires": 60},
     },
     "sync-knowledge-sources": {
         "task": "apps.knowledge.tasks.sync_sources",
@@ -215,18 +226,22 @@ CELERY_BEAT_SCHEDULE = {
     "recover-stalled-jobs": {
         "task": "apps.jobs.tasks.recover_stalled_jobs",
         "schedule": 60.0,
+        "options": {"expires": 60},
     },
     "dispatch-queued-jobs": {
         "task": "apps.jobs.tasks.dispatch_queued_jobs",
         "schedule": 30.0,
+        "options": {"expires": 30},
     },
     "recover-stalled-chat-requests": {
         "task": "apps.conversations.tasks.recover_stalled_chat_requests",
         "schedule": 60.0,
+        "options": {"expires": 60},
     },
     "dispatch-queued-chat-requests": {
         "task": "apps.conversations.tasks.dispatch_queued_chat_requests",
         "schedule": 30.0,
+        "options": {"expires": 30},
     },
     "expire-old-jobs": {
         "task": "apps.jobs.tasks.expire_old_jobs",
@@ -247,6 +262,7 @@ CELERY_TASK_QUEUES = (
     Queue("jobs.visualization"),
 )
 CELERY_TASK_ROUTES = {
+    "apps.events.tasks.*": {"queue": "jobs.default"},
     "apps.jobs.tasks.execute_job_task": {"queue": "jobs.analysis"},
     "apps.knowledge.tasks.*": {"queue": "jobs.ingestion"},
     "apps.documents.*": {"queue": "jobs.visualization"},
@@ -258,10 +274,14 @@ CELERY_TASK_RESULT_EXPIRES = 3600
 CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 SUPABASE_URL = env("SUPABASE_URL")
+SUPABASE_JWKS_URL = env("SUPABASE_JWKS_URL")
 SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET")
 SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE")
 SUPABASE_JWT_ISSUER = env("SUPABASE_JWT_ISSUER")
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
+# Server-only key for the Supabase Auth Admin API (never expose to clients).
+SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY")
+SUPABASE_ALLOW_ANONYMOUS_USERS = env_bool("SUPABASE_ALLOW_ANONYMOUS_USERS", False)
 
 IMAGEKIT_PUBLIC_KEY = env("IMAGEKIT_PUBLIC_KEY")
 IMAGEKIT_PRIVATE_KEY = env("IMAGEKIT_PRIVATE_KEY")
@@ -280,6 +300,12 @@ KAFKA_TOPIC_PREFIX = env("KAFKA_TOPIC_PREFIX", "jt-code")
 EVENT_OUTBOX_MAX_ATTEMPTS = int(env("EVENT_OUTBOX_MAX_ATTEMPTS", "10"))
 EVENT_OUTBOX_MAX_BACKOFF_SECONDS = int(env("EVENT_OUTBOX_MAX_BACKOFF_SECONDS", "300"))
 EVENT_OUTBOX_LEASE_SECONDS = int(env("EVENT_OUTBOX_LEASE_SECONDS", "60"))
+EVENT_OUTBOX_RETENTION_DAYS = int(env("EVENT_OUTBOX_RETENTION_DAYS", "7"))
+KAFKA_CONSUMER_MAX_ATTEMPTS = int(env("KAFKA_CONSUMER_MAX_ATTEMPTS", "5"))
+KAFKA_CONSUMER_RETRY_MAX_SECONDS = int(env("KAFKA_CONSUMER_RETRY_MAX_SECONDS", "30"))
+KAFKA_TOPIC_PARTITIONS = int(env("KAFKA_TOPIC_PARTITIONS", "3"))
+KAFKA_TOPIC_REPLICATION_FACTOR = int(env("KAFKA_TOPIC_REPLICATION_FACTOR", "3"))
+KAFKA_TOPIC_RETENTION_MS = int(env("KAFKA_TOPIC_RETENTION_MS", str(7 * 24 * 3600 * 1000)))
 
 AI_PROVIDER = env("AI_PROVIDER", "disabled")
 N8N_SENTRY_RELAY_SECRET = env("N8N_SENTRY_RELAY_SECRET")
@@ -348,7 +374,7 @@ KAFKA_CONSUMER_GROUP_PREFIX = env("KAFKA_CONSUMER_GROUP_PREFIX", "jt-code")
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ["apps.identity.authentication.SupabaseJWTAuthentication"],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_SCHEMA_CLASS": "apps.core.schema.JTCodeAutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "EXCEPTION_HANDLER": "apps.core.exceptions.api_exception_handler",
@@ -369,6 +395,57 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "SECURITY": [{"SupabaseBearer": []}],
     "COMPONENT_SPLIT_REQUEST": True,
+    "ENUM_NAME_OVERRIDES": {
+        "ModelStatus": [
+            ("active", "Active"),
+            ("deprecated", "Deprecated"),
+            ("disabled", "Disabled"),
+            ("beta", "Beta"),
+        ],
+        "EvaluationType": [
+            ("accuracy", "Accuracy"),
+            ("faithfulness", "Faithfulness"),
+            ("hallucination", "Hallucination"),
+            ("toxicity", "Toxicity"),
+            ("bias", "Bias"),
+            ("latency", "Latency"),
+            ("cost", "Cost"),
+            ("custom", "Custom"),
+        ],
+        "PromptCategory": [
+            ("system", "System Prompt"),
+            ("task", "Task Prompt"),
+            ("template", "Template"),
+            ("chain_of_thought", "Chain of Thought"),
+            ("few_shot", "Few-shot Examples"),
+            ("guardrail", "Guardrail"),
+        ],
+        "PlanStatus": [("active", "Active"), ("archived", "Archived")],
+        "ConsentStatus": [
+            ("granted", "Granted"),
+            ("denied", "Denied"),
+            ("withdrawn", "Withdrawn"),
+            ("expired", "Expired"),
+        ],
+        "SupportCaseStatus": [
+            ("open", "Open"),
+            ("in_progress", "In Progress"),
+            ("waiting_user", "Waiting for User"),
+            ("waiting_third_party", "Waiting for Third Party"),
+            ("resolved", "Resolved"),
+            ("closed", "Closed"),
+        ],
+        "SupportCaseCategory": [
+            ("billing", "Billing"),
+            ("technical", "Technical Issue"),
+            ("account", "Account Access"),
+            ("feature", "Feature Request"),
+            ("bug", "Bug Report"),
+            ("security", "Security Concern"),
+            ("compliance", "Compliance"),
+            ("other", "Other"),
+        ],
+    },
     "APPEND_COMPONENTS": {
         "securitySchemes": {
             "SupabaseBearer": {
@@ -380,7 +457,6 @@ SPECTACULAR_SETTINGS = {
         }
     },
 }
-
 HEALTHCHECK_EXTERNAL_DEPENDENCIES = env_bool("HEALTHCHECK_EXTERNAL_DEPENDENCIES", False)
 
 SENTRY_DSN = env("SENTRY_DSN")

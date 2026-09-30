@@ -334,7 +334,7 @@ class StripeService:
         try:
             org = Organization.objects.get(id=organization_id)
             plan = Plan.objects.get(id=plan_id)
-        except (Organization.DoesNotExist, Plan.DoesNotExist):
+        except Organization.DoesNotExist, Plan.DoesNotExist:
             return
 
         subscription = Subscription.objects.create(

@@ -77,7 +77,7 @@ jt-code backend/
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.14 (pinned in `.python-version`; CI uses the same patch release)
 - Poetry (recommended) or pip
 - PostgreSQL 17+ with pgvector, Redis, and Kafka (managed or locally installed)
 

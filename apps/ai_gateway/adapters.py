@@ -234,7 +234,7 @@ def _parse_openai_tool_calls(raw):  # noqa: ANN001
         args_str = getattr(tc.function, "arguments", "") or "{}"
         try:
             args = json.loads(args_str)
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             args = {"_raw": args_str}
         out.append(
             ToolCall(

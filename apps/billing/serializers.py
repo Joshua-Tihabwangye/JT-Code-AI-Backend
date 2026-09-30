@@ -52,7 +52,7 @@ class PlanSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-    def get_price_dollars(self, obj):
+    def get_price_dollars(self, obj) -> float:
         return obj.price_cents / 100
 
 
@@ -78,10 +78,10 @@ class PlanListSerializer(serializers.ModelSerializer):
             "entitlement_summary",
         ]
 
-    def get_price_dollars(self, obj):
+    def get_price_dollars(self, obj) -> float:
         return obj.price_cents / 100
 
-    def get_entitlement_summary(self, obj):
+    def get_entitlement_summary(self, obj) -> dict:
         return {
             e.feature: {
                 "limit_type": e.limit_type,
@@ -136,10 +136,10 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def get_is_active(self, obj):
+    def get_is_active(self, obj) -> bool:
         return obj.status in ["active", "trialing"]
 
-    def get_days_remaining(self, obj):
+    def get_days_remaining(self, obj) -> int | None:
         from django.utils import timezone
 
         if obj.current_period_end:
@@ -244,10 +244,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-    def get_amount_dollars(self, obj):
+    def get_amount_dollars(self, obj) -> float:
         return obj.amount_cents / 100
 
-    def get_amount_paid_dollars(self, obj):
+    def get_amount_paid_dollars(self, obj) -> float:
         return obj.amount_paid_cents / 100
 
 
@@ -293,7 +293,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "succeeded_at",
         ]
 
-    def get_amount_dollars(self, obj):
+    def get_amount_dollars(self, obj) -> float:
         return obj.amount_cents / 100
 
 

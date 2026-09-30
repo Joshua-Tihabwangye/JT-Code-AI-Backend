@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from django.http import FileResponse, Http404
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -154,6 +155,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
         return Response(ConversionJobSerializer(job).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(responses={200: OpenApiTypes.BINARY})
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def conversion_download(request: Request, id: uuid.UUID) -> FileResponse:

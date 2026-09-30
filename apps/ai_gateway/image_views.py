@@ -6,6 +6,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.http import FileResponse, Http404
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from PIL import Image, ImageDraw, ImageFont
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -193,7 +194,7 @@ class ImageGenerationView(APIView):
 
         try:
             n = max(1, min(int(request.data.get("n", DEFAULT_N)), MAX_IMAGES_PER_REQUEST))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             n = DEFAULT_N
 
         ok, error = _check_quota(organization, n)
@@ -346,6 +347,7 @@ class ImageUnderstandingView(APIView):
         return Response({"description": description, "request_id": str(request_id)})
 
 
+@extend_schema(responses={200: OpenApiTypes.BINARY})
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def generated_image_download(request: Request, id: uuid.UUID) -> FileResponse:

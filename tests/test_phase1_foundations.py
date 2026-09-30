@@ -18,7 +18,9 @@ def _strict_env() -> dict[str, str]:
         "CSRF_TRUSTED_ORIGINS": "https://app.example.com",
         "DATABASE_URL": "postgresql://user:pass@db.example.com:5432/jtcode?sslmode=require",
         "SUPABASE_URL": "https://project.supabase.co",
-        "SUPABASE_JWT_SECRET": "supabase-secret-value",
+        "SUPABASE_JWKS_URL": "https://project.supabase.co/auth/v1/.well-known/jwks.json",
+        "SUPABASE_SECRET_KEY": "sb_secret_9mY7Kq2Vx5Zp8Lr3",
+        "SUPABASE_JWT_SECRET": "",
         "SUPABASE_JWT_ISSUER": "https://project.supabase.co/auth/v1",
         "SUPABASE_JWT_AUDIENCE": "authenticated",
         "SUPABASE_WEBHOOK_SIGNING_SECRET": "supabase-webhook-secret",
@@ -41,6 +43,8 @@ def _strict_env() -> dict[str, str]:
         "N8N_SENTRY_RELAY_SECRET": "n8n-sentry-relay-secret",
         "SENTRY_DSN": "https://public@example.ingest.sentry.io/1",
         "SENTRY_ENVIRONMENT": "production",
+        "WEBHOOK_ALLOWED_HOSTS": "callbacks.example.com",
+        "WEBHOOK_SIGNING_SECRET": "outbound-callback-signing-secret",
         "DJANGO_DEBUG": "false",
     }
 
@@ -55,6 +59,18 @@ def test_production_validation_accepts_complete_strict_env(monkeypatch):
         monkeypatch.setenv(key, value)
 
     assert validate_environment("production") == []
+
+
+def test_production_validation_requires_supabase_as_identity_source(monkeypatch):
+    for key, value in _strict_env().items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "legacy-hs256-secret")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_publishable_not_a_server_key")
+
+    problems = validate_environment("production")
+
+    assert any("SUPABASE_JWT_SECRET must be unset" in problem for problem in problems)
+    assert any("not the publishable key" in problem for problem in problems)
 
 
 def test_production_validation_accepts_stronger_postgres_tls_modes(monkeypatch):
@@ -96,6 +112,7 @@ def test_production_validation_rejects_insecure_transport_and_wildcard_hosts(mon
 def test_env_example_contains_only_live_variables_and_no_development_secrets():
     source = (PROJECT_ROOT / "config" / "settings" / "base.py").read_text(encoding="utf-8")
     source += (PROJECT_ROOT / "config" / "settings" / "development.py").read_text(encoding="utf-8")
+    source += (PROJECT_ROOT / "config" / "settings" / "test.py").read_text(encoding="utf-8")
     live = set(re.findall(r'env(?:_bool|_float|_list)?\("([A-Z0-9_]+)"', source))
     declared = {
         line.split("=", 1)[0]
@@ -122,7 +139,7 @@ def test_ci_security_scans_are_gating():
     assert "python manage.py migrate --noinput --settings=config.settings.ci" in ci
     assert "python manage.py check --deploy --settings=config.settings.production" in ci
     assert "- run: mypy" in ci
-    assert "python-version: '3.12.14'" in ci
+    assert "python-version: '3.14.4'" in ci
     assert "bandit -q -r apps config manage.py" in ci
     assert "pip-audit --strict" in ci
     assert "|| true" not in ci

@@ -43,5 +43,22 @@ place for breaking API changes.
   `completed`, `failed`, `cancelled`, `heartbeat`, and `timeout`. The client must fall back
   to polling `GET /api/v1/chat/requests/{id}/` after a timeout or disconnect.
 
-Conversation writes require editor or administrator access to the selected organization.
+Conversation writes require editor or administrator access to the organization that owns the
+conversation (not merely the caller's primary or header-selected organization). Posting to an
+archived conversation returns `409 conversation_archived`; unarchive it first.
+
+## Jobs
+
+- `GET, POST /api/v1/jobs/` — list/create. `task_type` must be a worker-supported type. An
+  unfunded wallet returns `402 insufficient_credits`.
+- `GET /api/v1/jobs/{id}/`, `POST /api/v1/jobs/{id}/cancel/`, `POST /api/v1/jobs/{id}/retry/`.
+  Jobs are not client-editable or deletable (`PUT`/`PATCH`/`DELETE` return 405); state changes
+  only through cancel/retry, workers and the signed n8n status callback.
+
+## Inbound webhooks
+
+`POST /api/v1/inbound-webhooks/{webhookId}/` (public, signature-authenticated). Send
+`X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature: sha256=<hex>` where the hex is
+HMAC-SHA256 of `"<timestamp>.<raw body>"` with the webhook secret. Stale timestamps (>5 min),
+bad signatures and replays are rejected.
 All reads are tenant-scoped on the server; resource IDs never grant access by themselves.

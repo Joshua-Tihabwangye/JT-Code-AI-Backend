@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import sentry_sdk
 from django.http import HttpResponse
 from django.utils.timezone import now
 from rest_framework import status
@@ -180,7 +181,19 @@ class SettingsAccountView(APIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request: Request) -> Response:
+        from apps.identity.supabase_admin import SupabaseAdminError, delete_auth_user
+
         user = request.user
+        # Supabase Auth owns the identity: remove it there first so the account
+        # cannot sign in again. Local data is only anonymized once that succeeds.
+        try:
+            delete_auth_user(user.supabase_user_id)
+        except SupabaseAdminError as exc:
+            sentry_sdk.capture_exception(exc)
+            return Response(
+                {"detail": "Account deletion could not be completed; please retry."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         UserOrganization.objects.filter(user=user).delete()
         user.is_active = False
         user.email = ""

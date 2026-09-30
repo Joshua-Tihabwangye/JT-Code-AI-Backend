@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
+import time
 
 from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -195,6 +200,40 @@ class WebhookDeliveryViewSet(viewsets.ReadOnlyModelViewSet):
         return WebhookDelivery.objects.filter(webhook_id__in=webhook_ids).select_related("webhook")
 
 
+INBOUND_WEBHOOK_MAX_SKEW_SECONDS = 300
+INBOUND_WEBHOOK_MAX_BYTES = 1024 * 1024
+
+
+def inbound_webhook_signature(secret: str, timestamp: str, body: bytes) -> str:
+    """Return the ``sha256=<hex>`` HMAC senders must place in ``X-Webhook-Signature``."""
+    digest = hmac.new(secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def verify_inbound_webhook_signature(request: Request, secret: str) -> Response | None:
+    """Authenticate a timestamped HMAC-SHA256 signature; return an error response or ``None``."""
+    if len(request.body) > INBOUND_WEBHOOK_MAX_BYTES:
+        return Response(
+            {"detail": "Webhook payload too large"}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+        )
+    signature = request.headers.get("X-Webhook-Signature", "")
+    timestamp = request.headers.get("X-Webhook-Timestamp", "")
+    if not signature or not timestamp.isdigit():
+        return Response(
+            {"detail": "X-Webhook-Signature and X-Webhook-Timestamp are required"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    if abs(time.time() - int(timestamp)) > INBOUND_WEBHOOK_MAX_SKEW_SECONDS:
+        return Response(
+            {"detail": "Webhook timestamp outside tolerance"}, status=status.HTTP_401_UNAUTHORIZED
+        )
+    expected = inbound_webhook_signature(secret, timestamp, request.body)
+    if not hmac.compare_digest(signature, expected):
+        return Response({"detail": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+    return None
+
+
+@extend_schema_view(post=extend_schema(operation_id="v1_incoming_webhook_receive"))
 class IncomingWebhookView(APIView):
     """Receive incoming webhooks from external services"""
 
@@ -207,15 +246,20 @@ class IncomingWebhookView(APIView):
         except Webhook.DoesNotExist:
             return Response({"detail": "Webhook not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Verify signature
-        signature = request.headers.get("X-Webhook-Signature")
-        if not signature:
-            return Response({"detail": "Webhook signature required"}, status=status.HTTP_401_UNAUTHORIZED)
-        expected = hashlib.sha256((webhook.secret + request.body.decode()).encode()).hexdigest()
-        if not secrets.compare_digest(signature, expected):
-            return Response({"detail": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
+        rejection = verify_inbound_webhook_signature(request, webhook.secret)
+        if rejection is not None:
+            return rejection
+        # A captured request may be resent inside the timestamp window; accept it once.
+        replay_key = f"inbound-webhook:{webhook.id}:{request.headers['X-Webhook-Signature']}"
+        if not cache.add(replay_key, "1", timeout=INBOUND_WEBHOOK_MAX_SKEW_SECONDS * 2):
+            return Response({"detail": "Duplicate webhook delivery"}, status=status.HTTP_409_CONFLICT)
 
-        # Create delivery record
+        with transaction.atomic():
+            delivery = self._record(webhook, request)
+        return Response({"received": True, "delivery_id": str(delivery.id)})
+
+    @staticmethod
+    def _record(webhook, request: Request):
         delivery = WebhookDelivery.objects.create(
             webhook=webhook,
             event_type=request.headers.get("X-Event-Type", "unknown"),
@@ -233,10 +277,8 @@ class IncomingWebhookView(APIView):
                 "event_type": delivery.event_type,
                 "payload": delivery.payload,
             },
-            headers={"trace_id": f"webhook-{delivery.id}"},
         )
-
-        return Response({"received": True, "delivery_id": str(delivery.id)})
+        return delivery
 
 
 class APIKeyViewSet(viewsets.ModelViewSet):

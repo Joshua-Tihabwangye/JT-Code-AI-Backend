@@ -18,9 +18,9 @@ CACHES = {
         "KEY_PREFIX": "jt-code:job-lock",
     },
 }
-DATABASES, _, _, _, _ = runtime_connection_settings(  # noqa: F405
+DATABASES = runtime_connection_settings(  # noqa: F405
     database_url=env("TEST_DATABASE_URL", required=True)  # noqa: F405
-)
+)[0]
 
 # Provide default Supabase settings so tests can authenticate deterministically
 # (never inherit live project values from the environment during tests)
@@ -30,6 +30,8 @@ SUPABASE_JWT_ISSUER = ""
 SUPABASE_URL = ""
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET", "")  # noqa: F405
 WEBHOOK_ALLOWED_HOSTS = ["callbacks.example.test"]
+SUPABASE_SECRET_KEY = "sb_secret_test-only-admin-key"  # nosec B105
+KAFKA_CONSUMER_RETRY_MAX_SECONDS = 0
 WEBHOOK_SIGNING_SECRET = "test-outbound-callback-signing-secret"  # nosec B105
 
 # Deterministic, offline embedding provider for the test suite. The pgvector

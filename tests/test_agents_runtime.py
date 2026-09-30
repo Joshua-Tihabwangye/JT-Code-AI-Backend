@@ -316,15 +316,18 @@ def test_execute_search_research_failure_records_outbox(user, org, credit_balanc
 
 @pytest.mark.django_db
 @override_settings(AI_PROVIDER="echo")
-def test_search_research_policy_seed_allows_api(authenticated_client, user, org, credit_balance):
-    response = authenticated_client.post(
-        "/api/v1/completion/",
-        {
-            "messages": [{"role": "user", "content": "find info about cats"}],
-            "task_type": "SEARCH_RESEARCH",
-        },
-        format="json",
-    )
+def test_search_research_policy_seed_allows_api(
+    authenticated_client, user, org, credit_balance, django_capture_on_commit_callbacks
+):
+    with django_capture_on_commit_callbacks(execute=True):
+        response = authenticated_client.post(
+            "/api/v1/completion/",
+            {
+                "messages": [{"role": "user", "content": "find info about cats"}],
+                "task_type": "SEARCH_RESEARCH",
+            },
+            format="json",
+        )
     assert response.status_code == 202
     job = Job.objects.get(id=response.data["job_id"])
     assert job.status == Job.Status.COMPLETED

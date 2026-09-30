@@ -1,4 +1,4 @@
-.PHONY: help install migrate run worker beat test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -64,14 +64,24 @@ createsuperuser:
 	python manage.py createsuperuser
 
 # Server
+# ASGI is required: chat SSE streams are async and WSGI (runserver) buffers them.
 run:
-	python manage.py runserver
+	uvicorn config.asgi:application --env-file .env --reload --port 8000
 
 run-0:
-	python manage.py runserver 0.0.0.0:8000
+	uvicorn config.asgi:application --env-file .env --host 0.0.0.0 --port 8000
 
 worker:
-	celery -A config worker -l INFO
+	celery -A config worker -l INFO -Q jobs.default,jobs.analysis,jobs.ingestion,jobs.visualization
+
+consumer:
+	python manage.py run_kafka_consumer integrations.webhook.received --consumer-name integration-webhooks
+
+kafka-topics:
+	python manage.py ensure_kafka_topics
+
+verify-supabase:
+	python manage.py verify_supabase --format=json
 
 beat:
 	celery -A config beat -l INFO

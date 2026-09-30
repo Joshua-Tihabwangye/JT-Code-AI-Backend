@@ -7,7 +7,7 @@ from uuid import uuid4
 import sentry_sdk
 from celery import shared_task
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.conversations.models import ChatRequest, Message
@@ -34,6 +34,11 @@ def retry_delay_seconds(retry_count: int) -> int:
     return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)
 
 
+def next_dispatch_time(delay_seconds: float = 0):
+    """When the safety-net dispatcher may republish a request that has not started."""
+    return timezone.now() + timedelta(seconds=delay_seconds + settings.CHAT_DISPATCH_GRACE_SECONDS)
+
+
 def _emit_status_event(chat_request: ChatRequest, event_type: str) -> None:
     add_outbox_event(
         event_type,
@@ -47,6 +52,7 @@ def _emit_status_event(chat_request: ChatRequest, event_type: str) -> None:
             "errorCode": chat_request.error_code,
             "modelRunId": str(chat_request.model_run_id) if chat_request.model_run_id else None,
         },
+        headers={"trace_id": chat_request.trace_id},
     )
     transaction.on_commit(lambda request_id=str(chat_request.id): notify_chat_status(request_id))
 
@@ -127,7 +133,9 @@ def _retry_or_fail(task, request_id: str, exc: Exception, *, code: str) -> dict:
             )
             _emit_status_event(chat_request, "chat.request.failed")
             return {"status": "failed", "error_code": code}
+        countdown = retry_delay_seconds(chat_request.retry_count)
         chat_request.status = ChatRequest.Status.QUEUED
+        chat_request.dispatch_after = next_dispatch_time(countdown)
         chat_request.save(
             update_fields=(
                 "retry_count",
@@ -136,13 +144,13 @@ def _retry_or_fail(task, request_id: str, exc: Exception, *, code: str) -> dict:
                 "error_message",
                 "model_run",
                 "status",
+                "dispatch_after",
                 "updated_at",
             )
         )
-        retries = chat_request.retry_count
         max_retries = chat_request.max_retries
         transaction.on_commit(lambda request_id=str(chat_request.id): notify_chat_status(request_id))
-    raise task.retry(exc=exc, countdown=retry_delay_seconds(retries), max_retries=max_retries) from exc
+    raise task.retry(exc=exc, countdown=countdown, max_retries=max_retries) from exc
 
 
 @shared_task(bind=True, acks_late=True, reject_on_worker_lost=True)
@@ -230,61 +238,115 @@ def process_chat_request(self, request_id: str) -> dict:
 
 @shared_task
 def recover_stalled_chat_requests() -> int:
-    """Requeue chat work stranded by a worker loss after a conservative timeout."""
+    """Requeue chat work stranded by a worker loss, failing requests that keep stalling.
+
+    Each recovery consumes one retry, so a request that repeatedly kills its
+    worker (for example by exhausting memory) cannot loop forever.
+    """
     cutoff = timezone.now() - timedelta(seconds=settings.CHAT_REQUEST_STALLED_TIMEOUT_SECONDS)
     recovered = 0
-    stalled = ChatRequest.objects.filter(
-        status=ChatRequest.Status.RUNNING,
-        started_at__lt=cutoff,
-        cancel_requested_at__isnull=True,
-    ).iterator()
-    for request in stalled:
-        updated = ChatRequest.objects.filter(
-            id=request.id,
+    stalled_ids = list(
+        ChatRequest.objects.filter(
             status=ChatRequest.Status.RUNNING,
             started_at__lt=cutoff,
             cancel_requested_at__isnull=True,
-        ).update(
-            status=ChatRequest.Status.QUEUED,
-            error_code="WORKER_RECOVERY",
-            error_message="Recovered after worker heartbeat timeout.",
-            updated_at=timezone.now(),
-        )
-        if not updated:
-            continue
+        ).values_list("id", flat=True)[:500]
+    )
+    for request_id in stalled_ids:
         task_id = str(uuid4())
-        ChatRequest.objects.filter(id=request.id, status=ChatRequest.Status.QUEUED).update(
-            celery_task_id=task_id
-        )
+        with transaction.atomic():
+            request = (
+                ChatRequest.objects.select_for_update(skip_locked=True)
+                .filter(
+                    id=request_id,
+                    status=ChatRequest.Status.RUNNING,
+                    started_at__lt=cutoff,
+                    cancel_requested_at__isnull=True,
+                )
+                .first()
+            )
+            if request is None:
+                continue
+            request.retry_count += 1
+            request.last_retry_at = timezone.now()
+            if request.retry_count > request.max_retries:
+                request.status = ChatRequest.Status.FAILED
+                request.error_code = "WORKER_LOST"
+                request.error_message = "The request repeatedly stalled and exhausted its retries."
+                request.completed_at = timezone.now()
+                request.save(
+                    update_fields=(
+                        "retry_count",
+                        "last_retry_at",
+                        "status",
+                        "error_code",
+                        "error_message",
+                        "completed_at",
+                        "updated_at",
+                    )
+                )
+                _emit_status_event(request, "chat.request.failed")
+                continue
+            request.status = ChatRequest.Status.QUEUED
+            request.error_code = "WORKER_RECOVERY"
+            request.error_message = "Recovered after worker heartbeat timeout."
+            request.celery_task_id = task_id
+            request.dispatch_after = next_dispatch_time()
+            request.save(
+                update_fields=(
+                    "retry_count",
+                    "last_retry_at",
+                    "status",
+                    "error_code",
+                    "error_message",
+                    "celery_task_id",
+                    "dispatch_after",
+                    "updated_at",
+                )
+            )
+            transaction.on_commit(lambda rid=str(request.id): notify_chat_status(rid))
         try:
-            process_chat_request.apply_async(args=[str(request.id)], task_id=task_id)
+            process_chat_request.apply_async(args=[str(request_id)], task_id=task_id)
         except Exception as exc:  # noqa: BLE001 - periodic dispatch retries durable requests
             sentry_sdk.capture_exception(exc)
-        notify_chat_status(str(request.id))
         recovered += 1
     return recovered
 
 
 @shared_task
 def dispatch_queued_chat_requests() -> int:
-    """Publish requests left queued when the broker was unavailable after commit."""
+    """Republish QUEUED requests whose publication was lost (e.g. broker outage).
+
+    Only requests past ``dispatch_after`` are considered; the deadline is pushed
+    forward before publishing so retries in backoff and recently published work
+    are never duplicated.
+    """
+    now = timezone.now()
     dispatched = 0
-    requests = ChatRequest.objects.filter(
-        status=ChatRequest.Status.QUEUED,
-        cancel_requested_at__isnull=True,
-    ).order_by("created_at")[:100]
-    for request in requests:
+    candidates = list(
+        ChatRequest.objects.filter(
+            status=ChatRequest.Status.QUEUED,
+            cancel_requested_at__isnull=True,
+        )
+        .filter(models.Q(dispatch_after__isnull=True) | models.Q(dispatch_after__lte=now))
+        .order_by("created_at")
+        .values_list("id", "celery_task_id")[:100]
+    )
+    for request_id, existing_task_id in candidates:
+        # Reuse the durable task id so one revoke() covers every copy of the message.
+        task_id = existing_task_id or str(uuid4())
+        claimed = (
+            ChatRequest.objects.filter(id=request_id, status=ChatRequest.Status.QUEUED)
+            .filter(models.Q(dispatch_after__isnull=True) | models.Q(dispatch_after__lte=now))
+            .update(celery_task_id=task_id, dispatch_after=next_dispatch_time(), updated_at=now)
+        )
+        if not claimed:
+            continue
         try:
-            task_id = request.celery_task_id or str(uuid4())
-            if not request.celery_task_id:
-                updated = ChatRequest.objects.filter(
-                    id=request.id, status=ChatRequest.Status.QUEUED, celery_task_id=""
-                ).update(celery_task_id=task_id)
-                if not updated:
-                    continue
-            process_chat_request.apply_async(args=[str(request.id)], task_id=task_id)
+            process_chat_request.apply_async(args=[str(request_id)], task_id=task_id)
         except Exception as exc:  # noqa: BLE001 - next beat tick retries publication
             sentry_sdk.capture_exception(exc)
+            ChatRequest.objects.filter(id=request_id, celery_task_id=task_id).update(dispatch_after=now)
             continue
         dispatched += 1
     return dispatched

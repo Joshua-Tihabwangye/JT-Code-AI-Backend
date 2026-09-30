@@ -225,7 +225,9 @@ def test_export_user_data(authenticated_client, user, org):
 
 
 @pytest.mark.django_db
-def test_delete_account(authenticated_client, user):
+def test_delete_account(authenticated_client, user, monkeypatch):
+    # Supabase Auth is the source of truth; the admin call is covered in test_supabase_identity.
+    monkeypatch.setattr("apps.identity.supabase_admin.delete_auth_user", lambda _supabase_id: None)
     response = authenticated_client.delete("/api/v1/settings/account/")
     assert response.status_code == 200
     user.refresh_from_db()

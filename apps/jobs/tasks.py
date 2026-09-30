@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import random
 from datetime import timedelta
 
@@ -94,40 +95,67 @@ def execute_job_task(self, job_id: str) -> dict:
 
 @shared_task
 def recover_stalled_jobs() -> int:
-    """Requeue any job left running by a lost worker after a safe grace period."""
+    """Requeue jobs left running by a lost worker; fail jobs that keep stalling.
+
+    Every recovery consumes one retry so a job that repeatedly kills its worker
+    reaches a terminal state (releasing credits and notifying callbacks).
+    """
     from django.conf import settings
 
     from apps.jobs.dispatch import queue_for_task_type
     from apps.jobs.models import Job
+    from apps.jobs.transitions import InvalidJobTransition, apply_status_update
 
     cutoff = timezone.now() - timedelta(seconds=settings.JOB_STALLED_TIMEOUT_SECONDS)
     recovered = 0
-    stalled_jobs = Job.objects.filter(
-        status=Job.Status.RUNNING,
-        started_at__lt=cutoff,
-        cancel_requested_at__isnull=True,
-    ).iterator()
-    for job in stalled_jobs:
-        queue_name = queue_for_task_type(job.task_type)
-        updated = Job.objects.filter(
-            id=job.id,
+    stalled_ids = list(
+        Job.objects.filter(
             status=Job.Status.RUNNING,
             started_at__lt=cutoff,
             cancel_requested_at__isnull=True,
-        ).update(
-            status=Job.Status.QUEUED,
-            queue_name=queue_name,
-            error_code="WORKER_RECOVERY",
-            error_message="Recovered after worker heartbeat timeout.",
-            celery_task_id="",
-        )
-        if not updated:
+        ).values_list("id", flat=True)[:500]
+    )
+    for job_id in stalled_ids:
+        with transaction.atomic():
+            job = (
+                Job.objects.select_for_update(skip_locked=True)
+                .filter(
+                    id=job_id,
+                    status=Job.Status.RUNNING,
+                    started_at__lt=cutoff,
+                    cancel_requested_at__isnull=True,
+                )
+                .first()
+            )
+            if job is None:
+                continue
+            exhausted = job.retry_count + 1 > job.max_retries
+            queue_name = queue_for_task_type(job.task_type)
+            Job.objects.filter(id=job.id).update(
+                retry_count=F("retry_count") + 1,
+                last_retry_at=timezone.now(),
+                queue_name=queue_name,
+                error_code="WORKER_RECOVERY",
+                error_message="Recovered after worker heartbeat timeout.",
+                celery_task_id="",
+                **({} if exhausted else {"status": Job.Status.QUEUED}),
+            )
+        if exhausted:
+            with contextlib.suppress(InvalidJobTransition):
+                apply_status_update(
+                    job_id,
+                    {
+                        "status": Job.Status.FAILED,
+                        "error_code": "WORKER_LOST",
+                        "error_message": "The job repeatedly stalled and exhausted its retries.",
+                    },
+                )
             continue
         try:
-            result = execute_job_task.apply_async(args=[str(job.id)], queue=queue_name)
-        except Exception:  # dispatch_queued_jobs retries durable work on the next beat tick
+            result = execute_job_task.apply_async(args=[str(job_id)], queue=queue_name)
+        except Exception:  # noqa: BLE001 - dispatch_queued_jobs retries durable work on the next beat tick
             continue
-        Job.objects.filter(id=job.id, status=Job.Status.QUEUED, celery_task_id="").update(
+        Job.objects.filter(id=job_id, status=Job.Status.QUEUED, celery_task_id="").update(
             celery_task_id=result.id
         )
         recovered += 1

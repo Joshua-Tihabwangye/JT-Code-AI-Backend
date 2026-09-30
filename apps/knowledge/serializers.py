@@ -1,3 +1,4 @@
+from drf_spectacular.utils import extend_schema_serializer
 from rest_framework import serializers
 
 from apps.knowledge.models import Chunk, Citation, Collection, Document, Source, SyncRun
@@ -104,6 +105,7 @@ class SourceCreateSerializer(serializers.ModelSerializer):
         fields = ["collection", "source_type", "name", "description", "config", "sync_schedule"]
 
 
+@extend_schema_serializer(component_name="KnowledgeDocument")
 class DocumentSerializer(serializers.ModelSerializer):
     source_name = serializers.CharField(source="source.name", read_only=True)
     collection_name = serializers.CharField(source="collection.name", read_only=True)

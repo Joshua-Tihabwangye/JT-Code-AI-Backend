@@ -20,6 +20,8 @@ router.register(r"api-keys", APIKeyViewSet, basename="api-key")
 router.register(r"kafka-consumers", KafkaConsumerViewSet, basename="kafka-consumer")
 
 urlpatterns = [
+    # Public, signature-authenticated receiver. It must not share the router's
+    # ``webhooks/<id>/`` path, whose authenticated detail route would shadow it.
+    path("inbound-webhooks/<uuid:webhook_id>/", IncomingWebhookView.as_view(), name="incoming-webhook"),
     path("", include(router.urls)),
-    path("webhooks/<uuid:webhook_id>/", IncomingWebhookView.as_view(), name="incoming-webhook"),
 ]

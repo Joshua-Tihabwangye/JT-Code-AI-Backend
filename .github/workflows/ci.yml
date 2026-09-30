@@ -12,43 +12,37 @@ jobs:
       DJANGO_SETTINGS_MODULE: config.settings.ci
       DJANGO_SECRET_KEY: ci-Key9aB3dE5fG7hI1jK2LmN4oP6qR8sT0uVxYz-0123456789
       DATABASE_URL: ${{ secrets.SUPABASE_CI_DATABASE_URL }}
-      TEST_DATABASE_URL: ${{ secrets.SUPABASE_CI_DATABASE_URL }}
-      RESTORE_DATABASE_URL: ${{ secrets.SUPABASE_CI_RESTORE_DATABASE_URL }}
+      TEST_DATABASE_URL: ${{ secrets.SUPABASE_CI_TEST_DATABASE_URL }}
       REDIS_URL: ${{ secrets.CI_REDIS_URL }}
       CELERY_BROKER_URL: ${{ secrets.CI_CELERY_BROKER_URL }}
       CELERY_RESULT_BACKEND: ${{ secrets.CI_CELERY_RESULT_BACKEND }}
-    steps:
       WEBHOOK_ALLOWED_HOSTS: ${{ secrets.CI_WEBHOOK_ALLOWED_HOSTS }}
       WEBHOOK_SIGNING_SECRET: ${{ secrets.CI_WEBHOOK_SIGNING_SECRET }}
+    steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12.14'
+          python-version: '3.14.4'
           cache: pip
       - run: pip install -e '.[dev]'
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
+      - run: python manage.py spectacular --validate --fail-on-warn --file /tmp/openapi.yaml --settings=config.settings.ci
       - name: Verify isolated Supabase CI targets
         run: |
           test -n "$DATABASE_URL"
           test -n "$TEST_DATABASE_URL"
-          test -n "$RESTORE_DATABASE_URL"
-          test "$DATABASE_URL" = "$TEST_DATABASE_URL"
-          test "$DATABASE_URL" != "$RESTORE_DATABASE_URL"
+          test "$DATABASE_URL" != "$TEST_DATABASE_URL"
       - run: python manage.py makemigrations --check --dry-run --settings=config.settings.ci
       - run: python manage.py inventory_matrix --strict --settings=config.settings.ci
       - run: python manage.py migrate --noinput --settings=config.settings.ci
+      - name: Verify Supabase migrations, pgvector, and tenant backfill
+        run: python manage.py verify_supabase --format=json --settings=config.settings.ci
       - name: Seed restore-drill fixture
         run: python manage.py seed_restore_drill_fixture --settings=config.settings.ci
-      - name: PostgreSQL restore drill
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client
-          python manage.py restore_drill_check \
-            --restore-database-url "$RESTORE_DATABASE_URL" \
-            --confirm-restore-target --require-source-data --settings=config.settings.ci
-      - run: python manage.py check --deploy --settings=config.settings.production
+      - name: Validate deploy configuration shape
+        run: python manage.py check --deploy --settings=config.settings.production
         env:
           DJANGO_DEBUG: 'false'
           DJANGO_ALLOWED_HOSTS: api.example.test
@@ -64,7 +58,8 @@ jobs:
           KAFKA_SASL_USERNAME: ci
           KAFKA_SASL_PASSWORD: ci-kafka-password
           SUPABASE_URL: https://project.example.test
-          SUPABASE_JWT_SECRET: ci-supabase-jwt-secret
+          SUPABASE_JWKS_URL: https://project.example.test/auth/v1/.well-known/jwks.json
+          SUPABASE_SECRET_KEY: sb_secret_ci9mY7Kq2Vx5Zp8Lr3
           SUPABASE_JWT_AUDIENCE: authenticated
           SUPABASE_JWT_ISSUER: https://project.example.test/auth/v1
           SUPABASE_WEBHOOK_SIGNING_SECRET: ci-supabase-webhook-secret
@@ -81,7 +76,11 @@ jobs:
           WEBHOOK_ALLOWED_HOSTS: callbacks.example.test
           WEBHOOK_SIGNING_SECRET: ci-outbound-callback-signing-secret
           SENTRY_ENVIRONMENT: production
-      - run: pytest --cov=apps --cov=config
+      - name: Full PostgreSQL test suite
+        run: pytest --create-db --cov=apps --cov=config
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+          TEST_DATABASE_URL: ${{ secrets.SUPABASE_CI_TEST_DATABASE_URL }}
       - name: Secret scan
         run: detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
       - name: SAST

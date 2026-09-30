@@ -8,9 +8,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.events.contracts import build_envelope
-from apps.events.kafka import publish
+from apps.events.kafka import publish_many
 from apps.events.models import OutboxEvent
-from apps.events.outbox import event_type
+from apps.events.outbox import event_type, topic_name
 
 
 def _reclaim_expired_leases(now) -> None:
@@ -122,20 +122,51 @@ def _mark_delivery_failure(event_id, token: UUID, error: Exception) -> None:
 
 
 @shared_task
-def publish_outbox_batch(limit: int = 100) -> int:
-    """Publish claimed events outside database transactions (at-least-once delivery)."""
-    published = 0
-    for event, token in _claim_due_events(max(1, limit)):
+def publish_outbox_batch(limit: int = 500) -> int:
+    """Publish claimed events outside database transactions (at-least-once delivery).
+
+    The batch is produced together and confirmed with one flush; each event is
+    then settled individually against its own publisher lease.
+    """
+    claimed = _claim_due_events(max(1, limit))
+    records = []
+    tokens: dict[str, tuple[OutboxEvent, UUID]] = {}
+    for event, token in claimed:
         try:
+            name = event_type(event)
             envelope = build_envelope(
                 event_id=str(event.id),
-                event_type=event_type(event),
+                event_type=name,
                 payload=event.payload,
                 headers=event.headers,
             )
-            publish(event.topic, event.event_key, envelope, event.headers)
-            published += int(_mark_published(event.id, token))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one malformed row must not block the batch
             _mark_delivery_failure(event.id, token, exc)
             sentry_sdk.capture_exception(exc)
+            continue
+        tokens[envelope.event_id] = (event, token)
+        records.append((topic_name(name), event.event_key, envelope, event.headers))
+    if not records:
+        return 0
+    try:
+        results = publish_many(records)
+    except Exception as exc:  # noqa: BLE001 - producer construction/transport failure
+        sentry_sdk.capture_exception(exc)
+        results = {event_id: str(exc) for event_id in tokens}
+    published = 0
+    for event_id, (event, token) in tokens.items():
+        if (error := results.get(event_id)) is None:
+            published += int(_mark_published(event.id, token))
+        else:
+            _mark_delivery_failure(event.id, token, RuntimeError(error))
     return published
+
+
+@shared_task
+def prune_published_outbox_events() -> int:
+    """Delete confirmed outbox rows after the retention window; failed rows are kept."""
+    cutoff = timezone.now() - timedelta(days=settings.EVENT_OUTBOX_RETENTION_DAYS)
+    deleted, _ = OutboxEvent.objects.filter(
+        status=OutboxEvent.Status.PUBLISHED, published_at__lt=cutoff
+    ).delete()
+    return deleted

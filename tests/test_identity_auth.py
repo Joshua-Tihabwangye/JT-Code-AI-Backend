@@ -130,6 +130,7 @@ def test_es256_jwks_token_authenticates(api_client, monkeypatch):
             "sub": "es256-user",
             "email": "es256@example.com",
             "aud": "authenticated",
+            "role": "authenticated",
             "iat": int(time.time()),
             "exp": int(time.time()) + 3600,
         },

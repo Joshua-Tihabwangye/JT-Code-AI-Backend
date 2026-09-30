@@ -9,7 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -22,7 +22,7 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
-from apps.jobs.dispatch import enqueue_job
+from apps.jobs.dispatch import NATIVE_TASK_TYPES, enqueue_job
 from apps.jobs.metrics import queue_depths
 from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
 from apps.jobs.serializers import (
@@ -36,10 +36,21 @@ from apps.jobs.serializers import (
 from apps.jobs.transitions import InvalidJobTransition, apply_status_update
 
 
+class PaymentRequired(APIException):
+    status_code = status.HTTP_402_PAYMENT_REQUIRED
+    default_detail = "Insufficient credits for this job."
+    default_code = "insufficient_credits"
+
+
 class JobViewSet(viewsets.ModelViewSet):
+    """Jobs are created and read by clients; state changes only via cancel/retry/worker paths."""
+
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = JobSerializer
     lookup_field = "id"
+    # No PUT/PATCH/DELETE: status, billing and results are owned by the durable
+    # state machine (apps.jobs.transitions), never by client writes.
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
         return (
@@ -58,6 +69,7 @@ class JobViewSet(viewsets.ModelViewSet):
             job = serializer.save(
                 owner=self.request.user,
                 organization=organization_for_request(self.request, required=True),
+                trace_id=getattr(self.request, "trace_id", ""),
             )
             self._reserve_credits(job)
             self._enqueue_job(job)
@@ -68,15 +80,19 @@ class JobViewSet(viewsets.ModelViewSet):
         job.reserved_credits = estimated_credits
         job.save(update_fields=["reserved_credits"])
 
-        # Reserve credits from user's wallet
-        CreditService.reserve_credits(
-            user=self.request.user,
-            amount=estimated_credits,
-            request_id=job.request_id,
-            job_id=job.id,
-            reason=f"Job reservation: {job.task_type}",
-            organization=job.organization,
-        )
+        # Reserve credits from the tenant wallet; the surrounding transaction
+        # rolls the job back when the wallet cannot cover the estimate.
+        try:
+            CreditService.reserve_credits(
+                user=self.request.user,
+                amount=estimated_credits,
+                request_id=job.request_id,
+                job_id=job.id,
+                reason=f"Job reservation: {job.task_type}",
+                organization=job.organization,
+            )
+        except ValueError as exc:
+            raise PaymentRequired(str(exc)) from exc
 
     def _estimate_credits(self, task_type: str, input_payload: dict) -> Decimal:
         # Simple estimation based on task type
@@ -129,6 +145,11 @@ class JobViewSet(viewsets.ModelViewSet):
                 {"detail": "Job can only be retried from failed/cancelled/expired status"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if job.task_type not in NATIVE_TASK_TYPES:
+            return Response(
+                {"detail": "This task type is not supported by the job runtime."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Create new job with same parameters
         new_job = Job.objects.create(
@@ -140,6 +161,7 @@ class JobViewSet(viewsets.ModelViewSet):
             callback_url=job.callback_url,
             deadline=job.deadline,
             status=Job.Status.QUEUED,
+            trace_id=getattr(request, "trace_id", ""),
         )
 
         self._reserve_credits(new_job)
@@ -313,6 +335,7 @@ class ResearchJobsView(APIView):
             },
             reserved_credits=estimated_credits,
             request_id=request_id,
+            trace_id=getattr(request, "trace_id", ""),
         )
 
         enqueue_job(job)

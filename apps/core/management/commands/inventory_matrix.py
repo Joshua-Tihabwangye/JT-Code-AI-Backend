@@ -34,11 +34,11 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from django.apps import apps as django_apps
 from django.conf import settings
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.urls import URLResolver, get_resolver
 
 #: Repository root, independent of the current working directory.
@@ -120,15 +120,15 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         key="redis",
         label="Redis",
         distributions=("redis",),
-        modules=(),
+        modules=("redis",),
         settings_keys=("REDIS_URL",),
-        purpose="Django cache backend (config.settings)",
+        purpose="Django cache backend and chat SSE status pub/sub (apps.conversations.streaming)",
     ),
     IntegrationSpec(
         key="celery",
         label="Celery / Celery Beat",
         distributions=("celery",),
-        modules=("celery",),
+        modules=("celery", "kombu"),
         settings_keys=("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"),
         purpose="Background jobs and beat schedule (config/celery.py)",
     ),
@@ -254,6 +254,7 @@ _LOCAL_MODULES = frozenset({"config", "apps", "manage", "tests"})
 _FRAMEWORK_MODULES = frozenset(
     {
         "django",
+        "asgiref",
         "rest_framework",
         "drf_spectacular",
         "corsheaders",
@@ -604,10 +605,19 @@ def _load_model_matrix(migrations: dict[str, list[str]]) -> list[dict[str, Any]]
     return sorted(rows, key=lambda row: (row["app"], row["model"]))
 
 
-def _load_architecture_decisions() -> list[dict[str, str]]:
+class ADRRow(TypedDict):
+    id: str
+    file: str
+    title: str
+    status: str
+    date: str
+    verified: bool
+
+
+def _load_architecture_decisions() -> list[ADRRow]:
     """Read ADR metadata from ``docs/adr`` relative to the repository root."""
     adr_dir = PROJECT_ROOT / "docs" / "adr"
-    rows: list[dict[str, str]] = []
+    rows: list[ADRRow] = []
     for path in sorted(adr_dir.glob("ADR-*.md")):
         text = path.read_text(encoding="utf-8")
         status = re.search(r"\*\*Status:\*\*\s*([^\n]+)", text)
@@ -635,7 +645,7 @@ def _load_architecture_decisions() -> list[dict[str, str]]:
     return rows
 
 
-def _admission_problems(adr_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def _admission_problems(adr_rows: list[ADRRow]) -> list[dict[str, str]]:
     """Phase 0 exit criteria: every ADR approved and well formed."""
     problems: list[dict[str, str]] = []
     accepted = {"accepted", "adopted", "implemented"}
@@ -676,7 +686,7 @@ def _admission_problems(adr_rows: list[dict[str, str]]) -> list[dict[str, str]]:
 class Command(BaseCommand):
     help = "Print a verified implementation matrix (models, endpoints, env vars, packages, integrations)."
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--format",
             choices=("json", "markdown"),

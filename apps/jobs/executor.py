@@ -289,9 +289,28 @@ def _enqueue_terminal_event(job: Job) -> None:
     )
 
 
-def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
+def _claim_for_finalize(job: Job, step: JobStep) -> Job | None:
+    """Lock the job and confirm it is still ours to finalize.
+
+    Cancellation, deadline expiry or a stall recovery may have changed the job
+    while the handler ran outside a transaction; those outcomes win and the late
+    result is discarded (the step is marked skipped).
+    """
+    locked = Job.objects.select_for_update().select_related("organization", "owner").get(id=job.id)
+    if locked.status == Job.Status.RUNNING and locked.cancel_requested_at is None:
+        return locked
+    step.status = JobStep.Status.SKIPPED
+    step.completed_at = timezone.now()
+    step.save(update_fields=["status", "completed_at", "updated_at"])
+    return None
+
+
+def _finalize_success(job: Job, step: JobStep, result: dict) -> bool:
     usage = result.get("usage", {})
     with transaction.atomic():
+        job = _claim_for_finalize(job, step)
+        if job is None:
+            return False
         job.status = Job.Status.COMPLETED
         job.error_code = ""
         job.error_message = ""
@@ -343,10 +362,14 @@ def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
 
         create_terminal_callback(job)
         _enqueue_terminal_event(job)
+    return True
 
 
-def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
+def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> bool:
     with transaction.atomic():
+        job = _claim_for_finalize(job, step)
+        if job is None:
+            return False
         job.status = Job.Status.FAILED
         job.error_code = code
         job.error_message = message
@@ -368,6 +391,7 @@ def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
 
         create_terminal_callback(job)
         _enqueue_terminal_event(job)
+    return True
 
 
 def execute_job(job: Job) -> dict:
@@ -390,19 +414,22 @@ def execute_job(job: Job) -> dict:
             return {"status": "failed", "task_type": job.task_type, "error_code": code}
     try:
         result = handler(job)
-    except (TimeoutError, ConnectionError):
+    except TimeoutError, ConnectionError:
         raise
     except AIGatewayError as exc:
-        _finalize_failure(job, step, code=exc.code, message=str(exc))
+        if not _finalize_failure(job, step, code=exc.code, message=str(exc)):
+            return _superseded(job)
         return {"status": "failed", "task_type": job.task_type, "error_code": exc.code}
     except Exception as exc:  # noqa: BLE001 - job isolation
         sentry_sdk.capture_exception(exc)
-        _finalize_failure(job, step, code="JOB_EXECUTION_FAILED", message=str(exc))
+        if not _finalize_failure(job, step, code="JOB_EXECUTION_FAILED", message=str(exc)):
+            return _superseded(job)
         return {"status": "failed", "task_type": job.task_type, "error_code": "JOB_EXECUTION_FAILED"}
-    if _cancelled(job):
-        step.status = JobStep.Status.SKIPPED
-        step.completed_at = timezone.now()
-        step.save(update_fields=["status", "completed_at", "updated_at"])
-        return {"status": "cancelled", "task_type": job.task_type}
-    _finalize_success(job, step, result)
+    if not _finalize_success(job, step, result):
+        return _superseded(job)
     return {"status": "completed", "task_type": job.task_type}
+
+
+def _superseded(job: Job) -> dict:
+    job.refresh_from_db(fields=["status"])
+    return {"status": job.status, "task_type": job.task_type, "superseded": True}

@@ -9,7 +9,7 @@ import sentry_sdk
 from asgiref.sync import sync_to_async
 from celery import current_app
 from django.conf import settings
-from django.db import IntegrityError, close_old_connections, transaction
+from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -31,14 +31,15 @@ from apps.conversations.serializers import (
     MessageSerializer,
 )
 from apps.conversations.streaming import chat_status_channel, notify_chat_status
-from apps.conversations.tasks import process_chat_request
-from apps.core.exceptions import IdempotencyConflict
+from apps.conversations.tasks import next_dispatch_time, process_chat_request
+from apps.core.exceptions import ArchivedConversation, IdempotencyConflict
 from apps.core.pagination import CreatedCursorPagination, UpdatedCursorPagination
 from apps.core.throttling import BurstThrottle, ChatThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
     organization_for_request,
+    require_organization_write_access,
     tenant_scoped_queryset,
 )
 
@@ -76,6 +77,10 @@ def _dispatch_chat_request(chat_request_id: str, task_id: str) -> None:
         process_chat_request.apply_async(args=[chat_request_id], task_id=task_id)
     except Exception as exc:  # noqa: BLE001 - beat will retry a safely persisted request
         sentry_sdk.capture_exception(exc)
+        # Publication failed: let the next dispatcher tick republish immediately.
+        ChatRequest.objects.filter(
+            id=chat_request_id, status=ChatRequest.Status.QUEUED, celery_task_id=task_id
+        ).update(dispatch_after=timezone.now())
 
 
 def create_chat_request(
@@ -86,7 +91,14 @@ def create_chat_request(
     timezone_name: str = "",
     locale: str = "",
 ) -> tuple[ChatRequest, bool]:
-    """Create a canonical chat request, or safely replay its previous result."""
+    """Create a canonical chat request, or safely replay its previous result.
+
+    Authorization is checked against the *conversation's* tenant, never the
+    caller's primary or header-selected organization.
+    """
+    require_organization_write_access(request.user, conversation.organization_id)
+    if conversation.archived_at is not None:
+        raise ArchivedConversation
     idempotency_key = _idempotency_key(request)
     fingerprint = _request_fingerprint(conversation, content, timezone_name, locale)
     celery_task_id = str(uuid4())
@@ -103,6 +115,7 @@ def create_chat_request(
                 locale=locale,
                 trace_id=getattr(request, "trace_id", ""),
                 celery_task_id=celery_task_id,
+                dispatch_after=next_dispatch_time(),
             )
             Message.objects.create(
                 conversation=conversation,
@@ -359,6 +372,7 @@ class ChatRequestRuntimeViewSet(
                         "traceId": item.trace_id,
                         "status": item.status,
                     },
+                    headers={"trace_id": item.trace_id},
                 )
                 transaction.on_commit(lambda request_id=str(item.id): notify_chat_status(request_id))
                 if item.celery_task_id:
@@ -376,7 +390,8 @@ class ChatRequestRuntimeViewSet(
         def load_state():
             """Run ORM work in Django's sync DB lane; close connections per SSE poll."""
             try:
-                close_old_connections()
+                if not connection.in_atomic_block:
+                    close_old_connections()
                 current = tenant_scoped_queryset(
                     ChatRequest.objects.filter(id=request_id), request.user
                 ).first()
@@ -385,7 +400,8 @@ class ChatRequestRuntimeViewSet(
                 event_id = f"{current.updated_at.timestamp():.6f}:{current.status}"
                 return current, event_id
             finally:
-                close_old_connections()
+                if not connection.in_atomic_block:
+                    close_old_connections()
 
         async def event_stream():
             """ASGI-safe, Redis-notified SSE with bounded database reconciliation."""

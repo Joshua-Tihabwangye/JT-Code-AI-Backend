@@ -357,13 +357,16 @@ def test_repeated_research_jobs_get_unique_idempotency_keys(authenticated_client
 
 
 @pytest.mark.django_db
-def test_chat_throttle_blocks_burst(authenticated_client, user, org):
+def test_chat_throttle_blocks_burst(authenticated_client, user, org, monkeypatch):
     from apps.conversations.models import Conversation
+    from apps.core.throttling import BurstThrottle
 
+    # A small burst keeps the whole loop inside one window even on a remote database.
+    monkeypatch.setitem(BurstThrottle.THROTTLE_RATES, "burst", "5/minute")
     conversation = Conversation.objects.create(owner=user, organization=org, title="Throttle test")
     cache.clear()
     responses = []
-    for _ in range(31):
+    for _ in range(6):
         response = authenticated_client.post(
             "/api/v1/chat/requests/",
             {

@@ -23,6 +23,18 @@ from apps.events.outbox import add_outbox_event, enqueue_outbox_event
 from apps.events.tasks import publish_outbox_batch
 
 
+def fake_batch_publisher(on_record=None, *, error=None):
+    """Stand-in for ``publish_many``: records each call and confirms (or fails) every event."""
+
+    def publish_many(records):
+        for record in records:
+            if on_record is not None:
+                on_record(*record)
+        return {envelope.event_id: error for _topic, _key, envelope, _headers in records}
+
+    return publish_many
+
+
 def test_envelope_is_versioned_and_carries_correlation_context():
     request_token = request_id_var.set("request-6")
     trace_token = trace_id_var.set("trace-6")
@@ -102,18 +114,20 @@ def test_outbox_publisher_emits_envelope_and_transport_headers(monkeypatch):
     def fake_publish(topic, key, envelope, headers):
         sent.append((topic, key, envelope, headers))
 
-    monkeypatch.setattr("apps.events.tasks.publish", fake_publish)
+    monkeypatch.setattr("apps.events.tasks.publish_many", fake_batch_publisher(fake_publish))
 
     assert publish_outbox_batch.run() == 1
 
     event.refresh_from_db()
     assert event.status == OutboxEvent.Status.PUBLISHED
+    assert sent[0][0].endswith(".jobs.job.created")
     assert sent[0][2].event_id == str(event.id)
     assert sent[0][2].event_type == "jobs.job.created"
     assert sent[0][2].request_id == "request-6"
 
 
-@pytest.mark.django_db(transaction=True)
+# serialized_rollback restores migration-seeded rows (AI providers/policies) after the flush.
+@pytest.mark.django_db(transaction=True, serialized_rollback=True)
 def test_outbox_network_publish_runs_outside_database_transaction(monkeypatch):
     enqueue_outbox_event(topic="jobs.job.created", event_key="job-6", payload={})
     transaction_states = []
@@ -121,7 +135,7 @@ def test_outbox_network_publish_runs_outside_database_transaction(monkeypatch):
     def fake_publish(*_args):
         transaction_states.append(connection.in_atomic_block)
 
-    monkeypatch.setattr("apps.events.tasks.publish", fake_publish)
+    monkeypatch.setattr("apps.events.tasks.publish_many", fake_batch_publisher(fake_publish))
     assert publish_outbox_batch.run() == 1
     assert transaction_states == [False]
 
@@ -130,9 +144,7 @@ def test_outbox_network_publish_runs_outside_database_transaction(monkeypatch):
 def test_outbox_failure_uses_bounded_backoff(monkeypatch, settings):
     settings.EVENT_OUTBOX_MAX_ATTEMPTS = 2
     event = enqueue_outbox_event(topic="jobs.job.created", event_key="job-6", payload={})
-    monkeypatch.setattr(
-        "apps.events.tasks.publish", lambda *_args: (_ for _ in ()).throw(TimeoutError("down"))
-    )
+    monkeypatch.setattr("apps.events.tasks.publish_many", fake_batch_publisher(error="broker down"))
 
     assert publish_outbox_batch.run() == 0
 
@@ -151,7 +163,7 @@ def test_expired_publisher_lease_is_reclaimed(monkeypatch, settings):
     event.publishing_started_at = timezone.now() - timedelta(seconds=2)
     event.publishing_token = uuid.uuid4()
     event.save()
-    monkeypatch.setattr("apps.events.tasks.publish", lambda *_args: None)
+    monkeypatch.setattr("apps.events.tasks.publish_many", fake_batch_publisher())
 
     assert publish_outbox_batch.run() == 1
     event.refresh_from_db()
@@ -258,3 +270,41 @@ def test_prefixed_outbox_helper_keeps_event_contract_name():
     event = add_outbox_event("assets.asset.created", "asset-6", {"asset_id": "asset-6"})
 
     assert event.topic.endswith("assets.asset.created")
+
+
+@pytest.mark.django_db
+def test_incoming_webhook_handler_completes_only_the_enveloped_delivery(user):
+    from apps.identity.models import Organization
+    from apps.integrations.models import Webhook, WebhookDelivery
+
+    organization = Organization.objects.create(name="Events handler org", owner=user)
+    user.organizations.add(organization)
+    webhook = Webhook.objects.create(
+        organization=organization,
+        name="Inbound source",
+        url="https://callbacks.example.test/inbound",
+        secret="test-secret",
+        created_by=user,
+    )
+    delivery = WebhookDelivery.objects.create(
+        webhook=webhook,
+        event_type="source.changed",
+        payload={"record": "one"},
+    )
+    envelope = build_envelope(
+        event_id=str(uuid.uuid4()),
+        event_type="integrations.webhook.received",
+        payload={"delivery_id": str(delivery.id), "webhook_id": str(webhook.id)},
+    )
+
+    assert process_event(
+        consumer_group="jt-code.integration-webhooks",
+        envelope=envelope,
+        topic="jt-code.integrations.webhook.received",
+        partition=0,
+        offset=1,
+    )
+    delivery.refresh_from_db()
+    assert delivery.status == WebhookDelivery.Status.DELIVERED
+    assert delivery.response_status == 202
+    assert delivery.delivered_at is not None

@@ -13,15 +13,22 @@ from apps.identity.models import User
 _JWKS_CACHE: dict[str, Any] | None = None
 _JWKS_FETCHED_AT = 0.0
 _JWKS_TTL_SECONDS = 3600
+# A token with an unknown ``kid`` forces a refresh; cap how often that can
+# happen so forged tokens cannot turn every request into a Supabase round trip.
+_JWKS_MIN_REFRESH_INTERVAL_SECONDS = 60
 
 
 def _fetch_jwks(*, force_refresh: bool = False) -> dict[str, Any]:
     global _JWKS_CACHE, _JWKS_FETCHED_AT
     now = time.monotonic()
-    if not force_refresh and _JWKS_CACHE is not None and now - _JWKS_FETCHED_AT < _JWKS_TTL_SECONDS:
-        return _JWKS_CACHE
+    fresh = _JWKS_CACHE is not None and now - _JWKS_FETCHED_AT < _JWKS_TTL_SECONDS
+    recently_fetched = _JWKS_CACHE is not None and now - _JWKS_FETCHED_AT < _JWKS_MIN_REFRESH_INTERVAL_SECONDS
+    if fresh and (not force_refresh or recently_fetched):
+        return _JWKS_CACHE  # type: ignore[return-value]
 
-    jwks_url = settings.SUPABASE_URL.rstrip("/") + "/auth/v1/.well-known/jwks.json"
+    jwks_url = settings.SUPABASE_JWKS_URL or (
+        settings.SUPABASE_URL.rstrip("/") + "/auth/v1/.well-known/jwks.json"
+    )
     with httpx.Client(timeout=10.0) as client:
         response = client.get(jwks_url)
         response.raise_for_status()
@@ -117,13 +124,20 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
         subject = claims.get("sub")
         if not subject:
             raise exceptions.AuthenticationFailed("Supabase token is missing subject.")
+        # Supabase is the identity source of truth: only signed-in user sessions
+        # (role=authenticated) are accepted, never anon/service-role tokens.
+        if claims.get("role") != "authenticated":
+            raise exceptions.AuthenticationFailed("Supabase token is not an authenticated user session.")
+        if claims.get("is_anonymous") and not settings.SUPABASE_ALLOW_ANONYMOUS_USERS:
+            raise exceptions.AuthenticationFailed("Anonymous Supabase sessions are not permitted.")
 
-        defaults: dict[str, Any] = {}
-        if isinstance(claims.get("email"), str):
-            defaults["email"] = claims["email"]
-        user, _ = User.objects.get_or_create(supabase_user_id=subject, defaults=defaults)
+        email = claims.get("email") if isinstance(claims.get("email"), str) else ""
+        user, created = User.objects.get_or_create(supabase_user_id=subject, defaults={"email": email})
         if not user.is_active:
             raise exceptions.AuthenticationFailed("This user account is disabled.")
+        if not created and email and user.email != email:
+            User.objects.filter(pk=user.pk).update(email=email)
+            user.email = email
         return user, claims
 
     def authenticate_header(self, request) -> str:

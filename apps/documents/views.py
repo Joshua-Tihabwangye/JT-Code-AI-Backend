@@ -6,6 +6,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.http import FileResponse, Http404
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -167,6 +168,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         )
 
 
+@extend_schema(responses={200: OpenApiTypes.BINARY})
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def document_download(request: Request, id: uuid.UUID) -> FileResponse:

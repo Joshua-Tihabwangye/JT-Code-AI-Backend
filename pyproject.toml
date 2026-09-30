@@ -2,7 +2,7 @@
 name = "jt-code-api"
 version = "0.1.0"
 description = "Django backend for JT-Code"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
   "Django>=5.2,<5.3",
   "djangorestframework>=3.17.2,<3.18",
@@ -49,7 +49,7 @@ dev = [
   "bandit[toml]>=1.7,<2",
   "pip-audit>=2.7,<3",
   "detect-secrets>=1.5,<2",
-  "mypy>=1.15,<2",
+  "mypy>=1.15,<1.20",  # django-stubs 5.2.x supports mypy <1.20
   "django-stubs>=5.2,<6",
   "djangorestframework-stubs>=3.16,<4"
 ]
@@ -60,7 +60,7 @@ python_files = ["tests.py", "test_*.py", "*_tests.py"]
 addopts = "-q --disable-warnings --strict-markers"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 110
 extend-exclude = ["*/migrations/*"]
 
@@ -69,11 +69,11 @@ select = ["E", "F", "I", "B", "UP", "SIM", "DJ"]
 ignore = ["DJ001"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
 explicit_package_bases = true
 files = ["config", "apps/core"]
-follow_imports = "skip"
+follow_imports = "silent"  # "skip" hides AUTH_USER_MODEL from django-stubs and crashes mypy
 strict = true
 ignore_missing_imports = true
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,49 @@ from django.utils import timezone
 from apps.core.context import request_id_var, trace_id_var
 
 SCHEMA_VERSION = 1
+
+# Event types are lowercase ``domain.entity[.action]`` names. The Kafka topic is
+# always ``<KAFKA_TOPIC_PREFIX>.<event_type>``.
+EVENT_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$")
+_JOB_STATUSES = (
+    "created",
+    "queued",
+    "validating",
+    "running",
+    "waiting_approval",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired",
+)
+KNOWN_EVENT_TYPES: tuple[str, ...] = (
+    "ai_gateway.evaluation.run",
+    "ai_gateway.job.created",
+    "asset.created",
+    "billing.stripe.webhook",
+    "billing.subscription.renewing_soon",
+    "chat.request.accepted",
+    "chat.request.cancelled",
+    "chat.request.completed",
+    "chat.request.failed",
+    "conversion.job.completed",
+    "conversion.job.created",
+    "conversion.job.failed",
+    "document.render.completed",
+    "document.render.failed",
+    "events.dead_lettered",
+    "governance.consent.expiring",
+    "images.edited",
+    "images.generated",
+    "images.understood",
+    "integrations.connector.sync",
+    "integrations.webhook.received",
+    *(f"jobs.job.{status}" for status in _JOB_STATUSES),
+    "knowledge.document.index_failed",
+    "knowledge.document.indexed",
+    "knowledge.source.sync",
+    "safety.image_prompt_blocked",
+)
 
 
 class EventContractError(ValueError):
@@ -44,9 +88,27 @@ class EventEnvelope:
         }
 
 
+def validate_event_type(event_type: str) -> str:
+    if not EVENT_TYPE_PATTERN.fullmatch(event_type):
+        raise EventContractError(
+            f"Invalid event type {event_type!r}; use lowercase domain.entity[.action] names."
+        )
+    return event_type
+
+
 def event_type_for_topic(topic: str, topic_prefix: str) -> str:
     prefix = f"{topic_prefix}."
     return topic[len(prefix) :] if topic.startswith(prefix) else topic
+
+
+def current_correlation_headers() -> dict[str, str]:
+    """Return the active request/trace IDs, ignoring the unset ``-`` sentinel."""
+    headers = {}
+    if (request_id := request_id_var.get()) and request_id != "-":
+        headers["request_id"] = request_id
+    if (trace_id := trace_id_var.get()) and trace_id != "-":
+        headers["trace_id"] = trace_id
+    return headers
 
 
 def build_envelope(
@@ -59,8 +121,9 @@ def build_envelope(
     headers = headers or {}
     if not isinstance(payload, dict):
         raise EventContractError("Event payload must be an object.")
-    request_id = str(headers.get("request_id") or request_id_var.get() or "")
-    trace_id = str(headers.get("trace_id") or trace_id_var.get() or "")
+    ambient = current_correlation_headers()
+    request_id = str(headers.get("request_id") or ambient.get("request_id", ""))
+    trace_id = str(headers.get("trace_id") or ambient.get("trace_id", ""))
     return EventEnvelope(
         event_id=event_id,
         event_type=event_type,

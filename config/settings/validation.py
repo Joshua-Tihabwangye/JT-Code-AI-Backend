@@ -24,10 +24,11 @@ _REQUIRED_STRICT = (
     "CSRF_TRUSTED_ORIGINS",
     "DATABASE_URL",
     "SUPABASE_URL",
-    "SUPABASE_JWT_SECRET",
+    "SUPABASE_JWKS_URL",
     "SUPABASE_JWT_ISSUER",
     "SUPABASE_JWT_AUDIENCE",
     "SUPABASE_WEBHOOK_SIGNING_SECRET",
+    "SUPABASE_SECRET_KEY",
     "REDIS_URL",
     "CELERY_BROKER_URL",
     "CELERY_RESULT_BACKEND",
@@ -52,8 +53,8 @@ _REQUIRED_STRICT = (
 )
 _SECRET_ENV = (
     "DJANGO_SECRET_KEY",
-    "SUPABASE_JWT_SECRET",
     "SUPABASE_WEBHOOK_SIGNING_SECRET",
+    "SUPABASE_SECRET_KEY",
     "N8N_SENTRY_RELAY_SECRET",
     "N8N_API_KEY",
     "N8N_WEBHOOK_SECRET",
@@ -71,6 +72,7 @@ _BOOL_ENV = (
     "AI_GATEWAY_FALLBACK_ENABLED",
     "PGVECTOR_ENABLED",
     "HEALTHCHECK_EXTERNAL_DEPENDENCIES",
+    "SUPABASE_ALLOW_ANONYMOUS_USERS",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
@@ -94,6 +96,16 @@ _INT_ENV = (
     "WEBHOOK_RETRY_BASE_DELAY",
     "WEBHOOK_RETRY_MAX_SECONDS",
     "CHAT_SSE_MAX_SECONDS",
+    "CHAT_DISPATCH_GRACE_SECONDS",
+    "CHAT_REQUEST_STALLED_TIMEOUT_SECONDS",
+    "CHAT_MAX_CONTEXT_MESSAGES",
+    "JOB_STALLED_TIMEOUT_SECONDS",
+    "EVENT_OUTBOX_RETENTION_DAYS",
+    "KAFKA_CONSUMER_MAX_ATTEMPTS",
+    "KAFKA_CONSUMER_RETRY_MAX_SECONDS",
+    "KAFKA_TOPIC_PARTITIONS",
+    "KAFKA_TOPIC_REPLICATION_FACTOR",
+    "KAFKA_TOPIC_RETENTION_MS",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
@@ -264,10 +276,21 @@ def validate_environment(profile: str) -> list[str]:
     supabase_url, issuer = _val("SUPABASE_URL"), _val("SUPABASE_JWT_ISSUER")
     if supabase_url and issuer and not issuer.startswith(supabase_url.rstrip("/") + "/"):
         problems.append("SUPABASE_JWT_ISSUER must start with SUPABASE_URL.")
-    for name in ("SUPABASE_URL", "IMAGEKIT_ENDPOINT_URL", "N8N_BASE_URL"):
+    jwks_url = _val("SUPABASE_JWKS_URL")
+    expected_jwks_url = supabase_url.rstrip("/") + "/auth/v1/.well-known/jwks.json"
+    if supabase_url and jwks_url != expected_jwks_url:
+        problems.append("SUPABASE_JWKS_URL must be the JWKS endpoint for SUPABASE_URL.")
+    for name in ("SUPABASE_URL", "SUPABASE_JWKS_URL", "IMAGEKIT_ENDPOINT_URL", "N8N_BASE_URL"):
         value = _val(name)
         if value and urlparse(value).scheme != "https":
             problems.append(f"{name} must use HTTPS in deployable environments.")
+    secret_key = _val("SUPABASE_SECRET_KEY")
+    if secret_key.startswith("sb_publishable_"):
+        problems.append("SUPABASE_SECRET_KEY must be the server secret key, not the publishable key.")
+    if _val("SUPABASE_JWT_SECRET"):
+        problems.append(
+            "SUPABASE_JWT_SECRET must be unset in deployable environments; tokens are verified with JWKS."
+        )
     if _val("SENTRY_ENVIRONMENT").lower() in {"development", "dev", "test"}:
         problems.append("SENTRY_ENVIRONMENT must identify the deployable environment, not development/test.")
     return problems

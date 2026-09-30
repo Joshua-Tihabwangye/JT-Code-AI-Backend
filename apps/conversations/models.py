@@ -79,6 +79,10 @@ class ChatRequest(models.Model):
     max_retries = models.PositiveIntegerField(default=3)
     last_retry_at = models.DateTimeField(null=True, blank=True)
     cancel_requested_at = models.DateTimeField(null=True, blank=True)
+    # Earliest time the periodic dispatcher may (re)publish a QUEUED request. It is
+    # pushed forward on every publish and retry so backoff and in-flight work are
+    # never duplicated by the safety-net dispatcher.
+    dispatch_after = models.DateTimeField(null=True, blank=True, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     provider_name = models.CharField(max_length=100, blank=True)

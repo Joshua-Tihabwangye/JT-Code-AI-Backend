@@ -248,15 +248,19 @@ def test_execute_unsupported_task_type_fails_terminally(user, org):
 
 @pytest.mark.django_db
 @override_settings(AI_PROVIDER="echo")
-def test_completion_api_accepts_and_completes_job(authenticated_client, user, org, credit_balance):
-    response = authenticated_client.post(
-        "/api/v1/completion/",
-        {
-            "messages": [{"role": "user", "content": "Hello there"}],
-            "task_type": "GENERAL_QUESTION",
-        },
-        format="json",
-    )
+def test_completion_api_accepts_and_completes_job(
+    authenticated_client, user, org, credit_balance, django_capture_on_commit_callbacks
+):
+    # Jobs are dispatched after commit; run the eager worker as production would.
+    with django_capture_on_commit_callbacks(execute=True):
+        response = authenticated_client.post(
+            "/api/v1/completion/",
+            {
+                "messages": [{"role": "user", "content": "Hello there"}],
+                "task_type": "GENERAL_QUESTION",
+            },
+            format="json",
+        )
     assert response.status_code == 202
     job = Job.objects.get(id=response.data["job_id"])
     assert job.status == Job.Status.COMPLETED

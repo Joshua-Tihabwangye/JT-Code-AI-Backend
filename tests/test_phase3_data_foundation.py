@@ -97,8 +97,12 @@ def test_phase3_backfill_migration_covers_all_legacy_tenant_models():
     assert "organization_id__isnull=True" in migration
 
 
-def test_ci_restore_drill_requires_nonempty_source_data():
+def test_ci_seeds_restore_fixture_but_never_runs_a_destructive_restore():
+    """CI proves migrations and seeds evidence; the overwriting restore is a manual drill."""
     ci = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    runbook = (PROJECT_ROOT / "docs/PRODUCTION_VERIFICATION.md").read_text(encoding="utf-8")
 
     assert "seed_restore_drill_fixture" in ci
-    assert "--require-source-data" in ci
+    assert "verify_supabase" in ci
+    assert "--confirm-restore-target" not in ci
+    assert "--require-source-data" in runbook

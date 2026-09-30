@@ -36,7 +36,7 @@ class ProviderSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-    def get_model_count(self, obj):
+    def get_model_count(self, obj) -> int:
         return obj.models.count()
 
 
@@ -151,7 +151,7 @@ class ModelPolicySerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-    def get_fallback_model_names(self, obj):
+    def get_fallback_model_names(self, obj) -> list[str]:
         return list(obj.fallback_models.values_list("name", flat=True))
 
 

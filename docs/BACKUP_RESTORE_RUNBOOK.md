@@ -31,18 +31,20 @@ billing state. Redis, Kafka, n8n and Streamlit are not canonical stores.
 3. Configure a staging API instance with the restored `DATABASE_URL` and
    production-equivalent non-production secrets.
 4. Run migrations with `python manage.py migrate --settings=config.settings.staging`.
-5. Run `python manage.py check --deploy --settings=config.settings.staging`.
-6. Verify read-only analytics views:
+5. Run `python manage.py verify_supabase --format=json --settings=config.settings.staging`
+   and retain the output with the drill record.
+6. Run `python manage.py check --deploy --settings=config.settings.staging`.
+7. Verify read-only analytics views:
    `analytics_job_summary`, `analytics_usage_ledger`,
    `analytics_billing_summary`, `analytics_conversation_summary`,
    `analytics_asset_summary`.
-7. Run tenant-isolation smoke tests against representative users and
+8. Run tenant-isolation smoke tests against representative users and
    organizations.
-8. Execute the automated drill from a machine with PostgreSQL client tools:
+9. Execute the automated drill from a machine with PostgreSQL client tools:
    `python manage.py restore_drill_check --restore-database-url "$RESTORE_DATABASE_URL" --confirm-restore-target --settings=config.settings.staging`.
    The target must be an isolated, disposable PostgreSQL database; the command
    refuses to use the source database and compares canonical-table row counts.
-9. Record actual RTO/RPO, anomalies and follow-up actions.
+10. Record actual RTO/RPO, anomalies and follow-up actions.
 
 ## Analytics Access
 
