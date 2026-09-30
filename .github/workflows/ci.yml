@@ -18,6 +18,8 @@ jobs:
       CELERY_BROKER_URL: ${{ secrets.CI_CELERY_BROKER_URL }}
       CELERY_RESULT_BACKEND: ${{ secrets.CI_CELERY_RESULT_BACKEND }}
     steps:
+      WEBHOOK_ALLOWED_HOSTS: ${{ secrets.CI_WEBHOOK_ALLOWED_HOSTS }}
+      WEBHOOK_SIGNING_SECRET: ${{ secrets.CI_WEBHOOK_SIGNING_SECRET }}
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -76,6 +78,8 @@ jobs:
           STRIPE_SECRET_KEY: sk_live_ci9mY7Kq2Vx5Zp8Lr3
           STRIPE_WEBHOOK_SECRET: whsec_ci9mY7Kq2Vx5Zp8Lr3
           SENTRY_DSN: https://public@example.ingest.sentry.io/1
+          WEBHOOK_ALLOWED_HOSTS: callbacks.example.test
+          WEBHOOK_SIGNING_SECRET: ci-outbound-callback-signing-secret
           SENTRY_ENVIRONMENT: production
       - run: pytest --cov=apps --cov=config
       - name: Secret scan

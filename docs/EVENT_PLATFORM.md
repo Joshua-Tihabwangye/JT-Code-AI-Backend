@@ -34,6 +34,7 @@ Register a handler explicitly in `apps.events.consumers`:
 ```python
 from apps.events.consumers import register_handler
 
+
 @register_handler("billing.invoice.paid")
 def handle_invoice_paid(envelope):
     # Make only Django database changes here.

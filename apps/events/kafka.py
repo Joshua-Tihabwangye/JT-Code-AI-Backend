@@ -18,6 +18,8 @@ def producer() -> Producer:
         "enable.idempotence": True,
         "acks": "all",
         "compression.type": "snappy",
+        "delivery.timeout.ms": 10000,
+        "request.timeout.ms": 5000,
     }
     if settings.KAFKA_SASL_MECHANISM:
         config.update(
@@ -32,12 +34,21 @@ def producer() -> Producer:
 
 def publish(topic: str, key: str, envelope: EventEnvelope, headers: dict[str, str] | None = None) -> None:
     p = producer()
+    delivery_errors: list[str] = []
+
+    def on_delivery(error, _message) -> None:
+        if error is not None:
+            delivery_errors.append(str(error))
+
     p.produce(
         topic=topic,
         key=key.encode(),
         value=json.dumps(envelope.as_dict(), separators=(",", ":"), default=str).encode(),
         headers=[(name, value.encode()) for name, value in transport_headers(envelope, headers).items()],
+        on_delivery=on_delivery,
     )
     remaining = p.flush(10)
     if remaining:
         raise TimeoutError(f"{remaining} Kafka message(s) were not delivered before timeout.")
+    if delivery_errors:
+        raise RuntimeError(f"Kafka delivery failed: {delivery_errors[0]}")

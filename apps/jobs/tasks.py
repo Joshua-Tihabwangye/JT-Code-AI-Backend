@@ -37,14 +37,47 @@ def execute_job_task(self, job_id: str) -> dict:
     try:
         return execute_job(job)
     except (TimeoutError, ConnectionError) as exc:
-        job.refresh_from_db()
-        job.retry_count += 1
-        job.last_retry_at = timezone.now()
-        job.error_code = "WORKER_RETRY"
-        job.error_message = str(exc)[:2000]
-        if job.retry_count > job.max_retries:
-            job.status = Job.Status.FAILED
-            job.completed_at = timezone.now()
+        with transaction.atomic():
+            job = Job.objects.select_for_update().select_related("organization", "owner").get(id=job_id)
+            if job.status in {
+                Job.Status.COMPLETED,
+                Job.Status.FAILED,
+                Job.Status.CANCELLED,
+                Job.Status.EXPIRED,
+            }:
+                return {"status": job.status, "task_type": job.task_type, "idempotent": True}
+            job.retry_count += 1
+            job.last_retry_at = timezone.now()
+            job.error_code = "WORKER_RETRY"
+            job.error_message = str(exc)[:2000]
+            if job.retry_count > job.max_retries:
+                job.status = Job.Status.FAILED
+                job.completed_at = timezone.now()
+                job.save(
+                    update_fields=[
+                        "retry_count",
+                        "last_retry_at",
+                        "error_code",
+                        "error_message",
+                        "status",
+                        "completed_at",
+                        "updated_at",
+                    ]
+                )
+                JobStep.objects.filter(job=job, status=JobStep.Status.RUNNING).update(
+                    status=JobStep.Status.FAILED,
+                    error_message=job.error_message,
+                    completed_at=job.completed_at,
+                )
+                from apps.jobs.callbacks import create_terminal_callback
+                from apps.jobs.executor import _enqueue_terminal_event
+                from apps.jobs.transitions import settle_terminal_credits
+
+                settle_terminal_credits(job)
+                create_terminal_callback(job)
+                _enqueue_terminal_event(job)
+                return {"status": "failed", "task_type": job.task_type, "error_code": "WORKER_RETRY"}
+            job.status = Job.Status.QUEUED
             job.save(
                 update_fields=[
                     "retry_count",
@@ -52,30 +85,11 @@ def execute_job_task(self, job_id: str) -> dict:
                     "error_code",
                     "error_message",
                     "status",
-                    "completed_at",
                     "updated_at",
                 ]
             )
-            JobStep.objects.filter(job=job, status=JobStep.Status.RUNNING).update(
-                status=JobStep.Status.FAILED,
-                error_message=job.error_message,
-                completed_at=job.completed_at,
-            )
-            return {"status": "failed", "task_type": job.task_type, "error_code": "WORKER_RETRY"}
-        job.status = Job.Status.QUEUED
-        job.save(
-            update_fields=[
-                "retry_count",
-                "last_retry_at",
-                "error_code",
-                "error_message",
-                "status",
-                "updated_at",
-            ]
-        )
-        raise self.retry(
-            exc=exc, countdown=retry_delay_seconds(job.retry_count), max_retries=job.max_retries
-        ) from exc
+            retries, max_retries = job.retry_count, job.max_retries
+        raise self.retry(exc=exc, countdown=retry_delay_seconds(retries), max_retries=max_retries) from exc
 
 
 @shared_task

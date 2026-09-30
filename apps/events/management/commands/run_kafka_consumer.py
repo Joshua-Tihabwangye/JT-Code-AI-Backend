@@ -9,7 +9,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.events.consumers import dead_letter_event, process_event
-from apps.events.contracts import parse_envelope
+from apps.events.contracts import parse_envelope, validate_transport_headers
 
 
 class Command(BaseCommand):
@@ -75,6 +75,7 @@ class Command(BaseCommand):
                 headers = self._headers(message)
                 try:
                     envelope = parse_envelope(payload)
+                    validate_transport_headers(envelope, headers)
                     processed = process_event(
                         consumer_group=group_id,
                         envelope=envelope,

@@ -271,6 +271,24 @@ def _mark_started(job: Job) -> JobStep:
     )
 
 
+def _enqueue_terminal_event(job: Job) -> None:
+    """Persist the terminal event inside the same transaction as job settlement."""
+    payload = {
+        "job_id": str(job.id),
+        "request_id": str(job.request_id),
+        "status": job.status,
+        "task_type": job.task_type,
+    }
+    if job.status == Job.Status.FAILED:
+        payload.update({"error_code": job.error_code, "error_message": job.error_message})
+    enqueue_outbox_event(
+        topic=f"jobs.job.{job.status}",
+        event_key=str(job.request_id),
+        payload=payload,
+        headers={"trace_id": job.trace_id},
+    )
+
+
 def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
     usage = result.get("usage", {})
     with transaction.atomic():
@@ -324,17 +342,7 @@ def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
         from apps.jobs.callbacks import create_terminal_callback
 
         create_terminal_callback(job)
-    enqueue_outbox_event(
-        topic="jobs.job.completed",
-        event_key=str(job.request_id),
-        payload={
-            "job_id": str(job.id),
-            "request_id": str(job.request_id),
-            "status": "completed",
-            "task_type": job.task_type,
-        },
-        headers={"trace_id": job.trace_id},
-    )
+        _enqueue_terminal_event(job)
 
 
 def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
@@ -359,18 +367,7 @@ def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
         from apps.jobs.callbacks import create_terminal_callback
 
         create_terminal_callback(job)
-    enqueue_outbox_event(
-        topic="jobs.job.failed",
-        event_key=str(job.request_id),
-        payload={
-            "job_id": str(job.id),
-            "request_id": str(job.request_id),
-            "status": "failed",
-            "error_code": code,
-            "error_message": message,
-        },
-        headers={"trace_id": job.trace_id},
-    )
+        _enqueue_terminal_event(job)
 
 
 def execute_job(job: Job) -> dict:

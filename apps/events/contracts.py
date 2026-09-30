@@ -130,3 +130,21 @@ def transport_headers(envelope: EventEnvelope, headers: dict[str, Any] | None = 
         "causation_id": envelope.causation_id,
     }
     return {**{str(key): str(value) for key, value in (headers or {}).items()}, **base}
+
+
+def validate_transport_headers(envelope: EventEnvelope, headers: dict[str, str]) -> None:
+    """Reject a record whose searchable headers disagree with its value envelope."""
+    expected = {
+        "event_id": envelope.event_id,
+        "event_type": envelope.event_type,
+        "schema_version": str(envelope.schema_version),
+        "request_id": envelope.request_id,
+        "trace_id": envelope.trace_id,
+        "causation_id": envelope.causation_id,
+    }
+    missing = [name for name in expected if name not in headers]
+    if missing:
+        raise EventContractError(f"Kafka event is missing required transport headers: {missing}")
+    mismatched = [name for name, value in expected.items() if headers[name] != value]
+    if mismatched:
+        raise EventContractError(f"Kafka event transport headers disagree with envelope: {mismatched}")

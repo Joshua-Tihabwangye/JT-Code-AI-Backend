@@ -11,7 +11,13 @@ from django.utils import timezone
 
 from apps.core.context import request_id_var, trace_id_var
 from apps.events.consumers import dead_letter_event, process_event, register_handler
-from apps.events.contracts import EventContractError, build_envelope, parse_envelope
+from apps.events.contracts import (
+    EventContractError,
+    build_envelope,
+    parse_envelope,
+    transport_headers,
+    validate_transport_headers,
+)
 from apps.events.models import ConsumedEvent, DeadLetterEvent, OutboxEvent
 from apps.events.outbox import add_outbox_event, enqueue_outbox_event
 from apps.events.tasks import publish_outbox_batch
@@ -52,6 +58,35 @@ def test_invalid_or_unknown_event_contract_is_rejected():
                 "trace_id": "",
             }
         )
+    valid = {
+        "event_id": str(uuid.uuid4()),
+        "event_type": "jobs.job.created",
+        "schema_version": 1,
+        "occurred_at": timezone.now().isoformat(),
+        "data": {},
+        "request_id": "",
+        "trace_id": "",
+    }
+    with pytest.raises(EventContractError):
+        parse_envelope({**valid, "schema_version": True})
+    with pytest.raises(EventContractError):
+        parse_envelope({**valid, "occurred_at": timezone.now().replace(tzinfo=None).isoformat()})
+
+
+def test_transport_headers_preserve_and_validate_canonical_metadata():
+    envelope = build_envelope(
+        event_id=str(uuid.uuid4()),
+        event_type="jobs.job.created",
+        payload={},
+        headers={"event_type": "forged", "request_id": "request-6"},
+    )
+    headers = transport_headers(envelope, {"event_type": "forged", "custom": "value"})
+
+    assert headers["event_type"] == "jobs.job.created"
+    assert headers["custom"] == "value"
+    validate_transport_headers(envelope, headers)
+    with pytest.raises(EventContractError):
+        validate_transport_headers(envelope, {**headers, "trace_id": "forged"})
 
 
 @pytest.mark.django_db

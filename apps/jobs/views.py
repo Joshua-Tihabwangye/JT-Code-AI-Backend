@@ -120,6 +120,7 @@ class JobViewSet(viewsets.ModelViewSet):
             current_app.control.revoke(job.celery_task_id, terminate=False)
         return Response(JobSerializer(job, context={"request": request}).data)
 
+    @transaction.atomic
     @action(detail=True, methods=["post"])
     def retry(self, request: Request, id=None):
         job = self.get_object()
@@ -246,6 +247,7 @@ class ResearchJobsView(APIView):
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [ResearchThrottle, BurstThrottle]
 
+    @transaction.atomic
     def post(self, request: Request) -> Response:
         query = (request.data.get("query") or "").strip()
         if not query:
