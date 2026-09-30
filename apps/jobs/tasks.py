@@ -73,10 +73,10 @@ def execute_job_task(self, job_id: str) -> dict:
 
 @shared_task
 def recover_stalled_jobs() -> int:
-    """Requeue native jobs left running by a lost worker after a safe grace period."""
+    """Requeue any job left running by a lost worker after a safe grace period."""
     from django.conf import settings
 
-    from apps.jobs.dispatch import NATIVE_TASK_TYPES, queue_for_task_type
+    from apps.jobs.dispatch import queue_for_task_type
     from apps.jobs.models import Job
 
     cutoff = timezone.now() - timedelta(seconds=settings.JOB_STALLED_TIMEOUT_SECONDS)
@@ -85,7 +85,6 @@ def recover_stalled_jobs() -> int:
         status=Job.Status.RUNNING,
         started_at__lt=cutoff,
         cancel_requested_at__isnull=True,
-        task_type__in=NATIVE_TASK_TYPES,
     ).iterator()
     for job in stalled_jobs:
         queue_name = queue_for_task_type(job.task_type)
@@ -99,13 +98,41 @@ def recover_stalled_jobs() -> int:
             queue_name=queue_name,
             error_code="WORKER_RECOVERY",
             error_message="Recovered after worker heartbeat timeout.",
+            celery_task_id="",
         )
         if not updated:
             continue
-        result = execute_job_task.apply_async(args=[str(job.id)], queue=queue_name)
-        Job.objects.filter(id=job.id, status=Job.Status.QUEUED).update(celery_task_id=result.id)
+        try:
+            result = execute_job_task.apply_async(args=[str(job.id)], queue=queue_name)
+        except Exception:  # dispatch_queued_jobs retries durable work on the next beat tick
+            continue
+        Job.objects.filter(id=job.id, status=Job.Status.QUEUED, celery_task_id="").update(
+            celery_task_id=result.id
+        )
         recovered += 1
     return recovered
+
+
+@shared_task
+def dispatch_queued_jobs() -> int:
+    """Republish jobs whose initial broker publication failed after DB commit."""
+    from apps.jobs.dispatch import _dispatch_job, queue_for_task_type
+    from apps.jobs.models import Job
+
+    dispatched = 0
+    jobs = Job.objects.filter(
+        status=Job.Status.QUEUED,
+        celery_task_id="",
+        cancel_requested_at__isnull=True,
+    ).order_by("created_at")[:100]
+    for job in jobs:
+        queue_name = queue_for_task_type(job.task_type)
+        Job.objects.filter(id=job.id, status=Job.Status.QUEUED, celery_task_id="").update(
+            queue_name=queue_name
+        )
+        if _dispatch_job(str(job.id), queue_name):
+            dispatched += 1
+    return dispatched
 
 
 @shared_task
@@ -149,6 +176,9 @@ def check_job_deadlines():
         job.error_message = "Job deadline exceeded"
         job.save(update_fields=["status", "completed_at", "error_message"])
 
+        from apps.jobs.callbacks import create_terminal_callback
+
+        create_terminal_callback(job)
         enqueue_outbox_event(
             topic="jobs.job.expired",
             event_key=str(job.request_id),

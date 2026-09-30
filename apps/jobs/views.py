@@ -124,6 +124,9 @@ class JobViewSet(viewsets.ModelViewSet):
             payload={"job_id": str(job.id), "request_id": str(job.request_id)},
             headers={"trace_id": job.trace_id},
         )
+        from apps.jobs.callbacks import create_terminal_callback
+
+        create_terminal_callback(job)
 
         return Response(JobSerializer(job, context={"request": request}).data)
 
@@ -305,6 +308,10 @@ class JobStatusCallbackView(APIView):
             )
 
         # Enqueue completion event
+        if job.status in [Job.Status.COMPLETED, Job.Status.FAILED, Job.Status.CANCELLED]:
+            from apps.jobs.callbacks import create_terminal_callback
+
+            create_terminal_callback(job)
         enqueue_outbox_event(
             topic=f"jobs.job.{data['status']}",
             event_key=str(job.request_id),

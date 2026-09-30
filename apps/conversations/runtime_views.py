@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-import time
 
+import sentry_sdk
+from asgiref.sync import sync_to_async
+from celery import current_app
+from django.conf import settings
 from django.db import IntegrityError, close_old_connections, transaction
 from django.http import StreamingHttpResponse
 from django.utils import timezone
@@ -60,6 +64,21 @@ def _request_fingerprint(conversation: Conversation, content: str, timezone_name
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+
+def _dispatch_chat_request(chat_request_id: str) -> None:
+    """Enqueue after commit and retain the broker task id for cancellation/audit."""
+    try:
+        result = process_chat_request.delay(chat_request_id)
+    except Exception as exc:  # noqa: BLE001 - beat will retry a safely persisted request
+        sentry_sdk.capture_exception(exc)
+        return
+    task_id = getattr(result, "id", "")
+    if task_id:
+        ChatRequest.objects.filter(
+            id=chat_request_id, status=ChatRequest.Status.QUEUED
+        ).update(celery_task_id=task_id)
+
+
 def create_chat_request(
     *,
     request: Request,
@@ -101,7 +120,7 @@ def create_chat_request(
                 },
                 headers={"request_id": getattr(request, "request_id", "")},
             )
-            transaction.on_commit(lambda: process_chat_request.delay(str(chat_request.id)))
+            transaction.on_commit(lambda request_id=str(chat_request.id): _dispatch_chat_request(request_id))
     except IntegrityError:
         chat_request = ChatRequest.objects.get(
             organization=conversation.organization,
@@ -299,48 +318,112 @@ class ChatRequestRuntimeViewSet(
             response["Idempotency-Replayed"] = "true"
         return response
 
+    @action(detail=True, methods=["post"])
+    def cancel(self, request: Request, pk=None) -> Response:
+        """Cancel queued/running chat work without exposing broker ids to clients."""
+        item = self.get_object()
+        with transaction.atomic():
+            item = ChatRequest.objects.select_for_update().get(id=item.id)
+            if item.status not in {
+                ChatRequest.Status.COMPLETED,
+                ChatRequest.Status.FAILED,
+                ChatRequest.Status.CANCELLED,
+            }:
+                item.cancel_requested_at = timezone.now()
+                item.status = ChatRequest.Status.CANCELLED
+                item.error_code = ""
+                item.error_message = ""
+                item.completed_at = item.completed_at or timezone.now()
+                item.save(
+                    update_fields=(
+                        "cancel_requested_at",
+                        "status",
+                        "error_code",
+                        "error_message",
+                        "completed_at",
+                        "updated_at",
+                    )
+                )
+                add_outbox_event(
+                    "chat.request.cancelled",
+                    str(item.id),
+                    {
+                        "requestId": str(item.id),
+                        "conversationId": str(item.conversation_id),
+                        "userId": str(item.owner_id),
+                        "traceId": item.trace_id,
+                        "status": item.status,
+                    },
+                )
+                if item.celery_task_id:
+                    transaction.on_commit(
+                        lambda task_id=item.celery_task_id: current_app.control.revoke(task_id)
+                    )
+        return Response(self.get_serializer(item).data)
+
     @action(detail=True, methods=["get"])
     def stream(self, request: Request, pk=None) -> StreamingHttpResponse:
         item = self.get_object()
         request_id = str(item.id)
+        last_event_id = request.headers.get("Last-Event-ID", "")
 
-        def event_stream():
-            last_status = None
-            started = time.monotonic()
-            while time.monotonic() - started < 90:
+        def load_state():
+            """Run ORM work in Django's sync DB lane; close connections per SSE poll."""
+            try:
                 close_old_connections()
                 current = tenant_scoped_queryset(
                     ChatRequest.objects.filter(id=request_id), request.user
                 ).first()
                 if current is None:
+                    return None
+                event_id = f"{current.updated_at.timestamp():.6f}:{current.status}"
+                return current, event_id
+            finally:
+                close_old_connections()
+
+        async def event_stream():
+            """ASGI-safe SSE: no request thread sleeps while a response is pending."""
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(1, settings.CHAT_SSE_MAX_SECONDS)
+            poll_interval = max(0.1, settings.CHAT_SSE_POLL_SECONDS)
+            heartbeat_interval = max(poll_interval, settings.CHAT_SSE_HEARTBEAT_SECONDS)
+            emitted_event_id = last_event_id
+            last_heartbeat = loop.time()
+            while loop.time() < deadline:
+                state = await sync_to_async(load_state, thread_sensitive=True)()
+                if state is None:
                     yield 'event: failed\ndata: {"code":"not_found","message":"Request not found."}\n\n'
                     return
-                if current.status != last_status:
+                current, event_id = state
+                terminal = current.status in {
+                    ChatRequest.Status.COMPLETED,
+                    ChatRequest.Status.FAILED,
+                    ChatRequest.Status.CANCELLED,
+                }
+                if event_id != emitted_event_id:
                     data = ChatRequestSerializer(current).data
                     event = {
                         ChatRequest.Status.COMPLETED: "completed",
                         ChatRequest.Status.FAILED: "failed",
                         ChatRequest.Status.CANCELLED: "cancelled",
                     }.get(current.status, "status")
-                    if event == "failed" and current.error_code == "AI_PROVIDER_NOT_CONFIGURED":
-                        data["message"] = "JT-Code AI provider is not configured."
-                    yield f"event: {event}\ndata: {json.dumps(data)}\n\n"
-                    last_status = current.status
-                if current.status in {
-                    ChatRequest.Status.COMPLETED,
-                    ChatRequest.Status.FAILED,
-                    ChatRequest.Status.CANCELLED,
-                }:
+                    yield f"id: {event_id}\nevent: {event}\ndata: {json.dumps(data)}\n\n"
+                    emitted_event_id = event_id
+                if terminal:
                     return
-                yield "event: heartbeat\ndata: {}\n\n"
-                time.sleep(1)
+                now = loop.time()
+                if now - last_heartbeat >= heartbeat_interval:
+                    yield "event: heartbeat\ndata: {}\n\n"
+                    last_heartbeat = now
+                await asyncio.sleep(min(poll_interval, max(0, deadline - loop.time())))
             yield (
                 'event: timeout\ndata: {"code":"stream_timeout",'
                 '"message":"Streaming window expired; poll the request endpoint."}\n\n'
             )
 
         response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
-        response["Cache-Control"] = "no-cache"
+        response["Cache-Control"] = "no-cache, no-store"
         response["Connection"] = "keep-alive"
         response["X-Accel-Buffering"] = "no"
+        response["X-Content-Type-Options"] = "nosniff"
         return response

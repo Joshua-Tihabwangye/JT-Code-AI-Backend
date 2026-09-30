@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-import pytest
-from django.urls import reverse
+from datetime import timedelta
+from types import SimpleNamespace
 
+import pytest
+from asgiref.sync import async_to_sync
+from django.urls import reverse
+from django.utils import timezone
+
+from apps.ai_gateway.models import ModelRun
 from apps.conversations.models import ChatRequest, Conversation, ConversationFeedback, Message
+from apps.conversations.tasks import (
+    dispatch_queued_chat_requests,
+    process_chat_request,
+    recover_stalled_chat_requests,
+)
 from apps.identity.models import Organization
 
 
@@ -132,7 +143,11 @@ def test_sse_is_authenticated_and_uses_terminal_event(authenticated_client, user
     )
 
     response = authenticated_client.get(reverse("chat-request-stream", kwargs={"pk": request.id}))
-    events = b"".join(response.streaming_content).decode()
+
+    async def consume():
+        return b"".join([chunk async for chunk in response.streaming_content])
+
+    events = async_to_sync(consume)().decode()
 
     assert response.status_code == 200
     assert response["Content-Type"].startswith("text/event-stream")
@@ -161,3 +176,166 @@ def test_phase4_chat_list_accepts_tenant_scoped_status_filter(authenticated_clie
 def test_versioned_openapi_routes_are_public():
     assert reverse("schema-v1") == "/api/v1/schema/"
     assert reverse("swagger-ui-v1") == "/api/v1/docs/"
+
+
+@pytest.mark.django_db
+def test_chat_worker_uses_governed_gateway_and_records_auditable_result(user, conversation):
+    request = ChatRequest.objects.create(
+        owner=user,
+        organization=conversation.organization,
+        conversation=conversation,
+        idempotency_key="phase4-worker-success",
+        request_fingerprint="d" * 64,
+        input_text="hello",
+        trace_id="phase4-worker",
+    )
+    Message.objects.create(
+        conversation=conversation,
+        organization=conversation.organization,
+        role=Message.Role.USER,
+        content="hello",
+    )
+
+    result = process_chat_request.delay(str(request.id)).get()
+
+    request.refresh_from_db()
+    assert result["status"] == "completed"
+    assert request.status == ChatRequest.Status.COMPLETED
+    assert request.model_run_id is not None
+    assert request.model_run.status == ModelRun.Status.COMPLETED
+    assert request.provider_name
+    assert request.model_name
+    assert Message.objects.filter(conversation=conversation, role=Message.Role.ASSISTANT).exists()
+
+
+@pytest.mark.django_db
+def test_chat_worker_surfaces_permanent_gateway_failure_without_retry(
+    user, conversation, settings
+):
+    settings.AI_PROVIDER = "disabled"
+    request = ChatRequest.objects.create(
+        owner=user,
+        organization=conversation.organization,
+        conversation=conversation,
+        idempotency_key="phase4-worker-failure",
+        request_fingerprint="e" * 64,
+        input_text="hello",
+        trace_id="phase4-worker-failure",
+    )
+    Message.objects.create(
+        conversation=conversation,
+        organization=conversation.organization,
+        role=Message.Role.USER,
+        content="hello",
+    )
+
+    result = process_chat_request.delay(str(request.id)).get()
+
+    request.refresh_from_db()
+    assert result == {"status": "failed", "error_code": "AI_PROVIDER_NOT_CONFIGURED"}
+    assert request.status == ChatRequest.Status.FAILED
+    assert request.retry_count == 0
+    assert request.model_run_id is not None
+    assert request.model_run.status == ModelRun.Status.FAILED
+
+
+@pytest.mark.django_db
+def test_chat_cancellation_is_tenant_scoped_and_revokes_known_task(
+    authenticated_client, user, conversation, monkeypatch, django_capture_on_commit_callbacks
+):
+    request = ChatRequest.objects.create(
+        owner=user,
+        organization=conversation.organization,
+        conversation=conversation,
+        idempotency_key="phase4-cancel",
+        request_fingerprint="f" * 64,
+        input_text="hello",
+        trace_id="phase4-cancel",
+        celery_task_id="broker-task-id",
+    )
+    revoked = []
+    monkeypatch.setattr(
+        "apps.conversations.runtime_views.current_app.control.revoke",
+        lambda task_id: revoked.append(task_id),
+    )
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = authenticated_client.post(reverse("chat-request-cancel", kwargs={"pk": request.id}))
+
+    request.refresh_from_db()
+    assert response.status_code == 200, response.content
+    assert request.status == ChatRequest.Status.CANCELLED
+    assert request.cancel_requested_at is not None
+    assert revoked == ["broker-task-id"]
+
+
+@pytest.mark.django_db
+def test_stalled_chat_recovery_requeues_only_stale_non_cancelled_work(
+    user, conversation, monkeypatch, settings
+):
+    settings.CHAT_REQUEST_STALLED_TIMEOUT_SECONDS = 30
+    stale = ChatRequest.objects.create(
+        owner=user,
+        organization=conversation.organization,
+        conversation=conversation,
+        idempotency_key="phase4-recover-stale",
+        request_fingerprint="g" * 64,
+        input_text="hello",
+        trace_id="phase4-recover",
+        status=ChatRequest.Status.RUNNING,
+        started_at=timezone.now() - timedelta(minutes=2),
+    )
+    cancelled = ChatRequest.objects.create(
+        owner=user,
+        organization=conversation.organization,
+        conversation=conversation,
+        idempotency_key="phase4-recover-cancelled",
+        request_fingerprint="h" * 64,
+        input_text="hello",
+        trace_id="phase4-recover-cancelled",
+        status=ChatRequest.Status.RUNNING,
+        started_at=timezone.now() - timedelta(minutes=2),
+        cancel_requested_at=timezone.now(),
+    )
+    monkeypatch.setattr(
+        "apps.conversations.tasks.process_chat_request.apply_async",
+        lambda **_: SimpleNamespace(id="recovered-task"),
+    )
+
+    assert recover_stalled_chat_requests() == 1
+    stale.refresh_from_db()
+    cancelled.refresh_from_db()
+    assert stale.status == ChatRequest.Status.QUEUED
+    assert stale.celery_task_id == "recovered-task"
+    assert stale.error_code == "WORKER_RECOVERY"
+    assert cancelled.status == ChatRequest.Status.RUNNING
+
+
+@pytest.mark.django_db
+def test_broker_outage_keeps_chat_request_durable_until_periodic_dispatch(
+    authenticated_client, conversation, monkeypatch, django_capture_on_commit_callbacks
+):
+    monkeypatch.setattr(
+        "apps.conversations.runtime_views.process_chat_request.delay",
+        lambda *_: (_ for _ in ()).throw(ConnectionError("broker unavailable")),
+    )
+    with django_capture_on_commit_callbacks(execute=True):
+        response = authenticated_client.post(
+            reverse("conversation-messages", kwargs={"pk": conversation.id}),
+            {"content": "recover after broker outage"},
+            HTTP_IDEMPOTENCY_KEY="phase4-broker-outage",
+        )
+
+    request = ChatRequest.objects.get(id=response.json()["id"])
+    assert response.status_code == 202, response.content
+    assert request.status == ChatRequest.Status.QUEUED
+    assert request.celery_task_id == ""
+
+    monkeypatch.setattr(
+        "apps.conversations.tasks.process_chat_request.apply_async",
+        lambda **_: SimpleNamespace(id="recovered-publish-task"),
+    )
+    assert dispatch_queued_chat_requests() == 1
+
+    request.refresh_from_db()
+    assert request.celery_task_id == "recovered-publish-task"

@@ -70,9 +70,26 @@ class ChatRequest(models.Model):
     output_text = models.TextField(blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED)
     error_code = models.CharField(max_length=100, blank=True)
+    error_message = models.TextField(blank=True)
     trace_id = models.CharField(max_length=100, db_index=True)
     locale = models.CharField(max_length=32, blank=True)
     timezone = models.CharField(max_length=100, blank=True)
+    celery_task_id = models.CharField(max_length=255, blank=True, db_index=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    max_retries = models.PositiveIntegerField(default=3)
+    last_retry_at = models.DateTimeField(null=True, blank=True)
+    cancel_requested_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    provider_name = models.CharField(max_length=100, blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    model_run = models.ForeignKey(
+        "ai_gateway.ModelRun",
+        on_delete=models.SET_NULL,
+        related_name="chat_requests",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -86,6 +103,7 @@ class ChatRequest(models.Model):
         indexes = [
             models.Index(fields=("owner", "-created_at")),
             models.Index(fields=("status", "-created_at")),
+            models.Index(fields=("celery_task_id",)),
         ]
 
     def __str__(self):

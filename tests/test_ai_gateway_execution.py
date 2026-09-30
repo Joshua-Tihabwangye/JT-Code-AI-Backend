@@ -226,7 +226,7 @@ def test_execute_general_question_job_fails(user, org, credit_balance):
 
 
 @pytest.mark.django_db
-def test_execute_non_native_task_type_is_skipped(user, org):
+def test_execute_unsupported_task_type_fails_terminally(user, org):
     job = _make_job(
         user,
         org,
@@ -235,12 +235,12 @@ def test_execute_non_native_task_type_is_skipped(user, org):
     )
     result = execute_job(job)
     assert result == {
-        "skipped": True,
+        "status": "failed",
         "task_type": Job.TaskType.IMAGE_GENERATION,
-        "reason": "no_native_handler",
+        "error_code": "UNSUPPORTED_TASK_TYPE",
     }
     job.refresh_from_db()
-    assert job.status == Job.Status.QUEUED
+    assert job.status == Job.Status.FAILED
 
 
 # --- Completion API ---

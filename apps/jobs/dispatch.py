@@ -16,6 +16,7 @@ DEFAULT_QUEUE = "jobs.default"
 NATIVE_TASK_TYPES = frozenset(
     {
         Job.TaskType.GENERAL_QUESTION,
+        Job.TaskType.KNOWLEDGE_INGESTION,
         Job.TaskType.RAG_QUERY,
         Job.TaskType.SEARCH_RESEARCH,
     }
@@ -72,17 +73,24 @@ def enqueue_job(job: Job) -> None:
         },
         headers={"trace_id": job.trace_id, "request_id": str(job.request_id)},
     )
-    if is_native_job(job):
-        def dispatch() -> None:
-            _dispatch_native_job(str(job.id), queue_name)
-        if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
-            dispatch()
-        else:
-            transaction.on_commit(dispatch)
+    # Every accepted generic Job must reach a terminal state. The worker runs
+    # supported handlers and explicitly fails unsupported types; no job is
+    # left indefinitely queued awaiting an undocumented external consumer.
+    def dispatch() -> None:
+        _dispatch_job(str(job.id), queue_name)
+
+    if getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        dispatch()
+    else:
+        transaction.on_commit(dispatch)
 
 
-def _dispatch_native_job(job_id: str, queue_name: str) -> None:
+def _dispatch_job(job_id: str, queue_name: str) -> bool:
     from apps.jobs.tasks import execute_job_task
 
-    result = execute_job_task.apply_async(args=[job_id], queue=queue_name)
-    Job.objects.filter(id=job_id).update(celery_task_id=result.id)
+    try:
+        result = execute_job_task.apply_async(args=[job_id], queue=queue_name)
+    except Exception:  # broker publication is recovered by dispatch_queued_jobs
+        return False
+    Job.objects.filter(id=job_id, status=Job.Status.QUEUED).update(celery_task_id=result.id)
+    return True

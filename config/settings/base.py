@@ -178,6 +178,10 @@ REDIS_URL = ""
 CELERY_BROKER_URL = ""
 CELERY_RESULT_BACKEND = ""
 JOB_STALLED_TIMEOUT_SECONDS = int(env("JOB_STALLED_TIMEOUT_SECONDS", "660"))
+CHAT_REQUEST_STALLED_TIMEOUT_SECONDS = int(env("CHAT_REQUEST_STALLED_TIMEOUT_SECONDS", "660"))
+CHAT_MAX_CONTEXT_MESSAGES = int(env("CHAT_MAX_CONTEXT_MESSAGES", "40"))
+CHAT_SSE_HEARTBEAT_SECONDS = float(env("CHAT_SSE_HEARTBEAT_SECONDS", "15"))
+CHAT_SSE_MAX_SECONDS = int(env("CHAT_SSE_MAX_SECONDS", "300"))
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TRACK_STARTED = True
@@ -207,6 +211,18 @@ CELERY_BEAT_SCHEDULE = {
     },
     "recover-stalled-jobs": {
         "task": "apps.jobs.tasks.recover_stalled_jobs",
+    "dispatch-queued-jobs": {
+        "task": "apps.jobs.tasks.dispatch_queued_jobs",
+        "schedule": 30.0,
+    },
+        "schedule": 60.0,
+    },
+    "recover-stalled-chat-requests": {
+        "task": "apps.conversations.tasks.recover_stalled_chat_requests",
+    "dispatch-queued-chat-requests": {
+        "task": "apps.conversations.tasks.dispatch_queued_chat_requests",
+        "schedule": 30.0,
+    },
         "schedule": 60.0,
     },
     "expire-old-jobs": {
@@ -232,6 +248,7 @@ CELERY_TASK_ROUTES = {
     "apps.knowledge.tasks.*": {"queue": "jobs.ingestion"},
     "apps.documents.*": {"queue": "jobs.visualization"},
     "apps.conversions.*": {"queue": "jobs.visualization"},
+    "apps.conversations.tasks.*": {"queue": "jobs.analysis"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -373,3 +390,4 @@ if SENTRY_DSN:
 
 if os.getenv("DJANGO_SETTINGS_MODULE") == "config.settings.base":
     raise ImproperlyConfigured("config.settings.base is shared settings, not a deployable profile.")
+CHAT_SSE_POLL_SECONDS = float(env("CHAT_SSE_POLL_SECONDS", "1"))

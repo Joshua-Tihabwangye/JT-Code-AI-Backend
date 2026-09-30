@@ -16,10 +16,10 @@ from apps.jobs.dispatch import (
     enqueue_job,
     queue_for_task_type,
 )
-from apps.jobs.executor import _mark_started, execute_job
+from apps.jobs.executor import HANDLERS, _mark_started, execute_job
 from apps.jobs.metrics import queue_depths
-from apps.jobs.models import Job, JobStep, WorkflowRun
-from apps.jobs.tasks import execute_job_task, recover_stalled_jobs, retry_delay_seconds
+from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
+from apps.jobs.tasks import dispatch_queued_jobs, execute_job_task, recover_stalled_jobs, retry_delay_seconds
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def make_job(user, org, task_type=Job.TaskType.GENERAL_QUESTION, **kwargs):
         organization=org,
         task_type=task_type,
         trace_id="phase5-test",
-        input_payload={"prompt": "test"},
+        input_payload=kwargs.pop("input_payload", {"prompt": "test"}),
         **kwargs,
     )
 
@@ -92,7 +92,7 @@ def test_running_job_is_idempotently_claimed_once(user, org):
 
 @pytest.mark.django_db
 @pytest.mark.django_db
-def test_recovery_requeues_only_stale_native_jobs(user, org, monkeypatch, settings):
+def test_recovery_requeues_all_stale_jobs(user, org, monkeypatch, settings):
     settings.JOB_STALLED_TIMEOUT_SECONDS = 60
     job = make_job(
         user,
@@ -117,15 +117,19 @@ def test_recovery_requeues_only_stale_native_jobs(user, org, monkeypatch, settin
 
     monkeypatch.setattr("apps.jobs.tasks.execute_job_task.apply_async", fake_apply_async)
 
-    assert recover_stalled_jobs() == 1
+    assert recover_stalled_jobs() == 2
 
     job.refresh_from_db()
     external_job.refresh_from_db()
     assert job.status == Job.Status.QUEUED
     assert job.celery_task_id == "recovered-task"
     assert job.error_code == "WORKER_RECOVERY"
-    assert external_job.status == Job.Status.RUNNING
-    assert calls == [{"args": [str(job.id)], "queue": ANALYSIS_QUEUE}]
+    assert external_job.status == Job.Status.QUEUED
+    assert external_job.celery_task_id == "recovered-task"
+    assert {(call["args"][0], call["queue"]) for call in calls} == {
+        (str(job.id), ANALYSIS_QUEUE),
+        (str(external_job.id), VISUALIZATION_QUEUE),
+    }
 
 
 @pytest.mark.django_db
@@ -205,3 +209,70 @@ def test_redis_namespaces_and_worker_safety_settings_are_configured():
     assert settings.CELERY_TASK_ACKS_LATE is True
     assert settings.CELERY_TASK_REJECT_ON_WORKER_LOST is True
     assert settings.CELERY_WORKER_PREFETCH_MULTIPLIER == 1
+
+
+@pytest.mark.django_db
+def test_queued_job_is_republished_after_initial_broker_outage(user, org, monkeypatch):
+    job = make_job(user, org, celery_task_id="")
+    dispatched = []
+
+    def fake_apply_async(*, args, queue):
+        dispatched.append({"args": args, "queue": queue})
+        return SimpleNamespace(id="recovered-publish-task")
+
+    monkeypatch.setattr("apps.jobs.tasks.execute_job_task.apply_async", fake_apply_async)
+
+    assert dispatch_queued_jobs() == 1
+    job.refresh_from_db()
+    assert job.celery_task_id == "recovered-publish-task"
+    assert dispatched == [{"args": [str(job.id)], "queue": ANALYSIS_QUEUE}]
+
+
+@pytest.mark.django_db
+def test_workflow_run_tracks_native_job_terminal_state(user, org, monkeypatch):
+    job = make_job(
+        user,
+        org,
+        input_payload={"messages": [{"role": "user", "content": "hello"}]},
+    )
+    workflow = WorkflowRun.objects.create(
+        job=job, n8n_workflow_id="general_question", input_payload=job.input_payload
+    )
+    monkeypatch.setitem(
+        HANDLERS,
+        Job.TaskType.GENERAL_QUESTION,
+        lambda _job: {"answer": "hello"},
+    )
+
+    assert execute_job(job)["status"] == "completed"
+    workflow.refresh_from_db()
+    assert workflow.status == WorkflowRun.Status.COMPLETED
+    assert workflow.progress_percent == 100
+
+
+@pytest.mark.django_db
+def test_terminal_job_creates_one_durable_callback(user, org, monkeypatch):
+    job = make_job(
+        user,
+        org,
+        callback_url="https://callbacks.example.test/job-finished",
+        input_payload={"messages": [{"role": "user", "content": "hello"}]},
+    )
+    monkeypatch.setitem(
+        HANDLERS,
+        Job.TaskType.GENERAL_QUESTION,
+        lambda _job: {"answer": "hello"},
+    )
+
+    assert execute_job(job)["status"] == "completed"
+    callback = Callback.objects.get(job=job)
+    assert callback.status == Callback.Status.PENDING
+    assert callback.payload["event"] == "jobs.job.completed"
+    assert callback.payload["job_id"] == str(job.id)
+    assert callback.next_retry_at is not None
+
+    from apps.jobs.callbacks import create_terminal_callback
+
+    job.refresh_from_db()
+    assert create_terminal_callback(job).id == callback.id
+    assert Callback.objects.filter(job=job).count() == 1

@@ -47,7 +47,16 @@ class ChatRequestSerializer(serializers.ModelSerializer):
     inputText = serializers.CharField(source="input_text", read_only=True)
     outputText = serializers.CharField(source="output_text", read_only=True)
     errorCode = serializers.CharField(source="error_code", read_only=True)
+    errorMessage = serializers.CharField(source="error_message", read_only=True)
     traceId = serializers.CharField(source="trace_id", read_only=True)
+    retryCount = serializers.IntegerField(source="retry_count", read_only=True)
+    maxRetries = serializers.IntegerField(source="max_retries", read_only=True)
+    cancelRequestedAt = serializers.DateTimeField(source="cancel_requested_at", read_only=True)
+    startedAt = serializers.DateTimeField(source="started_at", read_only=True)
+    completedAt = serializers.DateTimeField(source="completed_at", read_only=True)
+    providerName = serializers.CharField(source="provider_name", read_only=True)
+    modelName = serializers.CharField(source="model_name", read_only=True)
+    modelRunId = serializers.UUIDField(source="model_run_id", read_only=True, allow_null=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
 
@@ -61,7 +70,16 @@ class ChatRequestSerializer(serializers.ModelSerializer):
             "inputText",
             "outputText",
             "errorCode",
+            "errorMessage",
             "traceId",
+            "retryCount",
+            "maxRetries",
+            "cancelRequestedAt",
+            "startedAt",
+            "completedAt",
+            "providerName",
+            "modelName",
+            "modelRunId",
             "createdAt",
             "updatedAt",
         )

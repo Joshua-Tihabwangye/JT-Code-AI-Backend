@@ -187,6 +187,7 @@ class WorkflowRun(models.Model):
 class Callback(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
+        DELIVERING = "delivering", "Delivering"
         DELIVERED = "delivered", "Delivered"
         FAILED = "failed", "Failed"
         EXPIRED = "expired", "Expired"
@@ -199,6 +200,8 @@ class Callback(models.Model):
     attempts = models.PositiveIntegerField(default=0)
     max_attempts = models.PositiveIntegerField(default=5)
     last_attempt_at = models.DateTimeField(null=True, blank=True)
+    delivery_started_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
     last_error = models.TextField(blank=True)
     response_status = models.PositiveIntegerField(null=True, blank=True)
     response_body = models.TextField(blank=True)
@@ -212,6 +215,9 @@ class Callback(models.Model):
         indexes = [
             models.Index(fields=("status", "next_retry_at")),
             models.Index(fields=("job",)),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=("job", "url"), name="uniq_callback_per_job_url"),
         ]
 
     def __str__(self):

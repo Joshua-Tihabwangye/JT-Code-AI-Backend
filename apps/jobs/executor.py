@@ -17,7 +17,7 @@ from django.utils import timezone
 from apps.ai_gateway.adapters import AIGatewayError, ChatMessage
 from apps.ai_gateway.service import generate_completion
 from apps.events.outbox import enqueue_outbox_event
-from apps.jobs.models import Job, JobStep
+from apps.jobs.models import Job, JobStep, WorkflowRun
 
 _RAG_SYSTEM_PROMPT = (
     "You are JT-Code's grounded research assistant. Answer using ONLY the "
@@ -121,6 +121,36 @@ def _search_research(job: Job) -> dict:
         },
     }
 
+def _knowledge_ingestion(job: Job) -> dict:
+    """Run an existing tenant-owned knowledge document through its indexer."""
+    from apps.knowledge.models import Document
+    from apps.knowledge.tasks import process_document
+
+    document_id = job.input_payload.get("document_id")
+    if not document_id:
+        raise AIGatewayError("document_id is required", code="INVALID_INPUT")
+    document = (
+        Document.objects.select_related("collection")
+        .filter(id=document_id, collection__organization_id=job.organization_id)
+        .first()
+    )
+    if document is None:
+        raise AIGatewayError("Knowledge document not found", code="KNOWLEDGE_DOCUMENT_NOT_FOUND")
+    process_document.run(str(document.id))
+    document.refresh_from_db()
+    if document.status != Document.Status.INDEXED:
+        raise AIGatewayError(
+            document.last_error or "Knowledge document indexing failed",
+            code="KNOWLEDGE_INGESTION_FAILED",
+        )
+    return {
+        "document_id": str(document.id),
+        "chunk_count": document.chunk_count,
+        "vectors_stored": bool(document.vector_ids),
+    }
+
+
+
 
 def _serialize_agent_messages(messages) -> list[dict]:
     from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -208,6 +238,7 @@ def _search_knowledge(*, query_vector: list[float], organization_id, top_k: int 
 HANDLERS = {
     Job.TaskType.GENERAL_QUESTION: _general_question,
     Job.TaskType.RAG_QUERY: _rag_query,
+    Job.TaskType.KNOWLEDGE_INGESTION: _knowledge_ingestion,
     Job.TaskType.SEARCH_RESEARCH: _search_research,
 }
 
@@ -221,6 +252,11 @@ def _mark_started(job: Job) -> JobStep:
     job.status = Job.Status.RUNNING
     job.started_at = timezone.now()
     job.progress_percent = max(job.progress_percent, 5)
+    from apps.jobs.models import WorkflowRun
+
+    WorkflowRun.objects.filter(job=job).update(
+        status=WorkflowRun.Status.RUNNING, started_at=job.started_at, progress_percent=job.progress_percent
+    )
     job.save(update_fields=["status", "started_at", "progress_percent", "updated_at"])
     active_step = job.steps.filter(status=JobStep.Status.RUNNING).order_by("-step_order").first()
     if active_step:
@@ -240,10 +276,22 @@ def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
     usage = result.get("usage", {})
     with transaction.atomic():
         job.status = Job.Status.COMPLETED
+        job.error_code = ""
+        job.error_message = ""
         job.result = result
         job.completed_at = timezone.now()
         job.progress_percent = 100
-        job.save(update_fields=["status", "result", "completed_at", "progress_percent", "updated_at"])
+        job.save(
+            update_fields=[
+                "status",
+                "error_code",
+                "error_message",
+                "result",
+                "completed_at",
+                "progress_percent",
+                "updated_at",
+            ]
+        )
         step.status = JobStep.Status.COMPLETED
         step.output_payload = result
         step.provider = usage.get("provider", "")
@@ -265,6 +313,15 @@ def _finalize_success(job: Job, step: JobStep, result: dict) -> None:
                 "updated_at",
             ]
         )
+        WorkflowRun.objects.filter(job=job).update(
+            status=WorkflowRun.Status.COMPLETED,
+            output_payload=result,
+            progress_percent=100,
+            completed_at=job.completed_at,
+        )
+        from apps.jobs.callbacks import create_terminal_callback
+
+        create_terminal_callback(job)
     enqueue_outbox_event(
         topic="jobs.job.completed",
         event_key=str(job.request_id),
@@ -289,6 +346,14 @@ def _finalize_failure(job: Job, step: JobStep, code: str, message: str) -> None:
         step.error_message = message
         step.completed_at = timezone.now()
         step.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+        WorkflowRun.objects.filter(job=job).update(
+            status=WorkflowRun.Status.FAILED,
+            error_message=message,
+            completed_at=job.completed_at,
+        )
+        from apps.jobs.callbacks import create_terminal_callback
+
+        create_terminal_callback(job)
     enqueue_outbox_event(
         topic="jobs.job.failed",
         event_key=str(job.request_id),
@@ -314,9 +379,13 @@ def execute_job(job: Job) -> dict:
         if job.status == Job.Status.RUNNING:
             return {"status": "running", "task_type": job.task_type, "idempotent": True}
         handler = HANDLERS.get(job.task_type)
-        if handler is None:
-            return {"skipped": True, "task_type": job.task_type, "reason": "no_native_handler"}
         step = _mark_started(job)
+        if handler is None:
+            code = "UNSUPPORTED_TASK_TYPE"
+            _finalize_failure(
+                job, step, code=code, message="No worker handler is configured for this task type."
+            )
+            return {"status": "failed", "task_type": job.task_type, "error_code": code}
     try:
         result = handler(job)
     except (TimeoutError, ConnectionError):
