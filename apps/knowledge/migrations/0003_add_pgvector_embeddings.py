@@ -7,23 +7,23 @@ INDEX_NAME = 'chunk_embedding_hnsw_idx'
 
 
 def enable_pgvector(apps, schema_editor):
-    """Enable the `vector` extension and an HNSW cosine index on PostgreSQL.
-
-    The extension and index are Postgres-only. SQLite test databases never run
-    against pgvector, so the migration is a no-op on every non-PostgreSQL vendor.
-    """
-    connection = schema_editor.connection
-    if connection.vendor != 'postgresql':
+    """Enable the Supabase `vector` extension before any vector column exists."""
+    if schema_editor.connection.vendor != 'postgresql':
         return
     schema_editor.execute('CREATE EXTENSION IF NOT EXISTS vector')
+
+
+def create_embedding_index(apps, schema_editor):
+    """Create the HNSW cosine index once ``knowledge_chunk.embedding`` exists."""
+    if schema_editor.connection.vendor != 'postgresql':
+        return
     schema_editor.execute(
         f'CREATE INDEX IF NOT EXISTS {INDEX_NAME} ON knowledge_chunk USING hnsw (embedding vector_cosine_ops)'
     )
 
 
-def disable_pgvector(apps, schema_editor):
-    connection = schema_editor.connection
-    if connection.vendor != 'postgresql':
+def drop_embedding_index(apps, schema_editor):
+    if schema_editor.connection.vendor != 'postgresql':
         return
     schema_editor.execute(f'DROP INDEX IF EXISTS {INDEX_NAME}')
 
@@ -33,8 +33,9 @@ class Migration(migrations.Migration):
         ('knowledge', '0002_rename_knowledge_chu_documen_abc123_idx_knowledge_c_documen_8e94ec_idx_and_more'),
     ]
 
+    # Order matters on a fresh database: extension -> columns -> index.
     operations = [
-        migrations.RunPython(enable_pgvector, disable_pgvector),
+        migrations.RunPython(enable_pgvector, migrations.RunPython.noop),
         migrations.AddField(
             model_name='chunk',
             name='embedding',
@@ -50,4 +51,5 @@ class Migration(migrations.Migration):
             name='embedding_model',
             field=models.CharField(blank=True, max_length=100),
         ),
+        migrations.RunPython(create_embedding_index, drop_embedding_index),
     ]

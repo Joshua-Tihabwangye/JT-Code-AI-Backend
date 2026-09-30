@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MARKDOWN_HEADING = '#'
+MARKDOWN_HEADING = "#"
 
 
 def estimate_tokens(text: str) -> int:
@@ -32,9 +32,9 @@ class TextChunker:
 
     def __init__(self, *, size: int = 1000, overlap: int = 200) -> None:
         if size <= 0:
-            raise ValueError('chunk size must be positive')
+            raise ValueError("chunk size must be positive")
         if overlap < 0 or overlap >= size:
-            raise ValueError('overlap must be in [0, size)')
+            raise ValueError("overlap must be in [0, size)")
         self.size = size
         self.overlap = overlap
 
@@ -60,8 +60,8 @@ class TextChunker:
         """Generate contiguous, overlapping chunks from ``text``."""
         if not text.strip():
             return []
-        normalized = text.replace('\r\n', '\n').replace('\r', '\n')
-        lines = normalized.split('\n')
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = normalized.split("\n")
         step = self.size - self.overlap
         cursor = 0
         chunks: list[ChunkSpec] = []
@@ -70,7 +70,7 @@ class TextChunker:
             end = self._boundary_end(normalized, cursor)
             raw = normalized[cursor:end]
             if raw.strip():
-                up_to_line = normalized.count('\n', 0, cursor)
+                up_to_line = normalized.count("\n", 0, cursor)
                 chunks.append(
                     ChunkSpec(
                         text=raw,
@@ -110,10 +110,10 @@ class TextChunker:
             return len(text)
         hard_end = min(start + self.size, len(text))
 
-        paragraph_break = text.find('\n\n', soft_min, hard_end)
+        paragraph_break = text.find("\n\n", soft_min, hard_end)
         if paragraph_break != -1:
             return paragraph_break
-        newline = text.rfind('\n', soft_min, hard_end)
+        newline = text.rfind("\n", soft_min, hard_end)
         if newline != -1 and newline > soft_min:
             return newline
         return hard_end

@@ -1,9 +1,9 @@
-from config.settings.local import *  # noqa: F403
+from config.settings.development import *  # noqa: F403,F405
 
 CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'e2e-cache',
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "e2e-cache",
     }
 }
 

@@ -8,14 +8,14 @@ Production-oriented Django boilerplate for JT-Code. This is the backend reposito
 - **Authentication**: Supabase JWT verification and Supabase user webhook
 - **Database**: PostgreSQL (Supabase)
 - **Vector search / RAG**: Supabase pgvector (semantic retrieval with tenant scoping)
-- **Storage**: Cloudinary signed uploads and verified asset registration
+- **Storage**: ImageKit signed uploads and verified asset registration
 - **Caching/Queue**: Redis for Django caching and Celery transport
 - **Background Jobs**: Celery workers + Celery Beat
 - **Event Streaming**: Kafka event bus using `confluent-kafka`
 - **Outbox Pattern**: PostgreSQL transactional outbox for reliable event publishing
 - **Monitoring**: Sentry for Django, Celery, Redis and Kafka error monitoring
 - **API Docs**: OpenAPI/Swagger via drf-spectacular
-- **Development**: Docker Compose, Ruff, MyPy, pytest, GitHub Actions
+- **Development**: managed/local PostgreSQL, Redis and Kafka; Ruff, MyPy, pytest, GitHub Actions
 
 ## Project Structure
 
@@ -56,8 +56,6 @@ jt-code backend/
 ├── manage.py                   # Django management script
 ├── pyproject.toml              # Project metadata & dependencies (Poetry)
 ├── requirements.txt            # Pip-compatible dependencies
-├── Dockerfile
-├── docker-compose.yml
 ├── Makefile                    # Common development commands
 ├── .env.example
 ├── .env
@@ -71,7 +69,7 @@ jt-code backend/
 |-----|---------|------------|
 | `identity` | User auth, Supabase integration | `User` |
 | `conversations` | Chat conversations & messages | `Conversation`, `Message`, `ChatRequest` |
-| `assets` | File uploads via Cloudinary | `Asset` |
+| `assets` | File uploads via ImageKit | `Asset` |
 | `events` | Kafka outbox pattern | `OutboxEvent` |
 | `core` | Shared utilities | Middleware, logging, exceptions |
 
@@ -79,10 +77,9 @@ jt-code backend/
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.14 (pinned in `.python-version`; CI uses the same patch release)
 - Poetry (recommended) or pip
-- Docker & Docker Compose (for PostgreSQL, Redis, Kafka)
-- PostgreSQL 15+ (if not using Docker)
+- PostgreSQL 17+ with pgvector, Redis, and Kafka (managed or locally installed)
 
 ### Local Development
 
@@ -109,8 +106,7 @@ pip install -e '.[dev]'
 python manage.py migrate
 python manage.py createsuperuser
 
-# Start dependencies (PostgreSQL, Redis, Kafka)
-docker compose up -d postgres redis kafka
+# Ensure PostgreSQL with pgvector, Redis, and Kafka are available using your managed or local services.
 
 # Run migrations
 python manage.py migrate
@@ -138,7 +134,7 @@ The API will be available at:
 ```bash
 make help           # Show all available commands
 make setup-dev      # Full development setup
-make start-dev      # Start all services (Docker + Django + Celery)
+make start-dev      # Run migrations after external services are available
 make migrate        # Run migrations
 make run            # Start Django dev server
 make worker         # Start Celery worker
@@ -151,8 +147,6 @@ make typecheck      # Run mypy type checking
 make check          # Run all checks (lint + format + typecheck + test)
 make shell          # Open Django shell
 make createsuperuser # Create admin user
-make compose-up     # Start Docker services
-make compose-down   # Stop Docker services
 make clean          # Remove cache and build artifacts
 ```
 
@@ -169,9 +163,9 @@ See `.env.example` for all available variables. Key variables:
 | `SUPABASE_URL` | Supabase project URL | Yes |
 | `SUPABASE_JWT_SECRET` | Supabase JWT secret for token verification | Yes |
 | `SUPABASE_WEBHOOK_SIGNING_SECRET` | Supabase webhook signing secret | Yes |
-| `CLOUDINARY_CLOUD_NAME` | Cloudinary cloud name | Yes |
-| `CLOUDINARY_API_KEY` | Cloudinary API key | Yes |
-| `CLOUDINARY_API_SECRET` | Cloudinary API secret | Yes |
+| `IMAGEKIT_PUBLIC_KEY` | ImageKit public key for client uploads | Yes |
+| `IMAGEKIT_PRIVATE_KEY` | ImageKit private key for server signing/API verification | Yes |
+| `IMAGEKIT_ENDPOINT_URL` | ImageKit URL endpoint | Yes |
 | `REDIS_URL` | Redis connection URL | Yes |
 | `CELERY_BROKER_URL` | Celery broker URL | Yes |
 | `CELERY_RESULT_BACKEND` | Celery result backend URL | Yes |
@@ -183,6 +177,7 @@ See `.env.example` for all available variables. Key variables:
 | `RAG_EMBEDDING_PROVIDER` | `openai`, `gemini` or `echo` (offline dev/test) | No (default: openai) |
 | `RAG_EMBEDDING_MODEL` | Embedding model name for OpenAI | No |
 | `OPENAI_API_KEY` / `GEMINI_API_KEY` | Embedding provider credential (server-side) | No |
+| `AGENT_MAX_ITERATIONS` | Max model turns per `SEARCH_RESEARCH` agent run | No (default: 6) |
 
 ## Key Features
 
@@ -191,15 +186,29 @@ See `.env.example` for all available variables. Key variables:
 - Webhook handler for user sync at `/api/v1/webhooks/supabase/`
 - Local user mapping created on first authenticated request
 
-### File Uploads (Cloudinary)
-- Signed upload workflow: client requests signature → uploads to Cloudinary → calls completion endpoint
-- Server verifies Cloudinary resource before storing metadata
+### File Uploads (ImageKit)
+- Signed upload workflow: client requests auth parameters → uploads to ImageKit → calls completion endpoint
+- Server verifies ImageKit file details before storing metadata
 - Assets tracked in `Asset` model with status (ready/quarantined/deleted)
 
 ### Event Processing (Kafka + Outbox)
 - Domain events written to `OutboxEvent` in same DB transaction
 - Celery Beat publishes outbox events to Kafka every 2 seconds
 - Consumers should use idempotent handlers and commit offsets after processing
+
+### AI Gateway & AI Job Execution
+- `POST /api/v1/completion/` accepts `task_type`, `messages`, `model_id`/`policy_slug` and returns a queued `Job`; the job is executed internally by Celery (`apps.jobs.executor`), superseding the n8n placeholder for `GENERAL_QUESTION` and `RAG_QUERY`.
+- Normalized provider adapters in `apps/ai_gateway/adapters.py` (OpenAI / Gemini / deterministic `echo` when `AI_PROVIDER=echo`); routing and fallback driven by `ModelPolicy` in `apps/ai_gateway/service.py`.
+- Every generation records a `ModelRun` with token usage, estimated USD cost, latency and fallback metadata; completion/failure emit `jobs.job.completed` / `jobs.job.failed` outbox events.
+- Data migration seeds default providers (`google-gemini`, `openai`, `echo`), models and `GENERAL_QUESTION`/`RAG_QUERY` policies plus a `SEARCH_RESEARCH` policy for the agent runtime; add/override providers and policies via the admin or seed data.
+- ``RAG_QUERY`` jobs answer grounded questions: tenant-scoped pgvector retrieval is injected as context for the model, and results include `sources` + `grounded`.
+
+### Agent Runtime (LangGraph)
+- `SEARCH_RESEARCH` jobs run a multi-step ReAct agent (`apps.agents.runtime.run_agent`) over a state graph (`call_model` → route → `execute_tools` → `call_model`) until the model stops calling tools or `AGENT_MAX_ITERATIONS` is reached.
+- Tools are registered in `apps/agents/tools.py` (`knowledge.search` org-scoped pgvector search, `system.now`, `identity.whoami`); `default_agent_tools()` and per-job tool whitelists control what a run may call.
+- The agent calls the model through the AI gateway (`generate_completion` + `ModelPolicy`), so routing, fallback and `ModelRun` metering apply per agent turn too.
+- `iter_agent` streams intermediate state updates (then a final `summary` event) and is the base for future SSE streaming; `run_agent` drains it into a summary `AgentRun` (final answer, `invoked_tools`, `model_runs`, token usage).
+- Results include the answer, invoked tool names, serialized transcript and a `grounded` flag (true when `knowledge.search` was invoked).
 
 ### Agentic RAG (Supabase pgvector)
 - Vector store is Supabase PostgreSQL (pgvector); the `knowledge.0003_add_pgvector_embeddings` migration enables the `vector` extension and an HNSW cosine index on PostgreSQL (no-op on SQLite).
@@ -209,12 +218,13 @@ See `.env.example` for all available variables. Key variables:
 - Embedding providers are adapters in `apps/knowledge/embeddings.py` (OpenAI / Gemini / deterministic `echo` for offline work).
 
 ### Health Checks
-- `/health/live/` - Liveness probe (always returns OK if process running)
-- `/health/ready/` - Readiness probe (checks DB + Redis connectivity)
+- `/api/v1/health/live/` - Liveness probe (always returns OK if process is running)
+- `/api/v1/health/startup/` - Startup probe (Django application loaded)
+- `/api/v1/health/ready/` - Readiness probe (database, Redis, Celery broker and Kafka in deployable profiles)
 
 ### API Documentation
-- OpenAPI schema at `/api/schema/`
-- Swagger UI at `/api/docs/`
+- Versioned OpenAPI schema at `/api/v1/schema/`
+- Versioned Swagger UI at `/api/v1/docs/`
 
 ## Testing
 
@@ -272,9 +282,10 @@ python manage.py collectstatic --noinput
 ```
 Files served via WhiteNoise in production.
 
-### Docker
+### Application server
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+python manage.py collectstatic --noinput
+gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 2
 ```
 
 ## Architecture

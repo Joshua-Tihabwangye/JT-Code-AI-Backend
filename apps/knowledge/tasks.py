@@ -9,7 +9,7 @@ from django.utils import timezone
 
 
 def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _collection_chunking(collection) -> tuple[int, int]:
@@ -41,14 +41,14 @@ def sync_sources():
         from apps.events.outbox import enqueue_outbox_event
 
         enqueue_outbox_event(
-            topic='knowledge.source.sync',
+            topic="knowledge.source.sync",
             event_key=str(source.id),
             payload={
-                'source_id': str(source.id),
-                'collection_id': str(source.collection_id),
-                'organization_id': str(source.collection.organization_id),
+                "source_id": str(source.id),
+                "collection_id": str(source.collection_id),
+                "organization_id": str(source.collection.organization_id),
             },
-            headers={'trace_id': f'sync-{source.id}'},
+            headers={"trace_id": f"sync-{source.id}"},
         )
 
 
@@ -66,30 +66,30 @@ def process_document(document_id: str):
     )
 
     try:
-        document = Document.objects.select_related('source', 'collection').get(id=document_id)
+        document = Document.objects.select_related("source", "collection").get(id=document_id)
     except Document.DoesNotExist:
         return
 
     source = document.source
     collection = document.collection
-    trace_id = f'doc-{document.id}'
+    trace_id = f"doc-{document.id}"
 
     def fail(document, status, error):
         document.status = Document.Status.FAILED
         document.last_error = str(error)[:2000]
-        document.save(update_fields=['status', 'last_error', 'updated_at'])
+        document.save(update_fields=["status", "last_error", "updated_at"])
         enqueue_outbox_event(
-            topic='knowledge.document.index_failed',
+            topic="knowledge.document.index_failed",
             event_key=str(document.id),
-            payload={'document_id': str(document.id), 'error': str(error)[:2000]},
-            headers={'trace_id': trace_id},
+            payload={"document_id": str(document.id), "error": str(error)[:2000]},
+            headers={"trace_id": trace_id},
         )
 
     if document.status == Document.Status.DELETED:
         return
 
     document.status = Document.Status.PARSING
-    document.save(update_fields=['status', 'updated_at'])
+    document.save(update_fields=["status", "updated_at"])
 
     try:
         text = extract_source_text(
@@ -101,11 +101,11 @@ def process_document(document_id: str):
         fail(document, Document.Status.PARSING, exc)
         return
 
-    content_bytes = len(text.encode('utf-8'))
+    content_bytes = len(text.encode("utf-8"))
     document.content_hash = _content_hash(text)
     document.size_bytes = content_bytes
     document.status = Document.Status.CHUNKING
-    document.save(update_fields=['content_hash', 'size_bytes', 'status', 'updated_at'])
+    document.save(update_fields=["content_hash", "size_bytes", "status", "updated_at"])
 
     chunk_size, chunk_overlap = _collection_chunking(collection)
     try:
@@ -119,18 +119,18 @@ def process_document(document_id: str):
         document.indexed_at = timezone.now()
         document.chunk_count = 0
         document.vector_ids = []
-        document.save(update_fields=['status', 'indexed_at', 'chunk_count', 'vector_ids', 'updated_at'])
+        document.save(update_fields=["status", "indexed_at", "chunk_count", "vector_ids", "updated_at"])
         _update_collection_counts(collection)
         enqueue_outbox_event(
-            topic='knowledge.document.indexed',
+            topic="knowledge.document.indexed",
             event_key=str(document.id),
-            payload={'document_id': str(document.id), 'chunk_count': 0},
-            headers={'trace_id': trace_id},
+            payload={"document_id": str(document.id), "chunk_count": 0},
+            headers={"trace_id": trace_id},
         )
         return
 
     document.status = Document.Status.EMBEDDING
-    document.save(update_fields=['status', 'updated_at'])
+    document.save(update_fields=["status", "updated_at"])
 
     chunk_rows = [
         Chunk(
@@ -144,8 +144,8 @@ def process_document(document_id: str):
             page_number=None,
             offset_start=spec.offset_start,
             offset_end=spec.offset_end,
-            vector_id='',
-            metadata={'chunk_size': chunk_size, 'chunk_overlap': chunk_overlap},
+            vector_id="",
+            metadata={"chunk_size": chunk_size, "chunk_overlap": chunk_overlap},
             acl=document.acl,
         )
         for spec in specs
@@ -162,7 +162,7 @@ def process_document(document_id: str):
                 vector_id = uuid.uuid4().hex
                 chunk.vector_id = vector_id
                 vector_ids.append(vector_id)
-            Chunk.objects.bulk_update(chunk_rows, fields=['vector_id'], batch_size=500)
+            Chunk.objects.bulk_update(chunk_rows, fields=["vector_id"], batch_size=500)
             upsert_chunk_embeddings(chunk_rows, embeddings, provider_model=provider_model)
             stored_vectors = True
         except Exception as exc:  # provider outage / dimension mismatch etc.
@@ -178,21 +178,21 @@ def process_document(document_id: str):
     document.status = Document.Status.INDEXED
     document.indexed_at = timezone.now()
     document.chunk_count = len(chunk_rows)
-    document.last_error = '' if stored_vectors else document.last_error
-    document.save(update_fields=['status', 'indexed_at', 'chunk_count', 'vector_ids', 'updated_at'])
+    document.last_error = "" if stored_vectors else document.last_error
+    document.save(update_fields=["status", "indexed_at", "chunk_count", "vector_ids", "updated_at"])
 
     _update_collection_counts(collection)
 
     enqueue_outbox_event(
-        topic='knowledge.document.indexed',
+        topic="knowledge.document.indexed",
         event_key=str(document.id),
         payload={
-            'document_id': str(document.id),
-            'chunk_count': len(chunk_rows),
-            'vectors_stored': stored_vectors,
-            'content_bytes': content_bytes,
+            "document_id": str(document.id),
+            "chunk_count": len(chunk_rows),
+            "vectors_stored": stored_vectors,
+            "content_bytes": content_bytes,
         },
-        headers={'trace_id': trace_id},
+        headers={"trace_id": trace_id},
     )
 
 
@@ -203,7 +203,7 @@ def _update_collection_counts(collection):
     collection.document_count = collection.documents.filter(status=Document.Status.INDEXED).count()
     collection.chunk_count = Chunk.objects.filter(collection=collection).count()
     collection.last_indexed_at = timezone.now()
-    collection.save(update_fields=['document_count', 'chunk_count', 'last_indexed_at', 'updated_at'])
+    collection.save(update_fields=["document_count", "chunk_count", "last_indexed_at", "updated_at"])
 
 
 @shared_task

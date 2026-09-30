@@ -1,4 +1,4 @@
-.PHONY: help install migrate run worker beat test test-watch lint format check typecheck clean shell dbshell createsuperuser collectstatic compose-up compose-down compose-logs compose-build setup-dev start-dev
+.PHONY: help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -6,7 +6,7 @@ help:
 	@echo ""
 	@echo "Setup:"
 	@echo "  setup-dev     Run full development setup (install, migrate, createsuperuser, collectstatic)"
-	@echo "  start-dev     Start all development services (Docker + Django + Celery)"
+	@echo "  start-dev     Run migrations after external services are available"
 	@echo "  install       Install Python dependencies with pip"
 	@echo ""
 	@echo "Database:"
@@ -28,13 +28,8 @@ help:
 	@echo "  format        Format code with ruff"
 	@echo "  typecheck     Run mypy type checking"
 	@echo "  check         Run all checks (lint + format + typecheck + test)"
-	@echo ""
-	@echo "Docker:"
-	@echo "  compose-up    Start all services with Docker Compose"
-	@echo "  compose-down  Stop all Docker Compose services"
-	@echo "  compose-logs  View Docker Compose logs"
-	@echo "  compose-build Build Docker images"
-	@echo ""
+	@echo "  ci-local      Run the same gates as GitHub Actions where possible"
+	@echo "  restore-drill Run local Phase 3 restore verification"
 	@echo "Maintenance:"
 	@echo "  collectstatic Collect static files"
 	@echo "  clean         Remove cache and build artifacts"
@@ -69,14 +64,24 @@ createsuperuser:
 	python manage.py createsuperuser
 
 # Server
+# ASGI is required: chat SSE streams are async and WSGI (runserver) buffers them.
 run:
-	python manage.py runserver
+	uvicorn config.asgi:application --env-file .env --reload --port 8000
 
 run-0:
-	python manage.py runserver 0.0.0.0:8000
+	uvicorn config.asgi:application --env-file .env --host 0.0.0.0 --port 8000
 
 worker:
-	celery -A config worker -l INFO
+	celery -A config worker -l INFO -Q jobs.default,jobs.analysis,jobs.ingestion,jobs.visualization
+
+consumer:
+	python manage.py run_kafka_consumer integrations.webhook.received --consumer-name integration-webhooks
+
+kafka-topics:
+	python manage.py ensure_kafka_topics
+
+verify-supabase:
+	python manage.py verify_supabase --format=json
 
 beat:
 	celery -A config beat -l INFO
@@ -101,25 +106,23 @@ format:
 	ruff format .
 
 typecheck:
-	mypy .
+	mypy
 
 check: lint format typecheck test
 
-# Docker
-compose-up:
-	docker compose up -d
+ci-local:
+	ruff check .
+	ruff format --check .
+	mypy
+	python manage.py makemigrations --check --dry-run --settings=config.settings.ci
+	python manage.py migrate --noinput --settings=config.settings.ci
+	pytest --cov=apps --cov=config
+	detect-secrets-hook --baseline .secrets.baseline $$(git ls-files)
+	bandit -q -r apps config manage.py --exclude tests
+	pip-audit --strict
 
-compose-down:
-	docker compose down
-
-compose-logs:
-	docker compose logs -f
-
-compose-build:
-	docker compose build
-
-compose-ps:
-	docker compose ps
+restore-drill:
+	python manage.py restore_drill_check --prepare-test-db --settings=config.settings.test
 
 # Maintenance
 collectstatic:

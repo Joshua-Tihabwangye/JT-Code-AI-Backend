@@ -4,138 +4,190 @@ import os
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-BASE_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BASE_DIR / '.env')
-
-import cloudinary
 import dj_database_url
 import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+from kombu import Queue
 from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.redis import RedisIntegration
+
+from config.logging import LOGGING  # noqa: F401
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(BASE_DIR / ".env")
 
 
 def env(name: str, default: str | None = None, *, required: bool = False) -> str:
     value = os.getenv(name, default)
     if required and not value:
-        raise ImproperlyConfigured(f'Missing required environment variable: {name}')
-    return value or ''
+        raise ImproperlyConfigured(f"Missing required environment variable: {name}")
+    return value or ""
 
 
 def env_bool(name: str, default: bool = False) -> bool:
-    return env(name, str(default)).lower() in {'1', 'true', 'yes', 'on'}
+    return env(name, str(default)).lower() in {"1", "true", "yes", "on"}
 
 
-def env_list(name: str, default: str = '') -> list[str]:
-    return [item.strip() for item in env(name, default).split(',') if item.strip()]
+def env_list(name: str, default: str = "") -> list[str]:
+    return [item.strip() for item in env(name, default).split(",") if item.strip()]
 
 
 def env_float(name: str, default: float) -> float:
     return float(env(name, str(default)))
 
 
-SECRET_KEY = env('DJANGO_SECRET_KEY', 'unsafe-local-development-key-change-me')
-DEBUG = env_bool('DJANGO_DEBUG', False)
-ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1')
+SECRET_KEY = env("DJANGO_SECRET_KEY", "")
+DEBUG = env_bool("DJANGO_DEBUG", False)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS")
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'corsheaders',
-    'rest_framework',
-    'drf_spectacular',
-    'apps.core',
-    'apps.identity',
-    'apps.conversations',
-    'apps.assets',
-    'apps.events',
-    'apps.jobs',
-    'apps.knowledge',
-    'apps.billing',
-    'apps.governance',
-    'apps.integrations',
-    'apps.ai_gateway',
-    'apps.documents',
-    'apps.conversions',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "corsheaders",
+    "rest_framework",
+    "drf_spectacular",
+    "apps.core",
+    "apps.identity.apps.IdentityConfig",
+    "apps.conversations",
+    "apps.assets",
+    "apps.events",
+    "apps.jobs",
+    "apps.knowledge",
+    "apps.billing",
+    "apps.governance",
+    "apps.integrations",
+    "apps.ai_gateway",
+    "apps.agents",
+    "apps.documents",
+    "apps.conversions",
 ]
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'apps.core.middleware.RequestContextMiddleware',
+    "apps.core.middleware.RequestContextMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = 'config.urls'
+ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ]
         },
     }
 ]
-WSGI_APPLICATION = 'config.wsgi.application'
-ASGI_APPLICATION = 'config.asgi.application'
+WSGI_APPLICATION = "config.wsgi.application"
+ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {
-    'default': dj_database_url.config(
-        conn_max_age=int(env('DATABASE_CONN_MAX_AGE', '60')),
+
+def runtime_connection_settings(
+    *, development: bool = False, database_url: str | None = None
+) -> tuple[dict[str, Any], dict[str, Any], str, str, str]:
+    """Build stateful connection settings for a named environment profile.
+
+    Supabase PostgreSQL is required for every deployable profile. Development
+    may opt into local Redis only; it never falls back to SQLite.
+    """
+    resolved_database_url = database_url if database_url is not None else env("DATABASE_URL")
+    if not resolved_database_url:
+        raise ImproperlyConfigured("DATABASE_URL is required; configure Supabase PostgreSQL explicitly.")
+    redis_default = "redis://localhost:6379/0" if development else ""
+    broker_default = "redis://localhost:6379/1" if development else ""
+    result_default = "redis://localhost:6379/2" if development else ""
+    redis_url = env("REDIS_URL", redis_default)
+    broker_url = env("CELERY_BROKER_URL", broker_default)
+    result_url = env("CELERY_RESULT_BACKEND", result_default)
+    pooler_mode = env("DATABASE_POOLER_MODE", "direct").lower()
+    conn_max_age = int(env("DATABASE_CONN_MAX_AGE", "60"))
+    if pooler_mode == "transaction":
+        conn_max_age = 0
+    database_config = dj_database_url.config(
+        default=resolved_database_url,
+        conn_max_age=conn_max_age,
         conn_health_checks=True,
     )
-}
+    if database_config.get("ENGINE", "").endswith("postgresql"):
+        options = database_config.setdefault("OPTIONS", {})
+        options.setdefault("connect_timeout", int(env("DATABASE_CONNECT_TIMEOUT_SECONDS", "10")))
+        if sslrootcert := env("DATABASE_SSLROOTCERT"):
+            options.setdefault("sslrootcert", sslrootcert)
+        options.setdefault("application_name", env("DATABASE_APPLICATION_NAME", "jt-code-api"))
+        if pooler_mode == "transaction":
+            database_config.setdefault("DISABLE_SERVER_SIDE_CURSORS", True)
+    database = {"default": database_config}
 
-AUTH_USER_MODEL = 'identity.User'
+    def redis_cache(key_prefix: str, timeout: int) -> dict[str, Any]:
+        return {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": redis_url,
+            "TIMEOUT": timeout,
+            "OPTIONS": {"socket_connect_timeout": 3, "socket_timeout": 3},
+            "KEY_PREFIX": key_prefix,
+        }
+
+    caches = {
+        "default": redis_cache("jt-code:cache", 300),
+        "rate_limits": redis_cache("jt-code:rate-limit", 3600),
+        "job_locks": redis_cache("jt-code:job-lock", 900),
+    }
+    return database, caches, redis_url, broker_url, result_url
+
+
+# A profile must replace these through ``runtime_connection_settings``.
+DATABASES: dict[str, Any] = {}
+
+AUTH_USER_MODEL = "identity.User"
 AUTH_PASSWORD_VALIDATORS: list[dict[str, Any]] = []
-LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 STORAGES = {
-    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
 
-CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS', 'http://localhost:5173')
-CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173')
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = False
 
-REDIS_URL = env('REDIS_URL', 'redis://localhost:6379/0')
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': REDIS_URL,
-        'TIMEOUT': 300,
-        'OPTIONS': {'socket_connect_timeout': 3, 'socket_timeout': 3},
-        'KEY_PREFIX': 'jt-code',
-    }
-}
-
-CELERY_BROKER_URL = env('CELERY_BROKER_URL', 'redis://localhost:6379/1')
-CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', 'redis://localhost:6379/2')
+CACHES: dict[str, Any] = {}
+REDIS_URL = ""
+CELERY_BROKER_URL = ""
+CELERY_RESULT_BACKEND = ""
+JOB_STALLED_TIMEOUT_SECONDS = int(env("JOB_STALLED_TIMEOUT_SECONDS", "660"))
+CHAT_REQUEST_STALLED_TIMEOUT_SECONDS = int(env("CHAT_REQUEST_STALLED_TIMEOUT_SECONDS", "660"))
+CHAT_MAX_CONTEXT_MESSAGES = int(env("CHAT_MAX_CONTEXT_MESSAGES", "40"))
+CHAT_SSE_HEARTBEAT_SECONDS = float(env("CHAT_SSE_HEARTBEAT_SECONDS", "15"))
+CHAT_SSE_MAX_SECONDS = int(env("CHAT_SSE_MAX_SECONDS", "300"))
+CHAT_SSE_RECONCILIATION_SECONDS = float(env("CHAT_SSE_RECONCILIATION_SECONDS", "30"))
+# How long a QUEUED chat request may wait (after publish/backoff) before the
+# safety-net dispatcher republishes it.
+CHAT_DISPATCH_GRACE_SECONDS = int(env("CHAT_DISPATCH_GRACE_SECONDS", "60"))
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TRACK_STARTED = True
@@ -143,169 +195,283 @@ CELERY_TASK_TIME_LIMIT = 600
 CELERY_TASK_SOFT_TIME_LIMIT = 540
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BEAT_SCHEDULE = {
-    'publish-kafka-outbox': {
-        'task': 'apps.events.tasks.publish_outbox_batch',
-        'schedule': 2.0,
+    "publish-kafka-outbox": {
+        "task": "apps.events.tasks.publish_outbox_batch",
+        "schedule": 2.0,
+        "options": {"expires": 10},
     },
-    'process-job-callbacks': {
-        'task': 'apps.jobs.tasks.process_callbacks',
-        'schedule': 30.0,
+    "prune-published-outbox-events": {
+        "task": "apps.events.tasks.prune_published_outbox_events",
+        "schedule": 3600.0,
+        "options": {"expires": 600},
     },
-    'check-job-deadlines': {
-        'task': 'apps.jobs.tasks.check_job_deadlines',
-        'schedule': 60.0,
+    "process-job-callbacks": {
+        "task": "apps.jobs.tasks.process_callbacks",
+        "schedule": 30.0,
+        "options": {"expires": 30},
     },
-    'sync-knowledge-sources': {
-        'task': 'apps.knowledge.tasks.sync_sources',
-        'schedule': 300.0,
+    "check-job-deadlines": {
+        "task": "apps.jobs.tasks.check_job_deadlines",
+        "schedule": 60.0,
+        "options": {"expires": 60},
     },
-    'process-billing-webhooks': {
-        'task': 'apps.billing.tasks.process_webhooks',
-        'schedule': 60.0,
+    "sync-knowledge-sources": {
+        "task": "apps.knowledge.tasks.sync_sources",
+        "schedule": 300.0,
     },
-    'expire-old-jobs': {
-        'task': 'apps.jobs.tasks.expire_old_jobs',
-        'schedule': 3600.0,
+    "process-billing-webhooks": {
+        "task": "apps.billing.tasks.process_webhooks",
+        "schedule": 60.0,
     },
-    'cleanup-old-audit-events': {
-        'task': 'apps.governance.tasks.cleanup_old_audit_events',
-        'schedule': 86400.0,
+    "recover-stalled-jobs": {
+        "task": "apps.jobs.tasks.recover_stalled_jobs",
+        "schedule": 60.0,
+        "options": {"expires": 60},
+    },
+    "dispatch-queued-jobs": {
+        "task": "apps.jobs.tasks.dispatch_queued_jobs",
+        "schedule": 30.0,
+        "options": {"expires": 30},
+    },
+    "recover-stalled-chat-requests": {
+        "task": "apps.conversations.tasks.recover_stalled_chat_requests",
+        "schedule": 60.0,
+        "options": {"expires": 60},
+    },
+    "dispatch-queued-chat-requests": {
+        "task": "apps.conversations.tasks.dispatch_queued_chat_requests",
+        "schedule": 30.0,
+        "options": {"expires": 30},
+    },
+    "expire-old-jobs": {
+        "task": "apps.jobs.tasks.expire_old_jobs",
+        "schedule": 3600.0,
+    },
+    "cleanup-old-audit-events": {
+        "task": "apps.governance.tasks.cleanup_old_audit_events",
+        "schedule": 86400.0,
     },
 }
 
-SUPABASE_URL = env('SUPABASE_URL')
-SUPABASE_JWT_SECRET = env('SUPABASE_JWT_SECRET')
-SUPABASE_JWT_AUDIENCE = env('SUPABASE_JWT_AUDIENCE')
-SUPABASE_JWT_ISSUER = env('SUPABASE_JWT_ISSUER')
-SUPABASE_WEBHOOK_SIGNING_SECRET = env('SUPABASE_WEBHOOK_SIGNING_SECRET')
 
-CLOUDINARY_CLOUD_NAME = env('CLOUDINARY_CLOUD_NAME')
-CLOUDINARY_API_KEY = env('CLOUDINARY_API_KEY')
-CLOUDINARY_API_SECRET = env('CLOUDINARY_API_SECRET')
-CLOUDINARY_UPLOAD_FOLDER = env('CLOUDINARY_UPLOAD_FOLDER', 'jt-code/development')
-CLOUDINARY_MAX_UPLOAD_BYTES = int(env('CLOUDINARY_MAX_UPLOAD_BYTES', str(25 * 1024 * 1024)))
-cloudinary.config(
-    cloud_name=CLOUDINARY_CLOUD_NAME,
-    api_key=CLOUDINARY_API_KEY,
-    api_secret=CLOUDINARY_API_SECRET,
-    secure=True,
+CELERY_TASK_DEFAULT_QUEUE = "jobs.default"
+CELERY_TASK_QUEUES = (
+    Queue("jobs.default"),
+    Queue("jobs.analysis"),
+    Queue("jobs.ingestion"),
+    Queue("jobs.visualization"),
 )
+CELERY_TASK_ROUTES = {
+    "apps.events.tasks.*": {"queue": "jobs.default"},
+    "apps.jobs.tasks.execute_job_task": {"queue": "jobs.analysis"},
+    "apps.knowledge.tasks.*": {"queue": "jobs.ingestion"},
+    "apps.documents.*": {"queue": "jobs.visualization"},
+    "apps.conversions.*": {"queue": "jobs.visualization"},
+    "apps.conversations.tasks.*": {"queue": "jobs.analysis"},
+}
+CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
+CELERY_TASK_RESULT_EXPIRES = 3600
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+SUPABASE_URL = env("SUPABASE_URL")
+SUPABASE_JWKS_URL = env("SUPABASE_JWKS_URL")
+SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET")
+SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE")
+SUPABASE_JWT_ISSUER = env("SUPABASE_JWT_ISSUER")
+SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
+# Server-only key for the Supabase Auth Admin API (never expose to clients).
+SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY")
+SUPABASE_ALLOW_ANONYMOUS_USERS = env_bool("SUPABASE_ALLOW_ANONYMOUS_USERS", False)
 
-KAFKA_BOOTSTRAP_SERVERS = env('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-KAFKA_CLIENT_ID = env('KAFKA_CLIENT_ID', 'jt-code-api')
-KAFKA_SECURITY_PROTOCOL = env('KAFKA_SECURITY_PROTOCOL', 'PLAINTEXT')
-KAFKA_SASL_MECHANISM = env('KAFKA_SASL_MECHANISM')
-KAFKA_SASL_USERNAME = env('KAFKA_SASL_USERNAME')
-KAFKA_SASL_PASSWORD = env('KAFKA_SASL_PASSWORD')
-KAFKA_TOPIC_PREFIX = env('KAFKA_TOPIC_PREFIX', 'jt-code.dev')
+IMAGEKIT_PUBLIC_KEY = env("IMAGEKIT_PUBLIC_KEY")
+IMAGEKIT_PRIVATE_KEY = env("IMAGEKIT_PRIVATE_KEY")
+IMAGEKIT_ENDPOINT_URL = env("IMAGEKIT_ENDPOINT_URL")
+IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code")
+IMAGEKIT_MAX_UPLOAD_BYTES = int(env("IMAGEKIT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS = int(env("IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "300"))
 
-AI_PROVIDER = env('AI_PROVIDER', 'disabled')
-N8N_SENTRY_RELAY_SECRET = env('N8N_SENTRY_RELAY_SECRET')
+KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
+KAFKA_CLIENT_ID = env("KAFKA_CLIENT_ID", "jt-code-api")
+KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL")
+KAFKA_SASL_MECHANISM = env("KAFKA_SASL_MECHANISM")
+KAFKA_SASL_USERNAME = env("KAFKA_SASL_USERNAME")
+KAFKA_SASL_PASSWORD = env("KAFKA_SASL_PASSWORD")
+KAFKA_TOPIC_PREFIX = env("KAFKA_TOPIC_PREFIX", "jt-code")
+EVENT_OUTBOX_MAX_ATTEMPTS = int(env("EVENT_OUTBOX_MAX_ATTEMPTS", "10"))
+EVENT_OUTBOX_MAX_BACKOFF_SECONDS = int(env("EVENT_OUTBOX_MAX_BACKOFF_SECONDS", "300"))
+EVENT_OUTBOX_LEASE_SECONDS = int(env("EVENT_OUTBOX_LEASE_SECONDS", "60"))
+EVENT_OUTBOX_RETENTION_DAYS = int(env("EVENT_OUTBOX_RETENTION_DAYS", "7"))
+KAFKA_CONSUMER_MAX_ATTEMPTS = int(env("KAFKA_CONSUMER_MAX_ATTEMPTS", "5"))
+KAFKA_CONSUMER_RETRY_MAX_SECONDS = int(env("KAFKA_CONSUMER_RETRY_MAX_SECONDS", "30"))
+KAFKA_TOPIC_PARTITIONS = int(env("KAFKA_TOPIC_PARTITIONS", "3"))
+KAFKA_TOPIC_REPLICATION_FACTOR = int(env("KAFKA_TOPIC_REPLICATION_FACTOR", "3"))
+KAFKA_TOPIC_RETENTION_MS = int(env("KAFKA_TOPIC_RETENTION_MS", str(7 * 24 * 3600 * 1000)))
+
+AI_PROVIDER = env("AI_PROVIDER", "disabled")
+N8N_SENTRY_RELAY_SECRET = env("N8N_SENTRY_RELAY_SECRET")
 
 # n8n Integration
-N8N_BASE_URL = env('N8N_BASE_URL', 'http://localhost:5678')
-N8N_API_KEY = env('N8N_API_KEY')
-N8N_WEBHOOK_SECRET = env('N8N_WEBHOOK_SECRET')
-N8N_CALLBACK_BASE_URL = env('N8N_CALLBACK_BASE_URL', 'http://localhost:8000/api/v1')
-N8N_WORKFLOW_PREFIX = env('N8N_WORKFLOW_PREFIX', 'jt-code')
+N8N_BASE_URL = env("N8N_BASE_URL")
+N8N_API_KEY = env("N8N_API_KEY")
+N8N_WEBHOOK_SECRET = env("N8N_WEBHOOK_SECRET")
+N8N_CALLBACK_BASE_URL = env("N8N_CALLBACK_BASE_URL")
+N8N_WORKFLOW_PREFIX = env("N8N_WORKFLOW_PREFIX", "jt-code")
 
 # AI Gateway
-AI_GATEWAY_DEFAULT_POLICY = env('AI_GATEWAY_DEFAULT_POLICY', 'balanced')
-AI_GATEWAY_MAX_COST_USD = env_float('AI_GATEWAY_MAX_COST_USD', 10.0)
-AI_GATEWAY_MAX_LATENCY_MS = int(env('AI_GATEWAY_MAX_LATENCY_MS', '30000'))
-AI_GATEWAY_FALLBACK_ENABLED = env_bool('AI_GATEWAY_FALLBACK_ENABLED', True)
+AI_GATEWAY_DEFAULT_POLICY = env("AI_GATEWAY_DEFAULT_POLICY", "balanced")
+AI_GATEWAY_MAX_COST_USD = env_float("AI_GATEWAY_MAX_COST_USD", 10.0)
+AI_GATEWAY_MAX_LATENCY_MS = int(env("AI_GATEWAY_MAX_LATENCY_MS", "30000"))
+AI_GATEWAY_FALLBACK_ENABLED = env_bool("AI_GATEWAY_FALLBACK_ENABLED", True)
+
+# Agent Runtime
+AGENT_MAX_ITERATIONS = int(env("AGENT_MAX_ITERATIONS", "6"))
 
 # Billing
-BILLING_CREDIT_VALUE_USD = env_float('BILLING_CREDIT_VALUE_USD', 0.01)
-BILLING_FX_BUFFER = env_float('BILLING_FX_BUFFER', 1.05)
-BILLING_MARGIN_MULTIPLIER = env_float('BILLING_MARGIN_MULTIPLIER', 1.25)
-BILLING_DEFAULT_PLAN = env('BILLING_DEFAULT_PLAN', 'free')
-STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY')
-STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
-STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY')
+BILLING_CREDIT_VALUE_USD = env_float("BILLING_CREDIT_VALUE_USD", 0.01)
+BILLING_FX_BUFFER = env_float("BILLING_FX_BUFFER", 1.05)
+BILLING_MARGIN_MULTIPLIER = env_float("BILLING_MARGIN_MULTIPLIER", 1.25)
+BILLING_DEFAULT_PLAN = env("BILLING_DEFAULT_PLAN", "free")
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
 
 # Knowledge/RAG
 # Supabase PostgreSQL (pgvector) is the vector store. The `vector` extension is
 # enabled in a data migration that is a no-op on non-PostgreSQL test databases.
-PGVECTOR_ENABLED = env_bool('PGVECTOR_ENABLED', True)
-VECTOR_EMBEDDING_DIMENSIONS = int(env('VECTOR_EMBEDDING_DIMENSIONS', '1536'))
-VECTOR_MIN_SIMILARITY = env_float('VECTOR_MIN_SIMILARITY', 0.0)
-RAG_EMBEDDING_PROVIDER = env('RAG_EMBEDDING_PROVIDER', 'openai')
-RAG_EMBEDDING_MODEL = env('RAG_EMBEDDING_MODEL', 'text-embedding-3-small')
-RAG_CHUNK_SIZE = int(env('RAG_CHUNK_SIZE', '1000'))
-RAG_CHUNK_OVERLAP = int(env('RAG_CHUNK_OVERLAP', '200'))
-RAG_TOP_K = int(env('RAG_TOP_K', '10'))
-RAG_RERANK_TOP_K = int(env('RAG_RERANK_TOP_K', '5'))
-RAG_SIMILARITY_THRESHOLD = env_float('RAG_SIMILARITY_THRESHOLD', 0.7)
-RAG_MAX_EXTRACTED_BYTES = int(env('RAG_MAX_EXTRACTED_BYTES', str(5 * 1024 * 1024)))
-RAG_URL_FETCH_TIMEOUT_SECONDS = float(env('RAG_URL_FETCH_TIMEOUT_SECONDS', '30'))
+PGVECTOR_ENABLED = env_bool("PGVECTOR_ENABLED", True)
+VECTOR_EMBEDDING_DIMENSIONS = int(env("VECTOR_EMBEDDING_DIMENSIONS", "1536"))
+VECTOR_MIN_SIMILARITY = env_float("VECTOR_MIN_SIMILARITY", 0.0)
+RAG_EMBEDDING_PROVIDER = env("RAG_EMBEDDING_PROVIDER", "openai")
+RAG_EMBEDDING_MODEL = env("RAG_EMBEDDING_MODEL", "text-embedding-3-small")
+RAG_CHUNK_SIZE = int(env("RAG_CHUNK_SIZE", "1000"))
+RAG_CHUNK_OVERLAP = int(env("RAG_CHUNK_OVERLAP", "200"))
+RAG_TOP_K = int(env("RAG_TOP_K", "10"))
+RAG_RERANK_TOP_K = int(env("RAG_RERANK_TOP_K", "5"))
+RAG_SIMILARITY_THRESHOLD = env_float("RAG_SIMILARITY_THRESHOLD", 0.7)
+RAG_MAX_EXTRACTED_BYTES = int(env("RAG_MAX_EXTRACTED_BYTES", str(5 * 1024 * 1024)))
+RAG_URL_FETCH_TIMEOUT_SECONDS = float(env("RAG_URL_FETCH_TIMEOUT_SECONDS", "30"))
 
 # Embedding provider credentials (server-side only). Only the configured
 # provider is loaded at runtime; the extras are dependency-free placeholders.
-OPENAI_API_KEY = env('OPENAI_API_KEY')
-GEMINI_API_KEY = env('GEMINI_API_KEY')
-GEMINI_EMBEDDING_MODEL = env('GEMINI_EMBEDDING_MODEL', 'gemini-embedding-001')
+OPENAI_API_KEY = env("OPENAI_API_KEY")
+GEMINI_API_KEY = env("GEMINI_API_KEY")
+GEMINI_EMBEDDING_MODEL = env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
 
 # Governance
-AUDIT_EVENT_RETENTION_DAYS = int(env('AUDIT_EVENT_RETENTION_DAYS', '2555'))
-SAFETY_EVENT_RETENTION_DAYS = int(env('SAFETY_EVENT_RETENTION_DAYS', '2555'))
-CONSENT_VERSION = env('CONSENT_VERSION', '1.0')
+AUDIT_EVENT_RETENTION_DAYS = int(env("AUDIT_EVENT_RETENTION_DAYS", "2555"))
+SAFETY_EVENT_RETENTION_DAYS = int(env("SAFETY_EVENT_RETENTION_DAYS", "2555"))
+CONSENT_VERSION = env("CONSENT_VERSION", "1.0")
 
 # Integrations
-WEBHOOK_MAX_RETRIES = int(env('WEBHOOK_MAX_RETRIES', '5'))
-WEBHOOK_RETRY_BASE_DELAY = int(env('WEBHOOK_RETRY_BASE_DELAY', '60'))
-KAFKA_CONSUMER_GROUP_PREFIX = env('KAFKA_CONSUMER_GROUP_PREFIX', 'jt-code')
+WEBHOOK_MAX_RETRIES = int(env("WEBHOOK_MAX_RETRIES", "5"))
+WEBHOOK_RETRY_BASE_DELAY = int(env("WEBHOOK_RETRY_BASE_DELAY", "60"))
+WEBHOOK_RETRY_MAX_SECONDS = int(env("WEBHOOK_RETRY_MAX_SECONDS", "3600"))
+WEBHOOK_DELIVERY_TIMEOUT_SECONDS = float(env("WEBHOOK_DELIVERY_TIMEOUT_SECONDS", "10"))
+WEBHOOK_ALLOWED_HOSTS = env_list("WEBHOOK_ALLOWED_HOSTS")
+WEBHOOK_SIGNING_SECRET = env("WEBHOOK_SIGNING_SECRET")
+KAFKA_CONSUMER_GROUP_PREFIX = env("KAFKA_CONSUMER_GROUP_PREFIX", "jt-code")
 
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ['apps.identity.authentication.SupabaseJWTAuthentication'],
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 50,
-    'EXCEPTION_HANDLER': 'apps.core.exceptions.api_exception_handler',
-    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
-    'DEFAULT_THROTTLE_RATES': {
-        'chat': env('THROTTLE_CHAT', '60/hour'),
-        'images': env('THROTTLE_IMAGES', '30/hour'),
-        'embeddings': env('THROTTLE_EMBEDDINGS', '120/hour'),
-        'conversions': env('THROTTLE_CONVERSIONS', '20/hour'),
-        'research': env('THROTTLE_RESEARCH', '10/hour'),
-        'burst': env('THROTTLE_BURST', '30/minute'),
+    "DEFAULT_AUTHENTICATION_CLASSES": ["apps.identity.authentication.SupabaseJWTAuthentication"],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    "DEFAULT_SCHEMA_CLASS": "apps.core.schema.JTCodeAutoSchema",
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 50,
+    "EXCEPTION_HANDLER": "apps.core.exceptions.api_exception_handler",
+    "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_THROTTLE_RATES": {
+        "chat": env("THROTTLE_CHAT", "60/hour"),
+        "images": env("THROTTLE_IMAGES", "30/hour"),
+        "embeddings": env("THROTTLE_EMBEDDINGS", "120/hour"),
+        "conversions": env("THROTTLE_CONVERSIONS", "20/hour"),
+        "research": env("THROTTLE_RESEARCH", "10/hour"),
+        "burst": env("THROTTLE_BURST", "30/minute"),
     },
 }
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'JT-Code API',
-    'DESCRIPTION': 'Django API for JT-Code web and React Native clients.',
-    'VERSION': '0.1.0',
-    'SERVE_INCLUDE_SCHEMA': False,
-    'SECURITY': [{'SupabaseBearer': []}],
-    'COMPONENT_SPLIT_REQUEST': True,
-}
-
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'jsonish': {
-            'format': '%(asctime)s %(levelname)s %(name)s request_id=%(request_id)s trace_id=%(trace_id)s %(message)s'
-        },
+    "TITLE": "JT-Code API",
+    "DESCRIPTION": "Django API for JT-Code web and React Native clients.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SECURITY": [{"SupabaseBearer": []}],
+    "COMPONENT_SPLIT_REQUEST": True,
+    "ENUM_NAME_OVERRIDES": {
+        "ModelStatus": [
+            ("active", "Active"),
+            ("deprecated", "Deprecated"),
+            ("disabled", "Disabled"),
+            ("beta", "Beta"),
+        ],
+        "EvaluationType": [
+            ("accuracy", "Accuracy"),
+            ("faithfulness", "Faithfulness"),
+            ("hallucination", "Hallucination"),
+            ("toxicity", "Toxicity"),
+            ("bias", "Bias"),
+            ("latency", "Latency"),
+            ("cost", "Cost"),
+            ("custom", "Custom"),
+        ],
+        "PromptCategory": [
+            ("system", "System Prompt"),
+            ("task", "Task Prompt"),
+            ("template", "Template"),
+            ("chain_of_thought", "Chain of Thought"),
+            ("few_shot", "Few-shot Examples"),
+            ("guardrail", "Guardrail"),
+        ],
+        "PlanStatus": [("active", "Active"), ("archived", "Archived")],
+        "ConsentStatus": [
+            ("granted", "Granted"),
+            ("denied", "Denied"),
+            ("withdrawn", "Withdrawn"),
+            ("expired", "Expired"),
+        ],
+        "SupportCaseStatus": [
+            ("open", "Open"),
+            ("in_progress", "In Progress"),
+            ("waiting_user", "Waiting for User"),
+            ("waiting_third_party", "Waiting for Third Party"),
+            ("resolved", "Resolved"),
+            ("closed", "Closed"),
+        ],
+        "SupportCaseCategory": [
+            ("billing", "Billing"),
+            ("technical", "Technical Issue"),
+            ("account", "Account Access"),
+            ("feature", "Feature Request"),
+            ("bug", "Bug Report"),
+            ("security", "Security Concern"),
+            ("compliance", "Compliance"),
+            ("other", "Other"),
+        ],
     },
-    'filters': {'request_context': {'()': 'apps.core.logging.RequestContextFilter'}},
-    'handlers': {
-        'console': {'class': 'logging.StreamHandler', 'formatter': 'jsonish', 'filters': ['request_context']}
+    "APPEND_COMPONENTS": {
+        "securitySchemes": {
+            "SupabaseBearer": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "Supabase access token.",
+            }
+        }
     },
-    'root': {'handlers': ['console'], 'level': 'INFO'},
 }
+HEALTHCHECK_EXTERNAL_DEPENDENCIES = env_bool("HEALTHCHECK_EXTERNAL_DEPENDENCIES", False)
 
-SENTRY_DSN = env('SENTRY_DSN')
+SENTRY_DSN = env("SENTRY_DSN")
 if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
-        environment=env('SENTRY_ENVIRONMENT', 'development'),
-        release=env('SENTRY_RELEASE', 'jt-code-api@0.1.0'),
+        environment=env("SENTRY_ENVIRONMENT"),
+        release=env("SENTRY_RELEASE", "jt-code-api@0.1.0"),
         integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()],
-        traces_sample_rate=env_float('SENTRY_TRACES_SAMPLE_RATE', 0.1),
-        profiles_sample_rate=env_float('SENTRY_PROFILES_SAMPLE_RATE', 0.0),
+        traces_sample_rate=env_float("SENTRY_TRACES_SAMPLE_RATE", 0.1),
+        profiles_sample_rate=env_float("SENTRY_PROFILES_SAMPLE_RATE", 0.0),
         send_default_pii=False,
-        max_request_body_size='never',
+        max_request_body_size="never",
     )
+
+if os.getenv("DJANGO_SETTINGS_MODULE") == "config.settings.base":
+    raise ImproperlyConfigured("config.settings.base is shared settings, not a deployable profile.")
+CHAT_SSE_POLL_SECONDS = float(env("CHAT_SSE_POLL_SECONDS", "1"))

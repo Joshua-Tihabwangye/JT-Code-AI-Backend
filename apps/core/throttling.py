@@ -1,36 +1,38 @@
 from __future__ import annotations
 
+from rest_framework.request import Request
 from rest_framework.throttling import SimpleRateThrottle
+from rest_framework.views import APIView
 
 
 class PerUserRateThrottle(SimpleRateThrottle):
     """Rate throttle keyed by authenticated user instead of IP."""
 
-    def get_cache_key(self, request, view):
+    def get_cache_key(self, request: Request, view: APIView) -> str | None:
         if not request.user or not request.user.is_authenticated:
             return None
-        return self.cache_format % {'scope': self.scope, 'ident': f'user:{request.user.id}'}
+        return self.cache_format % {"scope": self.scope, "ident": f"user:{request.user.id}"}
 
 
 class ChatThrottle(PerUserRateThrottle):
-    scope = 'chat'
+    scope = "chat"
 
 
 class ImageThrottle(PerUserRateThrottle):
-    scope = 'images'
+    scope = "images"
 
 
 class EmbeddingThrottle(PerUserRateThrottle):
-    scope = 'embeddings'
+    scope = "embeddings"
 
 
 class ConversionThrottle(PerUserRateThrottle):
-    scope = 'conversions'
+    scope = "conversions"
 
 
 class ResearchThrottle(PerUserRateThrottle):
-    scope = 'research'
+    scope = "research"
 
 
 class BurstThrottle(PerUserRateThrottle):
-    scope = 'burst'
+    scope = "burst"

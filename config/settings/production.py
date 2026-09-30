@@ -1,12 +1,11 @@
-from config.settings.base import *  # noqa: F403
+from config.settings.base import *  # noqa: F403,F405
+from config.settings.base import ALLOWED_HOSTS as BASE_ALLOWED_HOSTS
+from config.settings.secure import *  # noqa: F403
+from config.settings.validation import validate_settings
 
 DEBUG = False
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
-SECURE_HSTS_SECONDS = 3600
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
-X_FRAME_OPTIONS = 'DENY'
-SECURE_CONTENT_TYPE_NOSNIFF = True
+DATABASES, CACHES, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND = runtime_connection_settings()  # noqa: F405
+HEALTHCHECK_EXTERNAL_DEPENDENCIES = True
+ALLOWED_HOSTS = BASE_ALLOWED_HOSTS
+
+validate_settings("production")

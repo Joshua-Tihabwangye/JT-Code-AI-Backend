@@ -20,7 +20,7 @@ from apps.knowledge.tasks import process_document
 
 @pytest.fixture
 def organization(db, user):
-    org = Organization.objects.create(name='Acme', slug='acme')
+    org = Organization.objects.create(name="Acme", slug="acme")
     user.organizations.add(org)
     return org
 
@@ -29,9 +29,9 @@ def organization(db, user):
 def collection(db, organization, user):
     return Collection.objects.create(
         organization=organization,
-        name='Product docs',
-        embedding_provider='echo',
-        embedding_model='echo-deterministic',
+        name="Product docs",
+        embedding_provider="echo",
+        embedding_model="echo-deterministic",
         embedding_dimensions=1536,
         chunk_size=100,
         chunk_overlap=20,
@@ -44,14 +44,14 @@ def text_source(db, collection, user):
     return Source.objects.create(
         collection=collection,
         source_type=Source.SourceType.TEXT,
-        name='Manual',
-        config={'text': 'JT-Code onboarding. ' * 50},
+        name="Manual",
+        config={"text": "JT-Code onboarding. " * 50},
         created_by=user,
     )
 
 
 def test_chunking_produces_overlapping_coverage():
-    text = '\n\n'.join(f'Paragraph {i} ' + 'word ' * 60 for i in range(8))
+    text = "\n\n".join(f"Paragraph {i} " + "word " * 60 for i in range(8))
     chunks = chunk_text(text, size=150, overlap=30)
     assert len(chunks) >= 3
     first = chunks[0]
@@ -66,78 +66,79 @@ def test_chunking_produces_overlapping_coverage():
 
 
 def test_chunking_tracks_headings():
-    heading = '## Overview\n'
-    filler = 'word ' * 80
-    text = f'{heading}{filler}\n## Details\n{filler}'
+    heading = "## Overview\n"
+    filler = "word " * 80
+    text = f"{heading}{filler}\n## Details\n{filler}"
     chunks = TextChunker(size=80, overlap=10).chunk(text)
     assert len(chunks) >= 2
     paths = [chunk.heading_path for chunk in chunks]
-    assert any('Overview' in path for path in paths)
-    assert any('Details' in path for path in paths)
+    assert any("Overview" in path for path in paths)
+    assert any("Details" in path for path in paths)
 
 
 def test_echo_provider_deterministic_dimensions():
     provider = EchoEmbeddingProvider()
-    batch = provider.embed_texts(['alpha', 'beta'])
+    batch = provider.embed_texts(["alpha", "beta"])
     assert len(batch) == 2
     assert all(len(vector) == 1536 for vector in batch)
-    again = EchoEmbeddingProvider().embed_texts(['alpha', 'beta'])
+    again = EchoEmbeddingProvider().embed_texts(["alpha", "beta"])
     assert batch == again
     assert batch[0] != batch[1]
 
 
 def test_embed_texts_empty_and_dimension_check(settings, monkeypatch):
-    settings.RAG_EMBEDDING_PROVIDER = 'echo'
+    settings.RAG_EMBEDDING_PROVIDER = "echo"
     assert embed_texts([]) == []
-    vectors = embed_texts(['hi'] * 3)
+    vectors = embed_texts(["hi"] * 3)
     assert len(vectors) == 3
     assert all(len(v) == 1536 for v in vectors)
 
     class WrongDimsProvider:
-        provider_name = 'wrong'
-        model_name = 'wrong'
+        provider_name = "wrong"
+        model_name = "wrong"
 
         def embed_texts(self, texts):
             return [[0.0] * 64] * len(texts)
 
-    monkeypatch.setattr(embeddings, 'get_embedding_provider', lambda: WrongDimsProvider())
+    monkeypatch.setattr(embeddings, "get_embedding_provider", lambda: WrongDimsProvider())
     settings.VECTOR_EMBEDDING_DIMENSIONS = 1536
     from apps.knowledge.embeddings import EmbeddingError
 
     with pytest.raises(EmbeddingError):
-        embed_texts(['x'])
+        embed_texts(["x"])
 
 
 def test_unsupported_provider_raises(settings):
-    settings.RAG_EMBEDDING_PROVIDER = 'bogus'
+    settings.RAG_EMBEDDING_PROVIDER = "bogus"
     with pytest.raises(EmbeddingNotConfigured):
         get_embedding_provider()
 
 
 def test_openai_provider_requires_key(settings, monkeypatch):
-    settings.RAG_EMBEDDING_PROVIDER = 'openai'
+    settings.RAG_EMBEDDING_PROVIDER = "openai"
     settings.DEBUG = False
-    settings.OPENAI_API_KEY = ''
+    settings.OPENAI_API_KEY = ""
     with pytest.raises(EmbeddingNotConfigured):
         get_embedding_provider()
 
 
 def test_extract_text_source():
-    text = extract_source_text(source_type='text', config={'text': 'line1\nline2'})
-    assert text == 'line1\nline2'
+    text = extract_source_text(source_type="text", config={"text": "line1\nline2"})
+    assert text == "line1\nline2"
 
 
 def test_extract_empty_text_raises():
     with pytest.raises(ExtractionError):
-        extract_source_text(source_type='text', config={})
+        extract_source_text(source_type="text", config={})
 
 
 def test_extract_file_without_content_raises():
     with pytest.raises(ExtractionError):
-        extract_source_text(source_type='file', config={})
+        extract_source_text(source_type="file", config={})
 
 
-def test_vector_store_unavailable_on_sqlite():
+def test_vector_store_unavailable_when_pgvector_disabled(settings):
+    settings.PGVECTOR_ENABLED = False
     assert vectorstore.vector_store_enabled() is False
     with pytest.raises(vectorstore.VectorStoreUnavailable):
         vectorstore.require_vector_store()
@@ -148,33 +149,34 @@ def test_vector_store_unavailable_on_sqlite():
 @pytest.mark.django_db
 def test_search_requires_query(api_client, user):
     api_client.force_authenticate(user=user)
-    response = api_client.post(reverse('knowledge-search'), {}, format='json')
+    response = api_client.post(reverse("knowledge-search"), {}, format="json")
     assert response.status_code == 400
 
 
 @pytest.mark.django_db
 def test_search_excludes_collections_outside_org(api_client, user, collection):
-    other = Organization.objects.create(name='Rival', slug='rival')
-    rival = Collection.objects.create(organization=other, name='Secret', embedding_provider='echo')
+    other = Organization.objects.create(name="Rival", slug="rival")
+    rival = Collection.objects.create(organization=other, name="Secret", embedding_provider="echo")
     api_client.force_authenticate(user=user)
     response = api_client.post(
-        reverse('knowledge-search'),
-        {'query': 'hello', 'collection_ids': [str(rival.id)]},
-        format='json',
+        reverse("knowledge-search"),
+        {"query": "hello", "collection_ids": [str(rival.id)]},
+        format="json",
     )
     body = response.json()
     assert response.status_code == 200
-    assert body['results'] == []
-    assert body['message'] == 'No accessible collections'
+    assert body["results"] == []
+    assert body["message"] == "No accessible collections"
 
 
 @pytest.mark.django_db
-def test_search_returns_503_when_pgvector_unavailable(api_client, user, collection):
+def test_search_returns_503_when_pgvector_unavailable(api_client, user, collection, settings):
+    settings.PGVECTOR_ENABLED = False
     api_client.force_authenticate(user=user)
     response = api_client.post(
-        reverse('knowledge-search'),
-        {'query': 'hello', 'collection_ids': [str(collection.id)]},
-        format='json',
+        reverse("knowledge-search"),
+        {"query": "hello", "collection_ids": [str(collection.id)]},
+        format="json",
     )
     assert response.status_code == 503
 
@@ -183,38 +185,38 @@ def test_search_returns_503_when_pgvector_unavailable(api_client, user, collecti
 def test_search_with_mocked_store_returns_results(api_client, user, collection, monkeypatch):
     monkeypatch.setattr(
         embeddings,
-        'embed_texts',
+        "embed_texts",
         lambda texts: [[0.25] * 1536],
     )
     monkeypatch.setattr(
         vectorstore,
-        'semantic_search',
+        "semantic_search",
         lambda *args, **kwargs: [
             {
-                'chunk_id': 'abc',
-                'document_id': 'doc',
-                'document_title': 'Manual',
-                'collection_id': str(collection.id),
-                'chunk_index': 0,
-                'content': 'sample chunk',
-                'heading_path': [],
-                'page_number': None,
-                'offset_range': [0, 10],
-                'score': 0.95,
-                'embedding_model': 'echo',
+                "chunk_id": "abc",
+                "document_id": "doc",
+                "document_title": "Manual",
+                "collection_id": str(collection.id),
+                "chunk_index": 0,
+                "content": "sample chunk",
+                "heading_path": [],
+                "page_number": None,
+                "offset_range": [0, 10],
+                "score": 0.95,
+                "embedding_model": "echo",
             }
         ],
     )
     api_client.force_authenticate(user=user)
     response = api_client.post(
-        reverse('knowledge-search'),
-        {'query': 'hello', 'collection_ids': [str(collection.id)]},
-        format='json',
+        reverse("knowledge-search"),
+        {"query": "hello", "collection_ids": [str(collection.id)]},
+        format="json",
     )
     assert response.status_code == 200
     body = response.json()
-    assert body['result_count'] == 1
-    assert body['results'][0]['score'] == 0.95
+    assert body["result_count"] == 1
+    assert body["results"][0]["score"] == 0.95
 
 
 @pytest.mark.django_db
@@ -222,9 +224,9 @@ def test_process_document_indexes_text_source(db, text_source):
     document = Document.objects.create(
         source=text_source,
         collection=text_source.collection,
-        title='Manual',
-        content_hash='pending',
-        mime_type='text/plain',
+        title="Manual",
+        content_hash="pending",
+        mime_type="text/plain",
         size_bytes=0,
         status=Document.Status.PENDING,
     )
@@ -233,11 +235,12 @@ def test_process_document_indexes_text_source(db, text_source):
     document.refresh_from_db()
     assert document.status == Document.Status.INDEXED
     assert document.chunk_count > 0
-    assert document.last_error == ''
+    assert document.last_error == ""
     assert Chunk.objects.filter(document=document).count() == document.chunk_count
-    assert OutboxEvent.objects.filter(topic__endswith='knowledge.document.indexed').exists()
-    # pgvector store is unavailable on the SQLite test DB, so no vector_ids.
-    assert document.vector_ids == []
+    assert OutboxEvent.objects.filter(topic__endswith="knowledge.document.indexed").exists()
+    # Supabase pgvector stores one embedding per chunk.
+    assert len(document.vector_ids) == document.chunk_count
+    assert not Chunk.objects.filter(document=document, embedding__isnull=True).exists()
 
 
 @pytest.mark.django_db
@@ -245,36 +248,36 @@ def test_process_document_records_failure(db, collection, user):
     source = Source.objects.create(
         collection=collection,
         source_type=Source.SourceType.FILE,
-        name='Broken',
+        name="Broken",
         config={},
         created_by=user,
     )
     document = Document.objects.create(
         source=source,
         collection=collection,
-        title='Broken',
-        content_hash='x',
+        title="Broken",
+        content_hash="x",
         status=Document.Status.PENDING,
     )
     process_document(str(document.id))
     document.refresh_from_db()
     assert document.status == Document.Status.FAILED
-    assert 'extraction' in document.last_error.lower()
+    assert "extraction" in document.last_error.lower()
 
 
 def test_reindex_endpoint_returns_accepted(api_client, user):
-    url = '/api/v1/knowledge/documents/nonexistent/reindex/'
+    url = "/api/v1/knowledge/documents/nonexistent/reindex/"
     api_client.force_authenticate(user=user)
-    response = api_client.post(url, {}, format='json')
+    response = api_client.post(url, {}, format="json")
     assert response.status_code in (404, 405)
 
 
 def test_health_endpoint():
     client = APIClient()
-    response = client.get('/api/v1/health/live/')
+    response = client.get("/api/v1/health/live/")
     assert response.status_code == 200
 
 
 def test_cache_cleanup():
     cache.clear()
-    assert cache.get('nothing') is None
+    assert cache.get("nothing") is None

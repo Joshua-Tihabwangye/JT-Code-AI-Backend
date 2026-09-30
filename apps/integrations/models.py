@@ -1,28 +1,29 @@
 import uuid
+
 from django.conf import settings
 from django.db import models
 
 
 class Connector(models.Model):
     class Category(models.TextChoices):
-        STORAGE = 'storage', 'Cloud Storage'
-        DATABASE = 'database', 'Database'
-        EMAIL = 'email', 'Email'
-        CRM = 'crm', 'CRM'
-        PROJECT_MANAGEMENT = 'project_management', 'Project Management'
-        COMMUNICATION = 'communication', 'Communication'
-        DEVELOPMENT = 'development', 'Development Tools'
-        MARKETING = 'marketing', 'Marketing'
-        ANALYTICS = 'analytics', 'Analytics'
-        AI_ML = 'ai_ml', 'AI/ML Platforms'
-        OTHER = 'other', 'Other'
+        STORAGE = "storage", "Cloud Storage"
+        DATABASE = "database", "Database"
+        EMAIL = "email", "Email"
+        CRM = "crm", "CRM"
+        PROJECT_MANAGEMENT = "project_management", "Project Management"
+        COMMUNICATION = "communication", "Communication"
+        DEVELOPMENT = "development", "Development Tools"
+        MARKETING = "marketing", "Marketing"
+        ANALYTICS = "analytics", "Analytics"
+        AI_ML = "ai_ml", "AI/ML Platforms"
+        OTHER = "other", "Other"
 
     class AuthType(models.TextChoices):
-        OAUTH2 = 'oauth2', 'OAuth 2.0'
-        API_KEY = 'api_key', 'API Key'
-        BASIC = 'basic', 'Basic Auth'
-        BEARER = 'bearer', 'Bearer Token'
-        CUSTOM = 'custom', 'Custom'
+        OAUTH2 = "oauth2", "OAuth 2.0"
+        API_KEY = "api_key", "API Key"
+        BASIC = "basic", "Basic Auth"
+        BEARER = "bearer", "Bearer Token"
+        CUSTOM = "custom", "Custom"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     slug = models.SlugField(unique=True)
@@ -43,31 +44,27 @@ class Connector(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('category', 'name')
+        ordering = ("category", "name")
 
     def __str__(self):
-        return f'{self.name} ({self.category})'
+        return f"{self.name} ({self.category})"
 
 
 class ConnectorAccount(models.Model):
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        EXPIRED = 'expired', 'Expired'
-        REVOKED = 'revoked', 'Revoked'
-        ERROR = 'error', 'Error'
-        PENDING = 'pending', 'Pending Authorization'
+        ACTIVE = "active", "Active"
+        EXPIRED = "expired", "Expired"
+        REVOKED = "revoked", "Revoked"
+        ERROR = "error", "Error"
+        PENDING = "pending", "Pending Authorization"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
-        'identity.Organization',
-        on_delete=models.CASCADE,
-        related_name='connector_accounts'
+        "identity.Organization", on_delete=models.CASCADE, related_name="connector_accounts"
     )
-    connector = models.ForeignKey(Connector, on_delete=models.CASCADE, related_name='accounts')
+    connector = models.ForeignKey(Connector, on_delete=models.CASCADE, related_name="accounts")
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='connector_accounts'
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="connector_accounts"
     )
     name = models.CharField(max_length=255)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -83,33 +80,31 @@ class ConnectorAccount(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('organization', 'connector')),
-            models.Index(fields=('user', 'connector')),
-            models.Index(fields=('status',)),
+            models.Index(fields=("organization", "connector")),
+            models.Index(fields=("user", "connector")),
+            models.Index(fields=("status",)),
         ]
 
     def __str__(self):
-        return f'{self.name} ({self.connector.name}) - {self.status}'
+        return f"{self.name} ({self.connector.name}) - {self.status}"
 
 
 class Webhook(models.Model):
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        PAUSED = 'paused', 'Paused'
-        DISABLED = 'disabled', 'Disabled'
-        ERROR = 'error', 'Error'
+        ACTIVE = "active", "Active"
+        PAUSED = "paused", "Paused"
+        DISABLED = "disabled", "Disabled"
+        ERROR = "error", "Error"
 
     class EventFilter(models.TextChoices):
-        ALL = 'all', 'All Events'
-        CUSTOM = 'custom', 'Custom Filter'
+        ALL = "all", "All Events"
+        CUSTOM = "custom", "Custom Filter"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
-        'identity.Organization',
-        on_delete=models.CASCADE,
-        related_name='webhooks'
+        "identity.Organization", on_delete=models.CASCADE, related_name="webhooks"
     )
     name = models.CharField(max_length=255)
     url = models.URLField()
@@ -126,33 +121,30 @@ class Webhook(models.Model):
     failure_count = models.PositiveIntegerField(default=0)
     metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        related_name='created_webhooks',
-        null=True
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name="created_webhooks", null=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('organization', 'status')),
+            models.Index(fields=("organization", "status")),
         ]
 
     def __str__(self):
-        return f'{self.name} - {self.status}'
+        return f"{self.name} - {self.status}"
 
 
 class WebhookDelivery(models.Model):
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        DELIVERED = 'delivered', 'Delivered'
-        FAILED = 'failed', 'Failed'
-        RETRYING = 'retrying', 'Retrying'
+        PENDING = "pending", "Pending"
+        DELIVERED = "delivered", "Delivered"
+        FAILED = "failed", "Failed"
+        RETRYING = "retrying", "Retrying"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    webhook = models.ForeignKey(Webhook, on_delete=models.CASCADE, related_name='deliveries')
+    webhook = models.ForeignKey(Webhook, on_delete=models.CASCADE, related_name="deliveries")
     event_type = models.CharField(max_length=100)
     payload = models.JSONField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
@@ -167,33 +159,27 @@ class WebhookDelivery(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('webhook', '-created_at')),
-            models.Index(fields=('status', 'next_retry_at')),
+            models.Index(fields=("webhook", "-created_at")),
+            models.Index(fields=("status", "next_retry_at")),
         ]
 
     def __str__(self):
-        return f'{self.webhook} - {self.event_type} ({self.status})'
+        return f"{self.webhook} - {self.event_type} ({self.status})"
 
 
 class APIKey(models.Model):
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        REVOKED = 'revoked', 'Revoked'
-        EXPIRED = 'expired', 'Expired'
+        ACTIVE = "active", "Active"
+        REVOKED = "revoked", "Revoked"
+        EXPIRED = "expired", "Expired"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
-        'identity.Organization',
-        on_delete=models.CASCADE,
-        related_name='api_keys'
+        "identity.Organization", on_delete=models.CASCADE, related_name="api_keys"
     )
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='api_keys'
-    )
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=255)
     prefix = models.CharField(max_length=20)
     key_hash = models.CharField(max_length=128)
@@ -207,28 +193,26 @@ class APIKey(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('organization', 'status')),
-            models.Index(fields=('prefix',)),
+            models.Index(fields=("organization", "status")),
+            models.Index(fields=("prefix",)),
         ]
 
     def __str__(self):
-        return f'{self.name} ({self.prefix}...) - {self.status}'
+        return f"{self.name} ({self.prefix}...) - {self.status}"
 
 
 class KafkaConsumer(models.Model):
     class Status(models.TextChoices):
-        RUNNING = 'running', 'Running'
-        STOPPED = 'stopped', 'Stopped'
-        ERROR = 'error', 'Error'
-        REBALANCING = 'rebalancing', 'Rebalancing'
+        RUNNING = "running", "Running"
+        STOPPED = "stopped", "Stopped"
+        ERROR = "error", "Error"
+        REBALANCING = "rebalancing", "Rebalancing"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
-        'identity.Organization',
-        on_delete=models.CASCADE,
-        related_name='kafka_consumers'
+        "identity.Organization", on_delete=models.CASCADE, related_name="kafka_consumers"
     )
     name = models.CharField(max_length=255)
     group_id = models.CharField(max_length=255)
@@ -241,19 +225,16 @@ class KafkaConsumer(models.Model):
     last_error = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        related_name='created_kafka_consumers',
-        null=True
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name="created_kafka_consumers", null=True
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ('-created_at',)
+        ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=('organization', 'group_id')),
+            models.Index(fields=("organization", "group_id")),
         ]
 
     def __str__(self):
-        return f'{self.name} ({self.group_id}) - {self.status}'
+        return f"{self.name} ({self.group_id}) - {self.status}"
