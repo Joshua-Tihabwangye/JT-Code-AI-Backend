@@ -77,6 +77,7 @@ jobs:
           WEBHOOK_SIGNING_SECRET: ci-outbound-callback-signing-secret
           SENTRY_ENVIRONMENT: production
           AI_PROVIDER: disabled
+          TOOL_CREDENTIALS_ENCRYPTION_KEYS: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
           GEMINI_API_KEY: ci-gemini-api-key-9mY7Kq2V
       - name: Full PostgreSQL test suite
         run: pytest -n 4 --create-db --cov=apps --cov=config

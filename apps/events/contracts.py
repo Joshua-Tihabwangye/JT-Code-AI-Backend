@@ -29,6 +29,10 @@ _JOB_STATUSES = (
     "expired",
 )
 KNOWN_EVENT_TYPES: tuple[str, ...] = (
+    "agents.run.started",
+    "agents.run.completed",
+    "agents.run.failed",
+    "agents.run.cancelled",
     "ai_gateway.evaluation.run",
     "ai_gateway.job.created",
     "asset.created",

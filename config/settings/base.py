@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     "apps.integrations",
     "apps.ai_gateway",
     "apps.agents",
+    "apps.tools",
     "apps.documents",
     "apps.conversions",
 ]
@@ -233,6 +234,16 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 30.0,
         "options": {"expires": 30},
     },
+    "expire-tool-approvals": {
+        "task": "apps.tools.tasks.expire_tool_approvals",
+        "schedule": 300.0,
+        "options": {"expires": 300},
+    },
+    "recover-stalled-agent-runs": {
+        "task": "apps.agents.tasks.recover_stalled_agent_runs",
+        "schedule": 60.0,
+        "options": {"expires": 60},
+    },
     "recover-stalled-chat-requests": {
         "task": "apps.conversations.tasks.recover_stalled_chat_requests",
         "schedule": 60.0,
@@ -268,6 +279,8 @@ CELERY_TASK_ROUTES = {
     "apps.documents.*": {"queue": "jobs.visualization"},
     "apps.conversions.*": {"queue": "jobs.visualization"},
     "apps.conversations.tasks.*": {"queue": "jobs.analysis"},
+    "apps.agents.tasks.*": {"queue": "jobs.analysis"},
+    "apps.tools.tasks.*": {"queue": "jobs.default"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -338,8 +351,36 @@ LLAMA_API_BASE = env("LLAMA_API_BASE")
 LLAMA_API_KEY = env("LLAMA_API_KEY")
 LLAMA_DEFAULT_MODEL = env("LLAMA_DEFAULT_MODEL")
 
-# Agent Runtime
+# Agent Runtime (LangGraph). Platform ceilings: agent definitions can only lower them.
 AGENT_MAX_ITERATIONS = int(env("AGENT_MAX_ITERATIONS", "6"))
+LANGGRAPH_MAX_STEPS = int(env("LANGGRAPH_MAX_STEPS", "20"))
+AGENT_MAX_TOOL_CALLS = int(env("AGENT_MAX_TOOL_CALLS", "10"))
+AGENT_MAX_COST_USD = env_float("AGENT_MAX_COST_USD", 0.50)
+AGENT_MAX_DURATION_SECONDS = int(env("AGENT_MAX_DURATION_SECONDS", "300"))
+AGENT_ROUTER_MODE = env("AGENT_ROUTER_MODE", "rules")
+AGENT_RUN_STALLED_TIMEOUT_SECONDS = int(env("AGENT_RUN_STALLED_TIMEOUT_SECONDS", "660"))
+AGENT_RUN_MAX_ATTEMPTS = int(env("AGENT_RUN_MAX_ATTEMPTS", "3"))
+MAX_CONCURRENT_AGENT_RUNS_PER_TENANT = int(env("MAX_CONCURRENT_AGENT_RUNS_PER_TENANT", "10"))
+
+# Tools, MCP and integrations (Phase 9)
+# Fernet keys (comma-separated; first encrypts, all decrypt) for tool credentials at rest.
+TOOL_CREDENTIALS_ENCRYPTION_KEYS = env_list("TOOL_CREDENTIALS_ENCRYPTION_KEYS")
+EXTERNAL_API_TIMEOUT_SECONDS = int(env("EXTERNAL_API_TIMEOUT_SECONDS", "20"))
+TOOL_MAX_RESPONSE_BYTES = int(env("TOOL_MAX_RESPONSE_BYTES", str(1024 * 1024)))
+TOOL_MAX_OUTPUT_CHARS = int(env("TOOL_MAX_OUTPUT_CHARS", "20000"))
+TOOL_MAX_ARGUMENT_BYTES = int(env("TOOL_MAX_ARGUMENT_BYTES", str(256 * 1024)))
+TOOL_EGRESS_DENYLIST = env_list("TOOL_EGRESS_DENYLIST", "metadata.google.internal,*.internal,*.local")
+TOOL_APPROVAL_TTL_SECONDS = int(env("TOOL_APPROVAL_TTL_SECONDS", "86400"))
+BROWSER_TOOL_ENABLED = env_bool("BROWSER_TOOL_ENABLED", False)
+SEARCH_API_BASE = env("SEARCH_API_BASE", "https://api.search.brave.com/res/v1/web/search")
+SEARCH_API_KEY = env("SEARCH_API_KEY")
+GITHUB_API_BASE = env("GITHUB_API_BASE", "https://api.github.com")
+GITHUB_APP_ID = env("GITHUB_APP_ID")
+GITHUB_APP_PRIVATE_KEY = env("GITHUB_APP_PRIVATE_KEY")
+TOOL_GITHUB_BRANCH_PREFIX = env("TOOL_GITHUB_BRANCH_PREFIX", "jt-code/")
+SLACK_API_BASE = env("SLACK_API_BASE", "https://slack.com/api")
+ENABLE_MCP = env_bool("ENABLE_MCP", True)
+MCP_TOOL_TIMEOUT_SECONDS = int(env("MCP_TOOL_TIMEOUT_SECONDS", "30"))
 
 # Billing
 BILLING_CREDIT_VALUE_USD = env_float("BILLING_CREDIT_VALUE_USD", 0.01)
@@ -401,6 +442,7 @@ REST_FRAMEWORK = {
         "conversions": env("THROTTLE_CONVERSIONS", "20/hour"),
         "research": env("THROTTLE_RESEARCH", "10/hour"),
         "burst": env("THROTTLE_BURST", "30/minute"),
+        "agent_runs": env("THROTTLE_AGENT_RUNS", "20/hour"),
     },
 }
 SPECTACULAR_SETTINGS = {

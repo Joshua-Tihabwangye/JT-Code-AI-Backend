@@ -74,6 +74,8 @@ _BOOL_ENV = (
     "PGVECTOR_ENABLED",
     "HEALTHCHECK_EXTERNAL_DEPENDENCIES",
     "SUPABASE_ALLOW_ANONYMOUS_USERS",
+    "BROWSER_TOOL_ENABLED",
+    "ENABLE_MCP",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
@@ -99,6 +101,18 @@ _INT_ENV = (
     "CHAT_SSE_MAX_SECONDS",
     "CHAT_DISPATCH_GRACE_SECONDS",
     "AI_REQUEST_TIMEOUT_SECONDS",
+    "LANGGRAPH_MAX_STEPS",
+    "AGENT_MAX_TOOL_CALLS",
+    "EXTERNAL_API_TIMEOUT_SECONDS",
+    "TOOL_MAX_RESPONSE_BYTES",
+    "TOOL_MAX_OUTPUT_CHARS",
+    "TOOL_MAX_ARGUMENT_BYTES",
+    "TOOL_APPROVAL_TTL_SECONDS",
+    "MCP_TOOL_TIMEOUT_SECONDS",
+    "AGENT_MAX_DURATION_SECONDS",
+    "AGENT_RUN_STALLED_TIMEOUT_SECONDS",
+    "AGENT_RUN_MAX_ATTEMPTS",
+    "MAX_CONCURRENT_AGENT_RUNS_PER_TENANT",
     "AI_MAX_RETRIES",
     "AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
     "CHAT_REQUEST_STALLED_TIMEOUT_SECONDS",
@@ -123,6 +137,7 @@ _FLOAT_ENV = (
     "SENTRY_PROFILES_SAMPLE_RATE",
     "CHAT_SSE_HEARTBEAT_SECONDS",
     "AI_RETRY_BASE_SECONDS",
+    "AGENT_MAX_COST_USD",
     "AI_RETRY_MAX_BACKOFF_SECONDS",
     "CHAT_SSE_POLL_SECONDS",
     "CHAT_SSE_RECONCILIATION_SECONDS",
@@ -141,6 +156,7 @@ _THROTTLE_ENV = (
     "THROTTLE_CONVERSIONS",
     "THROTTLE_RESEARCH",
     "THROTTLE_BURST",
+    "THROTTLE_AGENT_RUNS",
 )
 _URL_LIST_ENV = ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS")
 
@@ -215,6 +231,34 @@ _GEMINI_THRESHOLDS = frozenset(
 )
 
 
+def _check_tools(problems: list[str], *, strict: bool) -> None:
+    for key in [item.strip() for item in _val("TOOL_CREDENTIALS_ENCRYPTION_KEYS").split(",") if item.strip()]:
+        try:
+            import base64
+
+            if len(base64.urlsafe_b64decode(key.encode())) != 32:
+                raise ValueError
+        except ValueError:
+            problems.append(
+                "TOOL_CREDENTIALS_ENCRYPTION_KEYS must contain Fernet keys (32-byte url-safe base64)."
+            )
+            break
+    for name in ("GITHUB_API_BASE", "SLACK_API_BASE", "SEARCH_API_BASE"):
+        if (value := _val(name)) and urlparse(value).scheme != "https":
+            problems.append(f"{name} must use HTTPS.")
+    prefix = _val("TOOL_GITHUB_BRANCH_PREFIX", "jt-code/")
+    if not prefix or prefix.rstrip("/").lower() in {"main", "master", ""}:
+        problems.append("TOOL_GITHUB_BRANCH_PREFIX must be a dedicated branch namespace such as 'jt-code/'.")
+    if strict and not _val("TOOL_CREDENTIALS_ENCRYPTION_KEYS"):
+        problems.append("TOOL_CREDENTIALS_ENCRYPTION_KEYS is required in staging/production.")
+
+
+def _check_agents(problems: list[str]) -> None:
+    mode = _val("AGENT_ROUTER_MODE")
+    if mode and mode not in {"rules", "model"}:
+        problems.append("AGENT_ROUTER_MODE must be 'rules' or 'model'.")
+
+
 def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
     threshold = _val("GEMINI_SAFETY_THRESHOLD")
     if threshold and threshold not in _GEMINI_THRESHOLDS:
@@ -260,6 +304,8 @@ def validate_environment(profile: str) -> list[str]:
     for name in _URL_LIST_ENV:
         _check_origins(problems, name, require_https=strict)
     _check_ai_gateway(problems, strict=strict)
+    _check_agents(problems)
+    _check_tools(problems, strict=strict)
     if not strict:
         return problems
 

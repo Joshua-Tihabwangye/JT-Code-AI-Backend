@@ -20,4 +20,6 @@ urlpatterns = [
     path("api/v1/", include("apps.governance.urls")),
     path("api/v1/", include("apps.integrations.urls")),
     path("api/v1/", include("apps.ai_gateway.urls")),
+    path("api/v1/", include("apps.agents.urls")),
+    path("api/v1/", include("apps.tools.urls")),
 ]

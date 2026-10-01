@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('identity', '0001_initial'),
+        ('identity', '0003_alter_user_options_alter_user_groups_and_more'),
         ('conversations', '0001_initial'),
     ]
 

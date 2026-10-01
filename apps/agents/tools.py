@@ -11,7 +11,7 @@ organization's collections).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,7 +23,7 @@ class Tool:
     name: str
     description: str
     parameters: dict[str, Any]
-    handler: Callable[[Any, Any, dict[str, Any]], str]
+    handler: Callable[..., str]
 
     def tool_def(self) -> dict[str, Any]:
         return {
@@ -45,17 +45,17 @@ def get_tool(name: str) -> Tool | None:
     return _REGISTRY.get(name)
 
 
-def resolve_tools(names) -> list[Tool]:
+def resolve_tools(names: Iterable[str]) -> list[Tool]:
     """Return registered tools for ``names``, preserving caller order."""
     wanted = set(names)
     return [tool for name, tool in _REGISTRY.items() if name in wanted]
 
 
-def tool_defs(names) -> list[dict[str, Any]]:
+def tool_defs(names: Iterable[str]) -> list[dict[str, Any]]:
     return [tool.tool_def() for tool in resolve_tools(names)]
 
 
-def invoke_tool(name: str, *, user, organization_id, arguments: dict[str, Any]) -> str:
+def invoke_tool(name: str, *, user: Any, organization_id: Any, arguments: dict[str, Any]) -> str:
     """Invoke ``name`` with ``arguments`` bounded to ``user``/``organization_id``.
 
     Returns a string result (or an error description) so a failed tool call can
@@ -72,7 +72,7 @@ def invoke_tool(name: str, *, user, organization_id, arguments: dict[str, Any]) 
         return f"Tool {name!r} execution failed: {exc}"
 
 
-def _knowledge_search(user, organization_id, *, query: str = "", top_k: int = 5) -> str:  # noqa: ARG001
+def _knowledge_search(user: Any, organization_id: Any, *, query: str = "", top_k: int = 5) -> str:  # noqa: ARG001
     if not query:
         return "A query is required for knowledge.search."
     top_k = min(max(int(top_k or 5), 1), 10)
@@ -109,13 +109,13 @@ def _knowledge_search(user, organization_id, *, query: str = "", top_k: int = 5)
     )
 
 
-def _system_now(user, organization_id) -> str:  # noqa: ARG001
+def _system_now(user: Any, organization_id: Any) -> str:  # noqa: ARG001
     from django.utils import timezone
 
     return f"Current UTC time: {timezone.now().isoformat(timespec='seconds')}."
 
 
-def _whoami(user, organization_id) -> str:  # noqa: ARG001
+def _whoami(user: Any, organization_id: Any) -> str:  # noqa: ARG001
     name = getattr(user, "display_name", "") or getattr(user, "full_name", "") or ""
     email = getattr(user, "email", "") or ""
     return f"User: {name or 'unknown'}; email: {email or '(none)'}."

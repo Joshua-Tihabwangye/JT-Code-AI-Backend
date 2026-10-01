@@ -190,6 +190,14 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         purpose="Tool-calling agent runtime (apps.agents)",
     ),
     IntegrationSpec(
+        key="tool_gateway",
+        label="Tool gateway (credential encryption, argument schemas)",
+        distributions=("cryptography", "jsonschema"),
+        modules=("cryptography", "jsonschema"),
+        settings_keys=("TOOL_CREDENTIALS_ENCRYPTION_KEYS",),
+        purpose="Fernet-encrypted tool credentials and JSON-schema argument validation (apps.tools)",
+    ),
+    IntegrationSpec(
         key="weasyprint",
         label="WeasyPrint",
         distributions=("weasyprint", "pydyf"),
