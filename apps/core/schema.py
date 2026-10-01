@@ -71,6 +71,7 @@ class ImageKitSignatureResponseSerializer(_Serializer):
 
 class CompletionRequestSerializer(_Serializer):
     task_type = serializers.CharField(required=False)
+    model_alias = serializers.SlugField(required=False)
     messages = serializers.ListField(child=serializers.DictField(), min_length=1)
     model_id = serializers.UUIDField(required=False)
     policy_slug = serializers.CharField(required=False)
@@ -88,6 +89,22 @@ class QueuedJobResponseSerializer(_Serializer):
 
 class CompletionResponseSerializer(QueuedJobResponseSerializer):
     model = serializers.CharField()
+    modelAlias = serializers.CharField()
+
+
+class CapabilityAliasSerializer(_Serializer):
+    alias = serializers.CharField()
+    description = serializers.CharField()
+    available = serializers.BooleanField()
+    capabilities = serializers.ListField(child=serializers.CharField())
+    isDefault = serializers.BooleanField()
+
+
+class SystemCapabilitiesResponseSerializer(_Serializer):
+    defaultAlias = serializers.CharField()
+    aliases = CapabilityAliasSerializer(many=True)
+    providers = serializers.DictField(child=serializers.BooleanField())
+    fallbackEnabled = serializers.BooleanField()
 
 
 class EmbeddingRequestSerializer(_Serializer):
@@ -276,6 +293,9 @@ CONTRACTS: dict[str, Contract] = {
         {"post": EmbeddingRequestSerializer}, {"post": {202: QueuedJobResponseSerializer}}
     ),
     "apps.ai_gateway.views.AIModelsView": Contract({}, {"get": {200: AvailableModelsResponseSerializer}}),
+    "apps.ai_gateway.views.SystemCapabilitiesView": Contract(
+        {}, {"get": {200: SystemCapabilitiesResponseSerializer}}
+    ),
     "apps.ai_gateway.image_views.ImageGenerationView": Contract(
         {"post": ImageGenerationRequestSerializer}, {"post": {200: ImageGenerationResponseSerializer}}
     ),

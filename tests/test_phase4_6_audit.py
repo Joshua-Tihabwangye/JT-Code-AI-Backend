@@ -578,3 +578,34 @@ def test_control_malformed_event_is_dead_lettered_and_committed(settings, monkey
 
     assert DeadLetterEvent.objects.filter(topic=topic).count() == 1
     assert captured["commits"] == 1
+
+
+def test_migrations_referencing_organization_depend_on_its_creation():
+    """MIG-2: every migration touching identity.Organization must (transitively) follow identity.0003.
+
+    A missing dependency only surfaces on a fresh database, when the planner happens
+    to order the referencing app before the model exists.
+    """
+    from django.db.migrations.loader import MigrationLoader
+
+    creator = ("identity", "0003_alter_user_options_alter_user_groups_and_more")
+    loader = MigrationLoader(None, ignore_no_migrations=True)  # graph only, no database
+
+    def references_organization(operation) -> bool:
+        fields = [field for _name, field in getattr(operation, "fields", [])]
+        if getattr(operation, "field", None) is not None:
+            fields.append(operation.field)
+        return any(
+            str(getattr(field.remote_field, "model", "")).lower() == "identity.organization"
+            for field in fields
+            if getattr(field, "remote_field", None) is not None
+        )
+
+    offenders = [
+        f"{key[0]}.{key[1]}"
+        for key, migration in loader.disk_migrations.items()
+        if key[0] != "identity"
+        and any(references_organization(operation) for operation in migration.operations)
+        and creator not in loader.graph.forwards_plan(key)
+    ]
+    assert offenders == []

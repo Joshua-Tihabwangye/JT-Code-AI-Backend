@@ -65,6 +65,7 @@ _SECRET_ENV = (
     "IMAGEKIT_PRIVATE_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
+    "LLAMA_API_KEY",
     "SENTRY_DSN",
 )
 _BOOL_ENV = (
@@ -73,6 +74,8 @@ _BOOL_ENV = (
     "PGVECTOR_ENABLED",
     "HEALTHCHECK_EXTERNAL_DEPENDENCIES",
     "SUPABASE_ALLOW_ANONYMOUS_USERS",
+    "BROWSER_TOOL_ENABLED",
+    "ENABLE_MCP",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
@@ -97,6 +100,21 @@ _INT_ENV = (
     "WEBHOOK_RETRY_MAX_SECONDS",
     "CHAT_SSE_MAX_SECONDS",
     "CHAT_DISPATCH_GRACE_SECONDS",
+    "AI_REQUEST_TIMEOUT_SECONDS",
+    "LANGGRAPH_MAX_STEPS",
+    "AGENT_MAX_TOOL_CALLS",
+    "EXTERNAL_API_TIMEOUT_SECONDS",
+    "TOOL_MAX_RESPONSE_BYTES",
+    "TOOL_MAX_OUTPUT_CHARS",
+    "TOOL_MAX_ARGUMENT_BYTES",
+    "TOOL_APPROVAL_TTL_SECONDS",
+    "MCP_TOOL_TIMEOUT_SECONDS",
+    "AGENT_MAX_DURATION_SECONDS",
+    "AGENT_RUN_STALLED_TIMEOUT_SECONDS",
+    "AGENT_RUN_MAX_ATTEMPTS",
+    "MAX_CONCURRENT_AGENT_RUNS_PER_TENANT",
+    "AI_MAX_RETRIES",
+    "AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
     "CHAT_REQUEST_STALLED_TIMEOUT_SECONDS",
     "CHAT_MAX_CONTEXT_MESSAGES",
     "JOB_STALLED_TIMEOUT_SECONDS",
@@ -118,6 +136,9 @@ _FLOAT_ENV = (
     "SENTRY_TRACES_SAMPLE_RATE",
     "SENTRY_PROFILES_SAMPLE_RATE",
     "CHAT_SSE_HEARTBEAT_SECONDS",
+    "AI_RETRY_BASE_SECONDS",
+    "AGENT_MAX_COST_USD",
+    "AI_RETRY_MAX_BACKOFF_SECONDS",
     "CHAT_SSE_POLL_SECONDS",
     "CHAT_SSE_RECONCILIATION_SECONDS",
     "WEBHOOK_DELIVERY_TIMEOUT_SECONDS",
@@ -135,6 +156,7 @@ _THROTTLE_ENV = (
     "THROTTLE_CONVERSIONS",
     "THROTTLE_RESEARCH",
     "THROTTLE_BURST",
+    "THROTTLE_AGENT_RUNS",
 )
 _URL_LIST_ENV = ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS")
 
@@ -204,6 +226,58 @@ def _check_tls_url(problems: list[str], name: str) -> None:
         problems.append(f"{name} must use a TLS redis URL (rediss://) in deployable environments.")
 
 
+_GEMINI_THRESHOLDS = frozenset(
+    {"BLOCK_NONE", "BLOCK_ONLY_HIGH", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_LOW_AND_ABOVE", "OFF"}
+)
+
+
+def _check_tools(problems: list[str], *, strict: bool) -> None:
+    for key in [item.strip() for item in _val("TOOL_CREDENTIALS_ENCRYPTION_KEYS").split(",") if item.strip()]:
+        try:
+            import base64
+
+            if len(base64.urlsafe_b64decode(key.encode())) != 32:
+                raise ValueError
+        except ValueError:
+            problems.append(
+                "TOOL_CREDENTIALS_ENCRYPTION_KEYS must contain Fernet keys (32-byte url-safe base64)."
+            )
+            break
+    for name in ("GITHUB_API_BASE", "SLACK_API_BASE", "SEARCH_API_BASE"):
+        if (value := _val(name)) and urlparse(value).scheme != "https":
+            problems.append(f"{name} must use HTTPS.")
+    prefix = _val("TOOL_GITHUB_BRANCH_PREFIX", "jt-code/")
+    if not prefix or prefix.rstrip("/").lower() in {"main", "master", ""}:
+        problems.append("TOOL_GITHUB_BRANCH_PREFIX must be a dedicated branch namespace such as 'jt-code/'.")
+    if strict and not _val("TOOL_CREDENTIALS_ENCRYPTION_KEYS"):
+        problems.append("TOOL_CREDENTIALS_ENCRYPTION_KEYS is required in staging/production.")
+
+
+def _check_agents(problems: list[str]) -> None:
+    mode = _val("AGENT_ROUTER_MODE")
+    if mode and mode not in {"rules", "model"}:
+        problems.append("AGENT_ROUTER_MODE must be 'rules' or 'model'.")
+
+
+def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
+    threshold = _val("GEMINI_SAFETY_THRESHOLD")
+    if threshold and threshold not in _GEMINI_THRESHOLDS:
+        problems.append(f"GEMINI_SAFETY_THRESHOLD must be one of {sorted(_GEMINI_THRESHOLDS)}.")
+    llama_base = _val("LLAMA_API_BASE")
+    if strict and llama_base and urlparse(llama_base).scheme != "https":
+        problems.append("LLAMA_API_BASE must use HTTPS in deployable environments.")
+    if not strict:
+        return
+    if _val("AI_PROVIDER").lower() == "echo":
+        problems.append("AI_PROVIDER=echo is a development stub and is not allowed in staging/production.")
+    if not _val("GEMINI_API_KEY") and not (_val("LLAMA_API_KEY") and llama_base):
+        problems.append(
+            "Configure GEMINI_API_KEY or LLAMA_API_KEY (with LLAMA_API_BASE); the AI gateway has no provider."
+        )
+    if _val("GEMINI_SAFETY_THRESHOLD") in {"BLOCK_NONE", "OFF"}:
+        problems.append("GEMINI_SAFETY_THRESHOLD must not disable Gemini safety filtering in production.")
+
+
 def validate_environment(profile: str) -> list[str]:
     """Return all invalid configuration conditions for ``profile`` without leaking values."""
     if profile not in _PROFILES:
@@ -229,6 +303,9 @@ def validate_environment(profile: str) -> list[str]:
             problems.append(f"{name} must be at least 1.")
     for name in _URL_LIST_ENV:
         _check_origins(problems, name, require_https=strict)
+    _check_ai_gateway(problems, strict=strict)
+    _check_agents(problems)
+    _check_tools(problems, strict=strict)
     if not strict:
         return problems
 

@@ -40,10 +40,15 @@ and so every generation is metered, policed and audited.
 - **Negative:** a gateway adds an abstraction layer and a potential single
   point of failure, mitigated by the fallback chain and `AI_PROVIDER=echo`
   offline mode.
-- **Action (Phase 7):** Gemini/Llama adapters, model aliases and a capability
-  registry, circuit-breaker/fallback tests, and usage/latency/cost recording.
+- **Implemented (Phase 7):** REST Gemini and OpenAI-compatible Llama adapters
+  (`apps.ai_gateway.providers`), a normalized error taxonomy, model aliases and a
+  capability registry (`apps.ai_gateway.registry`), a Redis-shared circuit breaker
+  with bounded jittered retries and a request deadline (`apps.ai_gateway.resilience`),
+  cost ceilings, and per-attempt usage/latency/cost recording. See `docs/AI_GATEWAY.md`.
 
 ## Verification
 
 - `apps/ai_gateway/` implements the boundary; `tests/test_ai_gateway_execution.py`
   and `tests/test_agents_runtime.py` prove the gateway is the only model path.
+- `tests/test_phase7_ai_gateway.py` proves provider fault handling against mock
+  transports and the exit criterion: a provider swap requires no client API change.

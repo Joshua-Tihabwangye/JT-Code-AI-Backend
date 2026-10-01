@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from apps.ai_gateway.models import Evaluation, Model, ModelPolicy, ModelRun, Prompt, Provider
+from apps.ai_gateway.models import (
+    Evaluation,
+    Model,
+    ModelAlias,
+    ModelAliasTarget,
+    ModelPolicy,
+    ModelRun,
+    Prompt,
+    Provider,
+)
 
 
 @admin.register(Provider)
@@ -99,3 +108,21 @@ class EvaluationAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at", "updated_at", "completed_at")
     ordering = ("-created_at",)
     raw_id_fields = ("model", "prompt", "created_by")
+
+
+class ModelAliasTargetInline(admin.TabularInline):
+    model = ModelAliasTarget
+    extra = 0
+    ordering = ("priority",)
+    raw_id_fields = ("model",)
+
+
+@admin.register(ModelAlias)
+class ModelAliasAdmin(admin.ModelAdmin):
+    """Swap providers by re-ordering targets here; clients keep using the alias."""
+
+    list_display = ("slug", "is_active", "required_capabilities", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("slug", "description")
+    readonly_fields = ("id", "created_at", "updated_at")
+    inlines = (ModelAliasTargetInline,)

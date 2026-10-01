@@ -263,33 +263,24 @@ def test_run_agent_events_aggreated():
 @pytest.mark.django_db
 @override_settings(AI_PROVIDER="echo")
 def test_execute_search_research_completes(user, org, credit_balance, monkeypatch):
-    from apps.agents import runtime as agent_runtime
-
+    turns = iter(
+        [
+            _make_outcome(tool_calls=(ToolCall(id="c1", name="system.now", arguments={}),)),
+            _make_outcome(content="research result"),
+        ]
+    )
+    monkeypatch.setattr("apps.ai_gateway.service.generate_completion", lambda **kwargs: next(turns))
     job = _make_job(user, org, Job.TaskType.SEARCH_RESEARCH, {"query": "test query"})
-    call_args = {}
 
-    def fake_run_agent(**kwargs):
-        call_args.update(kwargs)
-
-        class FakeRun:
-            final_answer = "research result"
-            invoked_tools = ["knowledge.search"]
-            model_runs = ["mr-1"]
-            input_tokens = 15
-            output_tokens = 20
-            messages = []
-
-        return FakeRun()
-
-    monkeypatch.setattr(agent_runtime, "run_agent", fake_run_agent)
     result = execute_job(job)
+
     assert result["status"] == "completed"
     assert result["task_type"] == Job.TaskType.SEARCH_RESEARCH
     job.refresh_from_db()
     assert job.status == Job.Status.COMPLETED
     assert job.result["answer"] == "research result"
-    assert job.result["grounded"] is True
-    assert job.result["tools"] == ["knowledge.search"]
+    assert job.result["tools"] == ["system.now"]
+    assert job.result["grounded"] is False
     step = JobStep.objects.get(job=job)
     assert step.status == JobStep.Status.COMPLETED
     assert OutboxEvent.objects.filter(topic__endswith="jobs.job.completed").exists()
@@ -297,16 +288,16 @@ def test_execute_search_research_completes(user, org, credit_balance, monkeypatc
 
 @pytest.mark.django_db
 def test_execute_search_research_failure_records_outbox(user, org, credit_balance, monkeypatch):
-    from apps.agents import runtime as agent_runtime
     from apps.ai_gateway.adapters import AIGatewayError
-
-    job = _make_job(user, org, Job.TaskType.SEARCH_RESEARCH, {"query": "test query"})
 
     def raising(**kwargs):
         raise AIGatewayError("fail", code="GATEWAY_FAIL")
 
-    monkeypatch.setattr(agent_runtime, "run_agent", raising)
+    monkeypatch.setattr("apps.ai_gateway.service.generate_completion", raising)
+    job = _make_job(user, org, Job.TaskType.SEARCH_RESEARCH, {"query": "test query"})
+
     result = execute_job(job)
+
     assert result["status"] == "failed"
     assert result["error_code"] == "GATEWAY_FAIL"
     job.refresh_from_db()

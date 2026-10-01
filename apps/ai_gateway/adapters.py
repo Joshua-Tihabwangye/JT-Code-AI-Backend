@@ -1,9 +1,9 @@
 """Normalized chat generation adapters for the AI gateway.
 
-Adapters translate a provider SDK (OpenAI, Google Gemini, ...) into a common
-``ChatAdapter`` boundary. Consumers of the gateway only ever talk to this
-interface, so models, fallbacks and providers can be reconfigured without
-touching callers.
+Adapters translate a provider API (Gemini, Llama/OpenAI-compatible, OpenAI)
+into a common ``ChatAdapter`` boundary with ``generate`` and optional
+``stream``. Consumers only ever talk to the gateway, so models, fallbacks and
+providers can be reconfigured without touching callers.
 
 An ``echo`` adapter (``AI_PROVIDER=echo``) is provided for local development
 and the deterministic offline test suite.
@@ -42,23 +42,46 @@ class UnsupportedProvider(AIGatewayError):
 
 
 @dataclass(frozen=True)
-class ChatMessage:
-    """A single normalized conversation turn."""
-
-    role: str
-    content: str
-
-    def to_openai(self) -> dict:
-        return {"role": self.role, "content": self.content}
-
-
-@dataclass(frozen=True)
 class ToolCall:
     """A function-calling invocation requested by the model."""
 
     id: str
     name: str
     arguments: dict
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """A single normalized conversation turn.
+
+    Assistant turns may carry ``tool_calls``; ``tool`` turns carry the
+    ``tool_call_id`` and tool ``name`` they answer, so providers receive
+    structured function-calling history rather than flattened text.
+    """
+
+    role: str
+    content: str
+    tool_calls: tuple[ToolCall, ...] = ()
+    tool_call_id: str = ""
+    name: str = ""
+
+    def to_openai(self) -> dict:
+        if self.role == "tool":
+            return {"role": "tool", "tool_call_id": self.tool_call_id or "call-0", "content": self.content}
+        payload: dict = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name.replace(".", "__"),
+                        "arguments": json.dumps(call.arguments),
+                    },
+                }
+                for call in self.tool_calls
+            ]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -128,6 +151,24 @@ class EchoChatAdapter:
             ),
         )
 
+    def stream(
+        self,
+        *,
+        messages: list[ChatMessage],
+        model: object,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        tools: list[dict] | None = None,
+    ):
+        from apps.ai_gateway.providers.base import StreamChunk
+
+        result = self.generate(
+            messages=messages, model=model, temperature=temperature, max_tokens=max_tokens, tools=tools
+        )
+        for index, word in enumerate(result.content.split(" ")):
+            yield StreamChunk(delta=word if index == 0 else f" {word}")
+        yield StreamChunk(usage=result.usage, finish_reason="stop")
+
 
 class OpenAIChatAdapter:
     """OpenAI SDK adapter (also covers OpenAI-compatible Llama endpoints)."""
@@ -159,7 +200,9 @@ class OpenAIChatAdapter:
         if max_tokens is not None:
             request["max_tokens"] = max_tokens
         if tools:
-            request["tools"] = [{"type": "function", "function": t} for t in tools]
+            request["tools"] = [
+                {"type": "function", "function": {**t, "name": t["name"].replace(".", "__")}} for t in tools
+            ]
 
         response = client.chat.completions.create(**request)
         choice = response.choices[0]
@@ -182,50 +225,6 @@ class OpenAIChatAdapter:
         )
 
 
-class GeminiChatAdapter:
-    """Google Gemini adapter (``google-generativeai`` SDK)."""
-
-    def generate(
-        self,
-        *,
-        messages: list[ChatMessage],
-        model: object,
-        temperature: float = 0.7,
-        max_tokens: int | None = None,
-        tools: list[dict] | None = None,
-    ) -> GenerationResult:
-        api_key = settings.GEMINI_API_KEY
-        if not api_key:
-            raise AIProviderNotConfigured("GEMINI_API_KEY is not configured.")
-        import google.generativeai as genai
-
-        genai.configure(api_key=api_key)
-        model_name = getattr(model, "name", "")
-        generation_config = {"temperature": temperature}
-        if max_tokens is not None:
-            generation_config["max_output_tokens"] = max_tokens
-
-        prompt = "\n\n".join(f"{m.role.upper()}: {m.content}" for m in messages)
-        chat_model = genai.GenerativeModel(model_name=model_name)
-        try:
-            response = chat_model.generate_content(prompt, generation_config=generation_config)
-        except Exception as exc:  # noqa: BLE001 - provider error, surfaced to caller
-            raise AIGatewayError(str(exc), code="PROVIDER_CALL_FAILED") from exc
-
-        metadata = getattr(response, "usage_metadata", None)
-        return GenerationResult(
-            content=(getattr(response, "text", "") or ""),
-            model_name=model_name,
-            provider_type="google",
-            usage=Usage(
-                input_tokens=getattr(metadata, "prompt_token_count", 0) or 0,
-                output_tokens=getattr(metadata, "candidates_token_count", 0) or 0,
-                cached_tokens=getattr(metadata, "cached_content_token_count", 0) or 0,
-            ),
-            tool_calls=tuple(_parse_gemini_function_calls(response)),
-        )
-
-
 def _parse_openai_tool_calls(raw):  # noqa: ANN001
     if not raw:
         return []
@@ -239,46 +238,29 @@ def _parse_openai_tool_calls(raw):  # noqa: ANN001
         out.append(
             ToolCall(
                 id=getattr(tc, "id", "") or "",
-                name=getattr(tc.function, "name", "") or "",
+                name=(getattr(tc.function, "name", "") or "").replace("__", "."),
                 arguments=args,
             )
         )
     return out
 
 
-def _parse_gemini_function_calls(response):  # noqa: ANN001
-    out = []
-    try:
-        candidates = getattr(response, "candidates", []) or []
-        if not candidates:
-            return out
-        parts = getattr(candidates[0], "content", None) and getattr(candidates[0].content, "parts", []) or []
-        for i, part in enumerate(parts):
-            fc = getattr(part, "function_call", None)
-            if fc is None:
-                continue
-            out.append(
-                ToolCall(
-                    id=f"gemini-fc-{i}",
-                    name=getattr(fc, "name", "") or "",
-                    arguments=dict(getattr(fc, "args", {}) or {}),
-                )
-            )
-    except Exception:  # noqa: BLE001 - defensive; malformed response
-        return out
-    return out
-
-
+# Provider type -> adapter class path. Loaded lazily: provider modules import
+# this module for the shared types, so eager imports would be circular.
 ADAPTERS = {
-    "echo": EchoChatAdapter,
-    "openai": OpenAIChatAdapter,
-    "google": GeminiChatAdapter,
+    "echo": "apps.ai_gateway.adapters.EchoChatAdapter",
+    "openai": "apps.ai_gateway.adapters.OpenAIChatAdapter",
+    "google": "apps.ai_gateway.providers.gemini.GeminiChatAdapter",
+    "llama": "apps.ai_gateway.providers.llama.LlamaChatAdapter",
 }
 
 
 def get_adapter_for_provider(provider_type: str) -> type[ChatAdapter] | None:
     """Return the adapter class for a provider type (or ``None``)."""
-    return ADAPTERS.get(provider_type)
+    from django.utils.module_loading import import_string
+
+    path = ADAPTERS.get(provider_type)
+    return import_string(path) if path else None
 
 
 def build_chat_adapter(provider_type: str) -> ChatAdapter:

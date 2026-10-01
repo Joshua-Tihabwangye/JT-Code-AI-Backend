@@ -36,3 +36,7 @@ class ResearchThrottle(PerUserRateThrottle):
 
 class BurstThrottle(PerUserRateThrottle):
     scope = "burst"
+
+
+class AgentRunThrottle(PerUserRateThrottle):
+    scope = "agent_runs"

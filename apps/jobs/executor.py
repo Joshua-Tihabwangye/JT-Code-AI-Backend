@@ -10,7 +10,6 @@ from __future__ import annotations
 from decimal import Decimal
 
 import sentry_sdk
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -54,12 +53,14 @@ def _run_completion(job: Job, messages: list[ChatMessage]) -> dict:
         task_type=job.task_type,
         model_id=payload.get("model_id"),
         policy_slug=payload.get("policy_slug"),
+        model_alias=payload.get("model_alias"),
         temperature=payload.get("temperature", 0.7),
         max_tokens=payload.get("max_tokens"),
         tools=payload.get("tools"),
         request_id=str(job.request_id),
         trace_id=job.trace_id or "",
         job_id=str(job.id),
+        organization_id=job.organization_id,
     )
     usage = {
         "input_tokens": outcome.usage.input_tokens,
@@ -68,6 +69,8 @@ def _run_completion(job: Job, messages: list[ChatMessage]) -> dict:
         "cost_usd": str(outcome.run.provider_cost_usd),
         "model": outcome.model.name,
         "provider": outcome.provider.type,
+        "model_alias": outcome.model_alias,
+        "model_run_id": str(outcome.run.id),
     }
     return {"answer": outcome.content, "usage": usage}
 
@@ -81,43 +84,52 @@ def _general_question(job: Job) -> dict:
 
 
 def _search_research(job: Job) -> dict:
+    """Run a durable, traced research agent run bound to this job.
+
+    The run is keyed to the job, so a retried job resumes the same run (from its
+    checkpoint) instead of starting a second one.
+    """
     payload = job.input_payload
     query = payload.get("query") or _last_user_text(payload) or ""
     if not query:
         raise AIGatewayError("No query provided in job payload", code="INVALID_INPUT")
 
-    from langchain_core.messages import HumanMessage
+    from apps.agents.engine import create_run, execute_run
+    from apps.agents.models import AgentRun, AgentStep
 
-    from apps.agents.runtime import run_agent
-    from apps.agents.tools import default_agent_tools
-
-    requested = tuple(payload.get("tools") or default_agent_tools())
-    allowed = set(default_agent_tools())
-    tools = tuple(t for t in requested if t in allowed) or default_agent_tools()
-
-    run = run_agent(
+    run, _created = create_run(
         user=job.owner,
-        organization_id=job.organization_id,
-        initial_messages=[HumanMessage(content=query)],
-        task_type=job.task_type,
-        temperature=payload.get("temperature", 0.7),
-        max_tokens=payload.get("max_tokens"),
-        tools=tools,
-        max_model_calls=settings.AGENT_MAX_ITERATIONS,
-        request_id=str(job.request_id),
+        organization=job.organization,
+        input_text=query,
+        graph="research",
+        requested_tools=payload.get("tools") or None,
+        idempotency_key=f"job:{job.id}",
         trace_id=job.trace_id or "",
-        job_id=str(job.id),
+        job=job,
     )
+    run = execute_run(run.id)
+    if run.status != AgentRun.Status.COMPLETED:
+        raise AIGatewayError(
+            run.error_message or f"Agent run ended as {run.status}",
+            code=run.error_code or "AGENT_RUN_FAILED",
+        )
+    trace = list(AgentStep.objects.filter(run=run).order_by("sequence"))
+    tools = [
+        step.detail.get("tool", "")
+        for step in trace
+        if step.kind == AgentStep.Kind.TOOL and step.outcome == "ok"
+    ]
     return {
-        "answer": run.final_answer,
-        "tools": run.invoked_tools,
-        "messages": _serialize_agent_messages(run.messages),
-        "model_runs": run.model_runs,
-        "grounded": "knowledge.search" in run.invoked_tools,
+        "answer": run.final_output,
+        "agent_run_id": str(run.id),
+        "tools": tools,
+        "model_runs": [str(step.model_run_id) for step in trace if step.model_run_id],
+        "grounded": "knowledge.search" in tools,
         "usage": {
             "input_tokens": run.input_tokens,
             "output_tokens": run.output_tokens,
-            "model_calls": len(run.model_runs),
+            "model_calls": run.model_calls,
+            "cost_usd": str(run.cost_usd),
         },
     }
 
@@ -149,23 +161,6 @@ def _knowledge_ingestion(job: Job) -> dict:
         "chunk_count": document.chunk_count,
         "vectors_stored": bool(document.vector_ids),
     }
-
-
-def _serialize_agent_messages(messages) -> list[dict]:
-    from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-
-    out = []
-    for message in messages:
-        if not isinstance(message, BaseMessage):
-            continue
-        if isinstance(message, AIMessage):
-            role, content = "assistant", str(message.content or "")
-        elif isinstance(message, ToolMessage):
-            role, content = "tool", str(message.content or "")
-        else:
-            role, content = "user", str(message.content or "")
-        out.append({"role": role, "content": content})
-    return out
 
 
 def _rag_query(job: Job) -> dict:

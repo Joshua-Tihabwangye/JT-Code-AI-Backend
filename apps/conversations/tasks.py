@@ -185,6 +185,7 @@ def process_chat_request(self, request_id: str) -> dict:
             task_type=request.task_type,
             request_id=str(request.id),
             trace_id=request.trace_id,
+            organization_id=request.organization_id,
         )
         with transaction.atomic():
             request = (
