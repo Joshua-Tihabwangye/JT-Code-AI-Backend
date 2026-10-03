@@ -44,6 +44,7 @@ class ConversionJobSerializer(serializers.ModelSerializer):
             "output_bytes",
             "reserved_credits",
             "output_url",
+            "output_asset",
             "error_message",
             "created_at",
             "updated_at",

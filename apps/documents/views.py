@@ -13,9 +13,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
+from apps.assets.services import register_generated_asset, soft_delete_asset
 from apps.core.throttling import BurstThrottle, ConversionThrottle
 from apps.documents.models import Document
-from apps.documents.rendering import render_docx, render_pdf, upload_rendered_bytes
+from apps.documents.rendering import render_docx, render_pdf
 from apps.documents.serializers import (
     DocumentCreateSerializer,
     DocumentRenderSerializer,
@@ -62,13 +64,25 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        soft_delete_asset(instance.rendered_asset)
         instance.version += 1
         instance.status = Document.Status.DRAFT
         instance.download_url = ""
+        instance.rendered_asset = None
         instance.page_count = None
-        instance.save(update_fields=["version", "status", "download_url", "page_count", "updated_at"])
+        instance.save(
+            update_fields=[
+                "version",
+                "status",
+                "download_url",
+                "rendered_asset",
+                "page_count",
+                "updated_at",
+            ]
+        )
 
     def perform_destroy(self, instance):
+        soft_delete_asset(instance.rendered_asset)
         if instance.download_url:
             self._remove_local_render(instance)
         instance.delete()
@@ -78,21 +92,31 @@ class DocumentViewSet(viewsets.ModelViewSet):
             for path in RENDER_ROOT.glob(f"{instance.id}.*"):
                 path.unlink(missing_ok=True)
 
-    def _save_render(self, instance: Document, content: bytes, fmt: str) -> str:
-        url = upload_rendered_bytes(
-            content,
-            file_name=f"{instance.id}.{fmt}",
-            folder=f"/jt-code/documents/{instance.owner_id}",
-        )
-        if url:
-            return url
+    def _save_render(self, instance: Document, content: bytes, fmt: str):
+        if imagekit_is_configured():
+            content_types = {
+                "pdf": "application/pdf",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            asset = register_generated_asset(
+                content,
+                owner=instance.owner,
+                organization=instance.organization,
+                file_name=f"{instance.id}.{fmt}",
+                folder=f"/{settings.IMAGEKIT_UPLOAD_FOLDER.strip('/')}/{instance.owner_id}/documents",
+                content_type=content_types[fmt],
+                provenance={"document_id": str(instance.id), "document_version": instance.version},
+            )
+            return generate_signed_delivery_url(asset.imagekit_file_path), asset
+        if not settings.ASSET_LOCAL_FALLBACK_ENABLED:
+            raise RuntimeError("ImageKit is required for rendered documents in deployable environments.")
         RENDER_ROOT.mkdir(parents=True, exist_ok=True)
         path = RENDER_ROOT / f"{instance.id}.{fmt}"
         with open(path, "wb") as fh:
             fh.write(content)
         from django.urls import reverse
 
-        return f"{reverse('document-download', kwargs={'id': instance.id})}?fmt={fmt}"
+        return f"{reverse('document-download', kwargs={'id': instance.id})}?fmt={fmt}", None
 
     @action(detail=True, methods=["post"], throttle_classes=[ConversionThrottle, BurstThrottle])
     def render(self, request: Request, id=None):
@@ -139,11 +163,22 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        download_url = self._save_render(document, content, fmt)
+        try:
+            download_url, rendered_asset = self._save_render(document, content, fmt)
+        except Exception as exc:
+            document.status = Document.Status.FAILED
+            document.error_message = str(exc)[:500]
+            document.save(update_fields=["status", "error_message", "updated_at"])
+            return Response(
+                {"detail": "Rendered asset storage failed."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        soft_delete_asset(document.rendered_asset)
         document.status = Document.Status.READY
-        document.download_url = download_url
+        document.download_url = download_url if rendered_asset is None else ""
+        document.rendered_asset = rendered_asset
         document.page_count = pages
-        document.save(update_fields=["status", "download_url", "page_count", "updated_at"])
+        document.save(update_fields=["status", "download_url", "rendered_asset", "page_count", "updated_at"])
 
         add_outbox_event(
             "document.render.completed",
@@ -164,6 +199,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 "format": fmt,
                 "pages": pages,
                 "download_url": download_url,
+                "asset_id": str(rendered_asset.id) if rendered_asset else None,
             }
         )
 

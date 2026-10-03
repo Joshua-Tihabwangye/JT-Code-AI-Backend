@@ -16,7 +16,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai_gateway.models import GeneratedImage, Model, Provider
-from apps.assets.imagekit import upload_bytes_to_imagekit
+from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
+from apps.assets.services import register_generated_asset
 from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ImageThrottle
 from apps.events.outbox import add_outbox_event
@@ -153,23 +154,35 @@ def _wrap_text(text: str, width: int) -> list[str]:
     return lines
 
 
-def _save_image(content: bytes, image_id: uuid.UUID, *, organization, owner) -> str:
-    imagekit_url = upload_bytes_to_imagekit(
-        content,
-        file_name=f"{image_id}.png",
-        folder="/jt-code/images",
-        content_type="image/png",
-    )
-    if imagekit_url:
-        url = imagekit_url
-    else:
+def _save_image(content: bytes, image_id: uuid.UUID, *, organization, owner) -> tuple[str, GeneratedImage]:
+    asset = None
+    if imagekit_is_configured():
+        asset = register_generated_asset(
+            content,
+            owner=owner,
+            organization=organization,
+            file_name=f"{image_id}.png",
+            folder=f"/{settings.IMAGEKIT_UPLOAD_FOLDER.strip('/')}/{owner.id}/images",
+            content_type="image/png",
+            provenance={"generated_image_id": str(image_id)},
+        )
+        url = generate_signed_delivery_url(asset.imagekit_file_path)
+    elif settings.ASSET_LOCAL_FALLBACK_ENABLED:
         IMAGE_RENDER_ROOT.mkdir(parents=True, exist_ok=True)
         path = IMAGE_RENDER_ROOT / f"{image_id}.png"
         with open(path, "wb") as fh:
             fh.write(content)
         url = f"/images/{image_id}/download/"
-    GeneratedImage.objects.create(id=image_id, organization=organization, owner=owner, storage_url=url)
-    return url
+    else:
+        raise RuntimeError("ImageKit is required for generated images in deployable environments.")
+    image = GeneratedImage.objects.create(
+        id=image_id,
+        organization=organization,
+        owner=owner,
+        storage_url=url if asset is None else "",
+        asset=asset,
+    )
+    return url, image
 
 
 def _size_tuple(size: str) -> tuple[int, int]:
@@ -214,8 +227,10 @@ class ImageGenerationView(APIView):
                     {"detail": "No image model is configured. Set up an AI image provider first."},
                     status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-            url = _save_image(content, image_id, organization=organization, owner=request.user)
-            generated.append({"url": url, "id": str(image_id)})
+            url, image = _save_image(content, image_id, organization=organization, owner=request.user)
+            generated.append(
+                {"url": url, "id": str(image_id), "asset_id": str(image.asset_id) if image.asset_id else None}
+            )
 
         CreditService.reserve_credits(
             user=request.user,
@@ -272,7 +287,7 @@ class ImageEditView(APIView):
 
         image_id = uuid.uuid4()
         content = _generate_placeholder(f"{prompt} (edited)", size, str(image_id))
-        url = _save_image(content, image_id, organization=organization, owner=request.user)
+        url, image = _save_image(content, image_id, organization=organization, owner=request.user)
 
         CreditService.reserve_credits(
             user=request.user,
@@ -289,7 +304,18 @@ class ImageEditView(APIView):
                 "prompt": prompt,
             },
         )
-        return Response({"data": [{"url": url, "id": str(image_id)}], "request_id": str(request_id)})
+        return Response(
+            {
+                "data": [
+                    {
+                        "url": url,
+                        "id": str(image_id),
+                        "asset_id": str(image.asset_id) if image.asset_id else None,
+                    }
+                ],
+                "request_id": str(request_id),
+            }
+        )
 
 
 class ImageUnderstandingView(APIView):

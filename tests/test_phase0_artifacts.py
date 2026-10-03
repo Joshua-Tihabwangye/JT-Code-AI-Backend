@@ -25,7 +25,7 @@ DOCS_DIR = PROJECT_ROOT / "docs"
 
 MANDATORY_ADRS = {
     "ADR-001": "ADR-001-supabase-auth-and-django-authorization.md",
-    "ADR-002": "ADR-002-imagekit-removes-cloudinary.md",
+    "ADR-002": "ADR-002-imagekit-asset-architecture.md",
     "ADR-003": "ADR-003-agentic-rag-vector-store.md",
     "ADR-004": "ADR-004-ai-gateway.md",
     "ADR-005": "ADR-005-kafka-celery-n8n-boundaries.md",
@@ -275,12 +275,11 @@ def test_strict_mode_fails_on_drift(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 # ADR removal guarantees
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("retired", ("clerk", "cloudinary", "pinecone"))
+@pytest.mark.parametrize("retired", ("clerk", "pinecone"))
 def test_retired_integrations_have_no_runtime_reference(retired: str):
     """ADR-001/002/003 removal guarantees, checked against real source."""
     needles = {
         "clerk": ("clerk", "pyclerk", "clerk_backend_api", "CLERK_"),
-        "cloudinary": ("cloudinary", "CLOUDINARY_"),
         "pinecone": ("pinecone", "PINECONE_"),
     }[retired]
     offenders: list[str] = []
@@ -296,7 +295,7 @@ def test_retired_integrations_have_no_runtime_reference(retired: str):
 
 def test_retired_integrations_absent_from_env_example():
     text = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
-    for var in ("CLERK_SECRET_KEY", "CLERK_API_KEY", "CLOUDINARY_URL", "PINECONE_API_KEY"):
+    for var in ("CLERK_SECRET_KEY", "CLERK_API_KEY", "PINECONE_API_KEY"):
         assert var not in text, f"{var} must be removed from .env.example"
 
 

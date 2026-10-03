@@ -8,10 +8,8 @@ from pgvector.django import VectorField
 class Collection(models.Model):
     class EmbeddingProvider(models.TextChoices):
         OPENAI = "openai", "OpenAI"
-        COHERE = "cohere", "Cohere"
-        HUGGINGFACE = "huggingface", "HuggingFace"
-        VOYAGE = "voyage", "Voyage AI"
-        CUSTOM = "custom", "Custom"
+        GEMINI = "gemini", "Google Gemini"
+        ECHO = "echo", "Echo (development/test only)"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
@@ -52,11 +50,7 @@ class Source(models.Model):
     class SourceType(models.TextChoices):
         FILE = "file", "File Upload"
         URL = "url", "Web URL"
-        CONNECTOR = "connector", "External Connector"
         TEXT = "text", "Raw Text"
-        DATABASE = "database", "Database"
-        EMAIL = "email", "Email"
-        DRIVE = "drive", "Google Drive / OneDrive"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -96,6 +90,10 @@ class Source(models.Model):
 
 
 class Document(models.Model):
+    class Visibility(models.TextChoices):
+        ORGANIZATION = "organization", "Organization"
+        RESTRICTED = "restricted", "Restricted"
+
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
         PARSING = "parsing", "Parsing"
@@ -118,6 +116,9 @@ class Document(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     metadata = models.JSONField(default=dict, blank=True)
     acl = models.JSONField(default=dict, blank=True)
+    visibility = models.CharField(
+        max_length=20, choices=Visibility.choices, default=Visibility.ORGANIZATION, db_index=True
+    )
     classification = models.CharField(max_length=20, default="internal")
     chunk_count = models.PositiveIntegerField(default=0)
     vector_ids = models.JSONField(default=list, blank=True)
@@ -138,6 +139,31 @@ class Document(models.Model):
 
     def __str__(self):
         return f"{self.title} ({self.status})"
+
+
+class DocumentAccessGrant(models.Model):
+    """An explicit principal grant for a restricted knowledge document."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="access_grants")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="knowledge_document_grants"
+    )
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="granted_knowledge_documents",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("document", "user"), name="uniq_document_user_grant")]
+        indexes = [models.Index(fields=("user", "document"))]
+
+    def __str__(self):
+        return f"{self.user_id} may access {self.document_id}"
 
 
 class Chunk(models.Model):
@@ -161,6 +187,10 @@ class Chunk(models.Model):
     )
     embedding_model = models.CharField(max_length=100, blank=True)
     embedding_dimensions = models.PositiveIntegerField(null=True, blank=True)
+    # Immutable identifier for the embedding representation.  Keeping this on
+    # each vector lets an operator find/re-index stale vectors after a model,
+    # dimension, or chunking-policy change.
+    embedding_version = models.CharField(max_length=160, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -222,3 +252,35 @@ class Citation(models.Model):
 
     def __str__(self):
         return f"Citation {self.citation_index} for Job {self.job_id}"
+
+
+class RAGEvaluation(models.Model):
+    """A reproducible quality record for one completed grounded response."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.CASCADE, related_name="rag_evaluations"
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="rag_evaluations",
+        null=True,
+    )
+    job = models.OneToOneField(
+        "jobs.Job", on_delete=models.CASCADE, related_name="rag_evaluation", null=True, blank=True
+    )
+    query = models.TextField()
+    expected_chunk_ids = models.JSONField(default=list, blank=True)
+    retrieved_chunk_ids = models.JSONField(default=list, blank=True)
+    metrics = models.JSONField(default=dict, blank=True)
+    passed = models.BooleanField(default=False)
+    evaluator = models.CharField(max_length=80, default="heuristic-rag-v1")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=("organization", "-created_at"))]
+
+    def __str__(self):
+        return f"RAG evaluation {self.id} ({'pass' if self.passed else 'fail'})"

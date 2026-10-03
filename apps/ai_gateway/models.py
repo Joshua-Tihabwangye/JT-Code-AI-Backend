@@ -357,6 +357,13 @@ class GeneratedImage(models.Model):
     )
     owner = models.ForeignKey("identity.User", on_delete=models.CASCADE, related_name="generated_images")
     storage_url = models.URLField(max_length=1000, blank=True)
+    asset = models.OneToOneField(
+        "assets.Asset",
+        on_delete=models.SET_NULL,
+        related_name="generated_image",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

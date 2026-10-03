@@ -97,7 +97,7 @@ def test_embed_texts_empty_and_dimension_check(settings, monkeypatch):
         provider_name = "wrong"
         model_name = "wrong"
 
-        def embed_texts(self, texts):
+        def embed_texts(self, texts, *, task_type="document"):
             return [[0.0] * 64] * len(texts)
 
     monkeypatch.setattr(embeddings, "get_embedding_provider", lambda: WrongDimsProvider())
@@ -170,7 +170,7 @@ def test_search_excludes_collections_outside_org(api_client, user, collection):
 
 
 @pytest.mark.django_db
-def test_search_returns_503_when_pgvector_unavailable(api_client, user, collection, settings):
+def test_search_falls_back_to_lexical_when_pgvector_unavailable(api_client, user, collection, settings):
     settings.PGVECTOR_ENABLED = False
     api_client.force_authenticate(user=user)
     response = api_client.post(
@@ -178,7 +178,8 @@ def test_search_returns_503_when_pgvector_unavailable(api_client, user, collecti
         {"query": "hello", "collection_ids": [str(collection.id)]},
         format="json",
     )
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json()["results"] == []
 
 
 @pytest.mark.django_db
@@ -186,7 +187,7 @@ def test_search_with_mocked_store_returns_results(api_client, user, collection, 
     monkeypatch.setattr(
         embeddings,
         "embed_texts",
-        lambda texts: [[0.25] * 1536],
+        lambda texts, **kwargs: [[0.25] * 1536],
     )
     monkeypatch.setattr(
         vectorstore,
@@ -240,7 +241,10 @@ def test_process_document_indexes_text_source(db, text_source):
     assert OutboxEvent.objects.filter(topic__endswith="knowledge.document.indexed").exists()
     # Supabase pgvector stores one embedding per chunk.
     assert len(document.vector_ids) == document.chunk_count
-    assert not Chunk.objects.filter(document=document, embedding__isnull=True).exists()
+    if vectorstore.vector_store_enabled():
+        assert not Chunk.objects.filter(document=document, embedding__isnull=True).exists()
+    else:
+        assert not Chunk.objects.filter(document=document, embedding__isnull=False).exists()
 
 
 @pytest.mark.django_db

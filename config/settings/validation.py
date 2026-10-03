@@ -76,12 +76,17 @@ _BOOL_ENV = (
     "SUPABASE_ALLOW_ANONYMOUS_USERS",
     "BROWSER_TOOL_ENABLED",
     "ENABLE_MCP",
+    "ASSET_LOCAL_FALLBACK_ENABLED",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
     "AI_GATEWAY_MAX_LATENCY_MS",
     "IMAGEKIT_MAX_UPLOAD_BYTES",
     "IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS",
+    "ASSET_DELETE_GRACE_DAYS",
+    "ASSET_ORPHAN_GRACE_HOURS",
+    "IMAGEKIT_RECONCILE_PAGE_SIZE",
+    "IMAGEKIT_RECONCILE_MAX_PAGES",
     "DATABASE_CONN_MAX_AGE",
     "DATABASE_CONNECT_TIMEOUT_SECONDS",
     "VECTOR_EMBEDDING_DIMENSIONS",
@@ -90,6 +95,7 @@ _INT_ENV = (
     "RAG_TOP_K",
     "RAG_RERANK_TOP_K",
     "RAG_MAX_EXTRACTED_BYTES",
+    "RAG_EMBEDDING_MAX_RETRIES",
     "EVENT_OUTBOX_MAX_ATTEMPTS",
     "EVENT_OUTBOX_MAX_BACKOFF_SECONDS",
     "EVENT_OUTBOX_LEASE_SECONDS",
@@ -124,6 +130,19 @@ _INT_ENV = (
     "KAFKA_TOPIC_PARTITIONS",
     "KAFKA_TOPIC_REPLICATION_FACTOR",
     "KAFKA_TOPIC_RETENTION_MS",
+    "ANALYTICS_MAX_INLINE_BYTES",
+    "ANALYTICS_MAX_DATASET_BYTES",
+    "ANALYTICS_MAX_RESULT_BYTES",
+    "ANALYTICS_MAX_DATASET_ROWS",
+    "ANALYTICS_MAX_DATASET_COLUMNS",
+    "ANALYTICS_MAX_DATASET_CELLS",
+    "ANALYTICS_RESULT_PREVIEW_ROWS",
+    "ANALYTICS_MAX_CHART_POINTS",
+    "ANALYTICS_MAX_PLOTLY_SPEC_BYTES",
+    "ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS",
+    "ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS",
+    "ANALYTICS_TASK_TIME_LIMIT_SECONDS",
+    "ANALYTICS_STALLED_AFTER_MINUTES",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
@@ -133,6 +152,8 @@ _FLOAT_ENV = (
     "VECTOR_MIN_SIMILARITY",
     "RAG_SIMILARITY_THRESHOLD",
     "RAG_URL_FETCH_TIMEOUT_SECONDS",
+    "RAG_EMBEDDING_TIMEOUT_SECONDS",
+    "IMAGEKIT_API_TIMEOUT_SECONDS",
     "SENTRY_TRACES_SAMPLE_RATE",
     "SENTRY_PROFILES_SAMPLE_RATE",
     "CHAT_SSE_HEARTBEAT_SECONDS",
@@ -157,6 +178,7 @@ _THROTTLE_ENV = (
     "THROTTLE_RESEARCH",
     "THROTTLE_BURST",
     "THROTTLE_AGENT_RUNS",
+    "THROTTLE_ANALYTICS",
 )
 _URL_LIST_ENV = ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS")
 
@@ -259,6 +281,21 @@ def _check_agents(problems: list[str]) -> None:
         problems.append("AGENT_ROUTER_MODE must be 'rules' or 'model'.")
 
 
+def _check_analytics(problems: list[str]) -> None:
+    names = [name for name in _INT_ENV if name.startswith("ANALYTICS_")]
+    for name in names:
+        value = _val(name)
+        if value and value.isdigit() and int(value) < 1:
+            problems.append(f"{name} must be at least 1.")
+    soft = _val("ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS", "270")
+    hard = _val("ANALYTICS_TASK_TIME_LIMIT_SECONDS", "300")
+    if soft.isdigit() and hard.isdigit() and int(soft) >= int(hard):
+        problems.append("ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS must be below the hard time limit.")
+    stalled = _val("ANALYTICS_STALLED_AFTER_MINUTES", "15")
+    if stalled.isdigit() and hard.isdigit() and int(stalled) * 60 <= int(hard):
+        problems.append("ANALYTICS_STALLED_AFTER_MINUTES must exceed the hard task time limit.")
+
+
 def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
     threshold = _val("GEMINI_SAFETY_THRESHOLD")
     if threshold and threshold not in _GEMINI_THRESHOLDS:
@@ -276,6 +313,23 @@ def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
         )
     if _val("GEMINI_SAFETY_THRESHOLD") in {"BLOCK_NONE", "OFF"}:
         problems.append("GEMINI_SAFETY_THRESHOLD must not disable Gemini safety filtering in production.")
+
+
+def _check_rag(problems: list[str], *, strict: bool) -> None:
+    provider = _val("RAG_EMBEDDING_PROVIDER", "openai").lower()
+    if provider not in {"openai", "gemini", "echo"}:
+        problems.append("RAG_EMBEDDING_PROVIDER must be openai, gemini, or echo.")
+        return
+    if not strict:
+        return
+    if provider == "echo":
+        problems.append("RAG_EMBEDDING_PROVIDER=echo is not allowed in staging/production.")
+    if provider == "openai" and not _val("OPENAI_API_KEY"):
+        problems.append("OPENAI_API_KEY is required when RAG_EMBEDDING_PROVIDER=openai.")
+    if provider == "gemini" and not _val("GEMINI_API_KEY"):
+        problems.append("GEMINI_API_KEY is required when RAG_EMBEDDING_PROVIDER=gemini.")
+    if _val("PGVECTOR_ENABLED", "true").lower() not in {"1", "true", "yes", "on"}:
+        problems.append("PGVECTOR_ENABLED must be enabled in staging/production.")
 
 
 def validate_environment(profile: str) -> list[str]:
@@ -304,7 +358,9 @@ def validate_environment(profile: str) -> list[str]:
     for name in _URL_LIST_ENV:
         _check_origins(problems, name, require_https=strict)
     _check_ai_gateway(problems, strict=strict)
+    _check_rag(problems, strict=strict)
     _check_agents(problems)
+    _check_analytics(problems)
     _check_tools(problems, strict=strict)
     if not strict:
         return problems
@@ -317,6 +373,8 @@ def validate_environment(profile: str) -> list[str]:
 
     if _val("DJANGO_DEBUG", "0").lower() in {"1", "true", "yes", "on"}:
         problems.append("DJANGO_DEBUG must not be enabled in staging or production.")
+    if _val("ASSET_LOCAL_FALLBACK_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+        problems.append("ASSET_LOCAL_FALLBACK_ENABLED is not allowed in staging/production.")
     hosts = _origins(_val("DJANGO_ALLOWED_HOSTS"))
     if not hosts:
         problems.append("DJANGO_ALLOWED_HOSTS is required in production/staging.")

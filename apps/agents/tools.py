@@ -72,30 +72,33 @@ def invoke_tool(name: str, *, user: Any, organization_id: Any, arguments: dict[s
         return f"Tool {name!r} execution failed: {exc}"
 
 
-def _knowledge_search(user: Any, organization_id: Any, *, query: str = "", top_k: int = 5) -> str:  # noqa: ARG001
+def _knowledge_search(user: Any, organization_id: Any, *, query: str = "", top_k: int = 5) -> str:
     if not query:
         return "A query is required for knowledge.search."
     top_k = min(max(int(top_k or 5), 1), 10)
     try:
-        from apps.knowledge.embeddings import embed_texts
-        from apps.knowledge.vectorstore import vector_store_enabled
-
-        if not vector_store_enabled():
-            return "The knowledge vector store is currently unavailable."
+        from apps.knowledge.embeddings import EmbeddingError, embed_query
         from apps.knowledge.models import Collection
-        from apps.knowledge.vectorstore import semantic_search
+        from apps.knowledge.retrieval import hybrid_search
 
         collection_ids = list(
-            Collection.objects.filter(organization_id=organization_id).values_list("id", flat=True)
+            Collection.objects.filter(organization_id=organization_id, is_active=True).values_list(
+                "id", flat=True
+            )
         )
         if not collection_ids:
             return "No knowledge collections exist for this organization."
 
-        vectors = embed_texts([query])
-        results = semantic_search(
-            query_vector=vectors[0],
+        try:
+            query_vector = embed_query(query)
+        except EmbeddingError:
+            query_vector = None
+        results = hybrid_search(
+            query,
+            query_vector,
             collection_ids=collection_ids,
             organization_id=organization_id,
+            user=user,
             top_k=top_k,
         )
     except Exception as exc:  # noqa: BLE001 - tool failures are surfaced to the model

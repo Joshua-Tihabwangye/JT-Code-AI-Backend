@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from apps.knowledge.models import Chunk, Citation, Collection, Document, Source, SyncRun
+from apps.knowledge.models import (
+    Chunk,
+    Citation,
+    Collection,
+    Document,
+    DocumentAccessGrant,
+    RAGEvaluation,
+    Source,
+    SyncRun,
+)
 
 
 @admin.register(Collection)
@@ -105,3 +114,19 @@ class CitationAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at")
     ordering = ("job", "citation_index")
     raw_id_fields = ("job", "chunk", "document")
+
+
+@admin.register(DocumentAccessGrant)
+class DocumentAccessGrantAdmin(admin.ModelAdmin):
+    list_display = ("id", "document", "user", "granted_by", "created_at")
+    search_fields = ("document__title", "user__email")
+    raw_id_fields = ("document", "user", "granted_by")
+
+
+@admin.register(RAGEvaluation)
+class RAGEvaluationAdmin(admin.ModelAdmin):
+    list_display = ("id", "organization", "created_by", "passed", "evaluator", "created_at")
+    list_filter = ("passed", "evaluator", "created_at")
+    search_fields = ("query", "organization__name", "created_by__email")
+    readonly_fields = ("created_at",)
+    raw_id_fields = ("organization", "created_by", "job")

@@ -32,6 +32,13 @@ class ConversionJob(models.Model):
     input_path = models.CharField(max_length=1000, blank=True)
     output_path = models.CharField(max_length=1000, blank=True)
     output_url = models.URLField(max_length=1000, blank=True)
+    output_asset = models.ForeignKey(
+        "assets.Asset",
+        on_delete=models.SET_NULL,
+        related_name="conversion_outputs",
+        null=True,
+        blank=True,
+    )
     options = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -8,9 +8,10 @@ from pathlib import Path
 import markdown
 from django.conf import settings
 
+from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
+from apps.assets.services import register_generated_asset, soft_delete_asset
 from apps.conversions.models import ConversionJob
 from apps.conversions.serializers import ALLOWED_MATRIX
-from apps.documents.rendering import upload_rendered_bytes
 
 CONVERSION_ROOT = Path(settings.BASE_DIR) / "converted_files"
 
@@ -144,11 +145,30 @@ def finalize_conversion(job: ConversionJob, output: bytes) -> str | None:
     local_path.write_bytes(output)
     job.output_path = str(local_path)
     job.output_bytes = len(output)
-    imagekit_url = upload_rendered_bytes(
+    if not imagekit_is_configured():
+        if not settings.ASSET_LOCAL_FALLBACK_ENABLED:
+            raise RuntimeError("ImageKit is required for conversion outputs in deployable environments.")
+        return None
+    content_types = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "txt": "text/plain",
+        "md": "text/markdown",
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+    }
+    asset = register_generated_asset(
         output,
+        owner=job.owner,
+        organization=job.organization,
         file_name=f"{job.id}.{job.output_format}",
-        folder=f"/jt-code/conversions/{job.owner_id}",
+        folder=f"/{settings.IMAGEKIT_UPLOAD_FOLDER.strip('/')}/{job.owner_id}/conversions",
+        content_type=content_types.get(job.output_format, "application/octet-stream"),
+        provenance={"conversion_job_id": str(job.id)},
     )
-    if imagekit_url:
-        job.output_url = imagekit_url
-    return imagekit_url
+    soft_delete_asset(job.output_asset)
+    job.output_asset = asset
+    job.output_url = ""
+    return generate_signed_delivery_url(asset.imagekit_file_path)

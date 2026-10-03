@@ -1,0 +1,20 @@
+[
+  {
+    "name": "deployment rollback",
+    "query": "How should deployment rollback be performed?",
+    "documents": [
+      {"label": "rollback", "content": "Use the rollback checklist before deployment rollback."},
+      {"label": "billing", "content": "Invoices are generated at the end of each billing period."}
+    ],
+    "expected_labels": ["rollback"]
+  },
+  {
+    "name": "credential rotation",
+    "query": "When must credentials be rotated?",
+    "documents": [
+      {"label": "rotation", "content": "Production credentials must be rotated every ninety days."},
+      {"label": "backup", "content": "Database backups run every night."}
+    ],
+    "expected_labels": ["rotation"]
+  }
+]

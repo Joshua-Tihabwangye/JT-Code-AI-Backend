@@ -6,6 +6,8 @@ from apps.knowledge.views import (
     CitationViewSet,
     CollectionViewSet,
     DocumentViewSet,
+    RAGEvaluationView,
+    RAGEvaluationViewSet,
     RAGQueryView,
     SearchView,
     SourceViewSet,
@@ -19,9 +21,11 @@ router.register(r"documents", DocumentViewSet, basename="knowledge-document")
 router.register(r"chunks", ChunkViewSet, basename="chunk")
 router.register(r"sync-runs", SyncRunViewSet, basename="sync-run")
 router.register(r"citations", CitationViewSet, basename="citation")
+router.register(r"rag-evaluations", RAGEvaluationViewSet, basename="rag-evaluation")
 
 urlpatterns = [
     path("", include(router.urls)),
     path("search/", SearchView.as_view(), name="knowledge-search"),
     path("rag/query/", RAGQueryView.as_view(), name="rag-query"),
+    path("rag/evaluate/", RAGEvaluationView.as_view(), name="rag-evaluate"),
 ]

@@ -176,6 +176,46 @@ class JobCreateSerializer(serializers.ModelSerializer):
     def validate_callback_url(self, value):
         return validate_callback_url(value) if value else value
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("task_type") != Job.TaskType.RAG_QUERY:
+            return attrs
+        payload = attrs.get("input_payload")
+        if not isinstance(payload, dict):
+            raise serializers.ValidationError({"input_payload": "RAG input_payload must be an object."})
+        query = payload.get("query")
+        collection_ids = payload.get("collection_ids")
+        if not isinstance(query, str) or not query.strip() or len(query) > 10_000:
+            raise serializers.ValidationError(
+                {"input_payload": "RAG jobs require a query between 1 and 10000 characters."}
+            )
+        if not isinstance(collection_ids, list) or not collection_ids or len(collection_ids) > 100:
+            raise serializers.ValidationError(
+                {"input_payload": "RAG jobs require between 1 and 100 collection_ids."}
+            )
+        request = self.context["request"]
+        from apps.identity.authorization import organization_for_request
+        from apps.knowledge.models import Collection
+
+        organization = organization_for_request(request, required=True)
+        unique_ids = list(dict.fromkeys(str(value) for value in collection_ids))
+        matched = Collection.objects.filter(
+            id__in=unique_ids, organization=organization, is_active=True
+        ).count()
+        if matched != len(unique_ids):
+            raise serializers.ValidationError(
+                {"input_payload": "One or more collections are unavailable in the selected organization."}
+            )
+        payload["collection_ids"] = unique_ids
+        try:
+            payload["top_k"] = min(max(int(payload.get("top_k", 5)), 1), 100)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError(
+                {"input_payload": "top_k must be an integer between 1 and 100."}
+            ) from exc
+        attrs["input_payload"] = payload
+        return attrs
+
 
 class JobStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Job.Status.choices)

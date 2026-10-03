@@ -9,6 +9,8 @@ Phase 5 uses Redis-backed Celery queues and durable records in `jobs_job`; it do
 | `jobs.analysis` | Native AI, RAG, and research jobs |
 | `jobs.ingestion` | Knowledge ingestion |
 | `jobs.visualization` | Image, document, and file-conversion work |
+| `analytics.analysis` | Isolated bounded Pandas dataset transforms |
+| `analytics.visualization` | Isolated Plotly/Matplotlib chart rendering |
 | `jobs.default` | Other durable jobs |
 
 Run a separately named worker for each workload.
@@ -18,6 +20,8 @@ celery -A config worker -Q jobs.analysis -n analysis@%h
 celery -A config worker -Q jobs.ingestion -n ingestion@%h
 celery -A config worker -Q jobs.visualization -n visualization@%h
 celery -A config worker -Q jobs.default -n default@%h
+celery -A config worker -Q analytics.analysis -n data-analysis@%h
+celery -A config worker -Q analytics.visualization -n analytics-visualization@%h
 celery -A config beat
 ```
 
