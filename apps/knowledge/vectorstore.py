@@ -6,9 +6,8 @@ querysets as the rest of the application. Tenant isolation is applied by the
 caller (verified ``collection_ids``) and *re-checked* inside ``semantic_search``
 via ``collection__organization_id`` before any distance is computed.
 
-The store is Postgres-only. On SQLite (the test database) every entry point
-raises :class:`VectorStoreUnavailable` so tests exercise mocks instead of
-database-specific SQL.
+When ``PGVECTOR_ENABLED`` is false every entry point raises
+:class:`VectorStoreUnavailable`.
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from django.conf import settings
-from django.db import connection
 
 
 class VectorStoreUnavailable(RuntimeError):
@@ -24,17 +22,13 @@ class VectorStoreUnavailable(RuntimeError):
 
 
 def vector_store_enabled() -> bool:
-    """True only when pgvector can be queried (Postgres + feature flag)."""
-    if not settings.PGVECTOR_ENABLED:
-        return False
-    return connection.vendor == "postgresql"
+    """True when the pgvector feature flag is on (Supabase PostgreSQL only)."""
+    return bool(settings.PGVECTOR_ENABLED)
 
 
 def require_vector_store() -> None:
     if not vector_store_enabled():
-        raise VectorStoreUnavailable(
-            "The pgvector store is only available on a PostgreSQL connection with PGVECTOR_ENABLED=true."
-        )
+        raise VectorStoreUnavailable("The pgvector store is disabled; set PGVECTOR_ENABLED=true.")
 
 
 def upsert_chunk_embeddings(
@@ -42,6 +36,7 @@ def upsert_chunk_embeddings(
     embeddings: Sequence[Sequence[float]],
     *,
     provider_model: str,
+    embedding_version: str,
 ) -> int:
     """Persist embedding vectors on already-persisted ``Chunk`` rows.
 
@@ -62,9 +57,10 @@ def upsert_chunk_embeddings(
         chunk.embedding = list(embedding)
         chunk.embedding_model = provider_model
         chunk.embedding_dimensions = dimensions
+        chunk.embedding_version = embedding_version
     Chunk.objects.bulk_update(
         chunks_list,
-        fields=["embedding", "embedding_model", "embedding_dimensions"],
+        fields=["embedding", "embedding_model", "embedding_dimensions", "embedding_version"],
         batch_size=500,
     )
     return len(chunks_list)
@@ -92,6 +88,7 @@ def semantic_search(
     *,
     collection_ids: Sequence[object],
     organization_id: object | None = None,
+    user=None,
     top_k: int = 10,
     min_similarity: float | None = None,
 ) -> list[dict]:
@@ -104,16 +101,24 @@ def semantic_search(
     require_vector_store()
     from pgvector.django import CosineDistance
 
+    from apps.knowledge.access import accessible_chunks
     from apps.knowledge.embeddings import distance_to_similarity
-    from apps.knowledge.models import Chunk
+    from apps.knowledge.models import Chunk, Document
 
-    queryset = (
-        Chunk.objects.filter(embedding__isnull=False, collection_id__in=collection_ids)
-        .select_related("document", "collection__organization")
-        .annotate(distance=CosineDistance("embedding", query_vector))
+    queryset = accessible_chunks(
+        Chunk.objects.filter(
+            embedding__isnull=False,
+            collection_id__in=collection_ids,
+            collection__is_active=True,
+            document__status=Document.Status.INDEXED,
+            document__source__is_active=True,
+        ),
+        user,
+        organization_id=organization_id,
     )
-    if organization_id is not None:
-        queryset = queryset.filter(collection__organization_id=organization_id)
+    queryset = queryset.select_related("document", "collection__organization").annotate(
+        distance=CosineDistance("embedding", query_vector)
+    )
     if min_similarity is None:
         min_similarity = settings.RAG_SIMILARITY_THRESHOLD
     if min_similarity is not None and min_similarity > 0:
@@ -135,6 +140,7 @@ def semantic_search(
                 "offset_range": [chunk.offset_start, chunk.offset_end],
                 "score": round(distance_to_similarity(chunk.distance), 6),
                 "embedding_model": chunk.embedding_model,
+                "embedding_version": chunk.embedding_version,
             }
         )
     return results

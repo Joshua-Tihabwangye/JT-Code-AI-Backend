@@ -14,6 +14,7 @@ Production-oriented Django boilerplate for JT-Code. This is the backend reposito
 - **Event Streaming**: Kafka event bus using `confluent-kafka`
 - **Outbox Pattern**: PostgreSQL transactional outbox for reliable event publishing
 - **Monitoring**: Sentry for Django, Celery, Redis and Kafka error monitoring
+- **Analytics**: bounded Pandas transforms, Plotly/Matplotlib artifacts, and a separate read-only Streamlit image
 - **API Docs**: OpenAPI/Swagger via drf-spectacular
 - **Development**: managed/local PostgreSQL, Redis and Kafka; Ruff, MyPy, pytest, GitHub Actions
 
@@ -176,6 +177,8 @@ See `.env.example` for all available variables. Key variables:
 | `VECTOR_EMBEDDING_DIMENSIONS` | Embedding width for the `chunk.embedding` column | No (default: 1536) |
 | `RAG_EMBEDDING_PROVIDER` | `openai`, `gemini` or `echo` (offline dev/test) | No (default: openai) |
 | `RAG_EMBEDDING_MODEL` | Embedding model name for OpenAI | No |
+| `RAG_EMBEDDING_TIMEOUT_SECONDS` | Per-request embedding timeout | No (default: 30) |
+| `RAG_EMBEDDING_MAX_RETRIES` | Provider retry limit | No (default: 2) |
 | `OPENAI_API_KEY` / `GEMINI_API_KEY` | Embedding provider credential (server-side) | No |
 | `AGENT_MAX_ITERATIONS` | Max model turns per `SEARCH_RESEARCH` agent run | No (default: 6) |
 
@@ -188,8 +191,10 @@ See `.env.example` for all available variables. Key variables:
 
 ### File Uploads (ImageKit)
 - Signed upload workflow: client requests auth parameters → uploads to ImageKit → calls completion endpoint
-- Server verifies ImageKit file details before storing metadata
+- Upload authorization is represented by a single-use, tenant-bound intent; the client must return its id and token at completion
+- Server verifies private-file path, size, type, provider identity, and a downloaded SHA-256 checksum before storing metadata
 - Assets tracked in `Asset` model with status (ready/quarantined/deleted)
+- Server-generated images, rendered documents, conversions, and charts are registered as owned assets
 
 ### Event Processing (Kafka + Outbox)
 - Domain events written to `OutboxEvent` in same DB transaction
@@ -211,11 +216,17 @@ See `.env.example` for all available variables. Key variables:
 - Results include the answer, invoked tool names, serialized transcript and a `grounded` flag (true when `knowledge.search` was invoked).
 
 ### Agentic RAG (Supabase pgvector)
-- Vector store is Supabase PostgreSQL (pgvector); the `knowledge.0003_add_pgvector_embeddings` migration enables the `vector` extension and an HNSW cosine index on PostgreSQL (no-op on SQLite).
+- Vector store is Supabase PostgreSQL (pgvector); the `knowledge.0003_add_pgvector_embeddings` migration enables the `vector` extension and an HNSW cosine index.
 - Ingestion pipeline (`apps.knowledge.tasks.process_document`): extract → chunk → embed → store vectors on `Chunk`, then refresh collection counts and emit a `knowledge.document.indexed` outbox event.
 - Semantic search: `POST /api/v1/knowledge/search/` embeds the query and runs tenant-scoped cosine retrieval (`collection__organization_id` is enforced inside the store, not trusted from client input).
 - `POST /api/v1/knowledge/documents/{id}/reindex/` clears vectors and re-runs ingestion.
 - Embedding providers are adapters in `apps/knowledge/embeddings.py` (OpenAI / Gemini / deterministic `echo` for offline work).
+
+### Data Analysis and Visualization
+- Dataset access is tenant-filtered with owner, shared, `view`, and `analyze` policies under `/api/v1/analysis/`.
+- Dedicated `analytics.analysis` and `analytics.visualization` Celery queues execute bounded declarative Pandas transforms and render Plotly/Matplotlib outputs.
+- CSV results and PNG charts are integrity-tracked ImageKit `Asset` records; signed URLs are generated only for authorized completed results.
+- `streamlit_app/` has its own requirements and container image, performs read-only API calls, and receives user identity from an authentication proxy. See `docs/DATA_ANALYSIS_AND_VISUALIZATION.md`.
 
 ### Health Checks
 - `/api/v1/health/live/` - Liveness probe (always returns OK if process is running)

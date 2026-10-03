@@ -1,10 +1,4 @@
-"""Create portable, read-only analytics views.
-
-PostgreSQL requires ``CREATE OR REPLACE VIEW`` while SQLite accepts neither
-``OR REPLACE`` nor PostgreSQL role grants.  Running the DDL through a
-vendor-aware migration keeps local tests useful while exercising the production
-syntax in CI's PostgreSQL service.
-"""
+"""Create read-only analytics views in Supabase PostgreSQL."""
 
 from django.db import migrations
 
@@ -67,14 +61,9 @@ VIEWS = {
 
 
 def create_analytics_views(apps, schema_editor):  # noqa: ARG001
-    create = (
-        "CREATE OR REPLACE VIEW"
-        if schema_editor.connection.vendor == "postgresql"
-        else "CREATE VIEW IF NOT EXISTS"
-    )
     with schema_editor.connection.cursor() as cursor:
         for name, query in VIEWS.items():
-            cursor.execute(f"{create} {name} AS {query}")  # nosec B608 -- constant migration DDL.
+            cursor.execute(f"CREATE OR REPLACE VIEW {name} AS {query}")  # nosec B608 -- constant migration DDL.
 
 
 def drop_analytics_views(apps, schema_editor):  # noqa: ARG001

@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     "apps.tools",
     "apps.documents",
     "apps.conversions",
+    "apps.analytics",
 ]
 
 MIDDLEWARE = [
@@ -122,8 +123,12 @@ def runtime_connection_settings(
     conn_max_age = int(env("DATABASE_CONN_MAX_AGE", "60"))
     if pooler_mode == "transaction":
         conn_max_age = 0
-    database_config = dj_database_url.config(
-        default=resolved_database_url,
+    # Parse the explicitly selected profile URL. ``dj_database_url.config``
+    # would silently prefer DATABASE_URL from the process environment, which
+    # can make the test profile connect to the development database even when
+    # TEST_DATABASE_URL was supplied.
+    database_config = dj_database_url.parse(
+        resolved_database_url,
         conn_max_age=conn_max_age,
         conn_health_checks=True,
     )
@@ -220,6 +225,21 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.knowledge.tasks.sync_sources",
         "schedule": 300.0,
     },
+    "purge-deleted-assets": {
+        "task": "apps.assets.tasks.purge_deleted_assets",
+        "schedule": 3600.0,
+        "options": {"expires": 3600},
+    },
+    "reconcile-imagekit-assets": {
+        "task": "apps.assets.tasks.reconcile_assets",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
+    },
+    "expire-asset-upload-intents": {
+        "task": "apps.assets.tasks.expire_upload_intents",
+        "schedule": 300.0,
+        "options": {"expires": 300},
+    },
     "process-billing-webhooks": {
         "task": "apps.billing.tasks.process_webhooks",
         "schedule": 60.0,
@@ -244,6 +264,11 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 60.0,
         "options": {"expires": 60},
     },
+    "recover-stalled-analytics": {
+        "task": "apps.analytics.tasks.recover_stalled_analytics",
+        "schedule": 300.0,
+        "options": {"expires": 300},
+    },
     "recover-stalled-chat-requests": {
         "task": "apps.conversations.tasks.recover_stalled_chat_requests",
         "schedule": 60.0,
@@ -261,6 +286,7 @@ CELERY_BEAT_SCHEDULE = {
     "cleanup-old-audit-events": {
         "task": "apps.governance.tasks.cleanup_old_audit_events",
         "schedule": 86400.0,
+        "options": {"expires": 600},
     },
 }
 
@@ -271,8 +297,14 @@ CELERY_TASK_QUEUES = (
     Queue("jobs.analysis"),
     Queue("jobs.ingestion"),
     Queue("jobs.visualization"),
+    Queue("analytics.analysis"),
+    Queue("analytics.visualization"),
 )
 CELERY_TASK_ROUTES = {
+    "apps.analytics.tasks.execute_analysis_run": {"queue": "analytics.analysis"},
+    "apps.analytics.tasks.execute_visualization": {"queue": "analytics.visualization"},
+    "apps.analytics.tasks.recover_stalled_analytics": {"queue": "jobs.default"},
+    "apps.assets.tasks.*": {"queue": "jobs.default"},
     "apps.events.tasks.*": {"queue": "jobs.default"},
     "apps.jobs.tasks.execute_job_task": {"queue": "jobs.analysis"},
     "apps.knowledge.tasks.*": {"queue": "jobs.ingestion"},
@@ -302,6 +334,31 @@ IMAGEKIT_ENDPOINT_URL = env("IMAGEKIT_ENDPOINT_URL")
 IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code")
 IMAGEKIT_MAX_UPLOAD_BYTES = int(env("IMAGEKIT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS = int(env("IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "300"))
+IMAGEKIT_SIGNED_URL_TTL_SECONDS = int(env("IMAGEKIT_SIGNED_URL_TTL_SECONDS", "900"))
+IMAGEKIT_API_TIMEOUT_SECONDS = float(env("IMAGEKIT_API_TIMEOUT_SECONDS", "30"))
+ASSET_DELETE_GRACE_DAYS = int(env("ASSET_DELETE_GRACE_DAYS", "7"))
+ASSET_ORPHAN_GRACE_HOURS = int(env("ASSET_ORPHAN_GRACE_HOURS", "24"))
+IMAGEKIT_RECONCILE_PAGE_SIZE = int(env("IMAGEKIT_RECONCILE_PAGE_SIZE", "100"))
+IMAGEKIT_RECONCILE_MAX_PAGES = int(env("IMAGEKIT_RECONCILE_MAX_PAGES", "100"))
+ASSET_LOCAL_FALLBACK_ENABLED = env_bool("ASSET_LOCAL_FALLBACK_ENABLED", False)
+
+# Phase 12 analytics workers run only a bounded declarative transform language.
+# Deploy analysis and visualization queues in separate containers with matching
+# CPU/memory limits; Celery also enforces the wall-clock limits below.
+ANALYTICS_ALLOWED_MIME_TYPES = tuple(env_list("ANALYTICS_ALLOWED_MIME_TYPES", "text/csv,application/csv"))
+ANALYTICS_MAX_INLINE_BYTES = int(env("ANALYTICS_MAX_INLINE_BYTES", str(5 * 1024 * 1024)))
+ANALYTICS_MAX_DATASET_BYTES = int(env("ANALYTICS_MAX_DATASET_BYTES", str(25 * 1024 * 1024)))
+ANALYTICS_MAX_RESULT_BYTES = int(env("ANALYTICS_MAX_RESULT_BYTES", str(25 * 1024 * 1024)))
+ANALYTICS_MAX_DATASET_ROWS = int(env("ANALYTICS_MAX_DATASET_ROWS", "100000"))
+ANALYTICS_MAX_DATASET_COLUMNS = int(env("ANALYTICS_MAX_DATASET_COLUMNS", "200"))
+ANALYTICS_MAX_DATASET_CELLS = int(env("ANALYTICS_MAX_DATASET_CELLS", "2000000"))
+ANALYTICS_RESULT_PREVIEW_ROWS = int(env("ANALYTICS_RESULT_PREVIEW_ROWS", "100"))
+ANALYTICS_MAX_CHART_POINTS = int(env("ANALYTICS_MAX_CHART_POINTS", "10000"))
+ANALYTICS_MAX_PLOTLY_SPEC_BYTES = int(env("ANALYTICS_MAX_PLOTLY_SPEC_BYTES", str(5 * 1024 * 1024)))
+ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS = int(env("ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS", "30"))
+ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS = int(env("ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS", "270"))
+ANALYTICS_TASK_TIME_LIMIT_SECONDS = int(env("ANALYTICS_TASK_TIME_LIMIT_SECONDS", "300"))
+ANALYTICS_STALLED_AFTER_MINUTES = int(env("ANALYTICS_STALLED_AFTER_MINUTES", "15"))
 
 KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
 KAFKA_CLIENT_ID = env("KAFKA_CLIENT_ID", "jt-code-api")
@@ -393,7 +450,7 @@ STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
 
 # Knowledge/RAG
 # Supabase PostgreSQL (pgvector) is the vector store. The `vector` extension is
-# enabled in a data migration that is a no-op on non-PostgreSQL test databases.
+# enabled by the knowledge.0003 migration.
 PGVECTOR_ENABLED = env_bool("PGVECTOR_ENABLED", True)
 VECTOR_EMBEDDING_DIMENSIONS = int(env("VECTOR_EMBEDDING_DIMENSIONS", "1536"))
 VECTOR_MIN_SIMILARITY = env_float("VECTOR_MIN_SIMILARITY", 0.0)
@@ -404,8 +461,13 @@ RAG_CHUNK_OVERLAP = int(env("RAG_CHUNK_OVERLAP", "200"))
 RAG_TOP_K = int(env("RAG_TOP_K", "10"))
 RAG_RERANK_TOP_K = int(env("RAG_RERANK_TOP_K", "5"))
 RAG_SIMILARITY_THRESHOLD = env_float("RAG_SIMILARITY_THRESHOLD", 0.7)
+RAG_HYBRID_CANDIDATES = int(env("RAG_HYBRID_CANDIDATES", "30"))
+RAG_MAX_CONTEXT_TOKENS = int(env("RAG_MAX_CONTEXT_TOKENS", "6000"))
+RAG_EVAL_MIN_RECALL = env_float("RAG_EVAL_MIN_RECALL", 0.8)
 RAG_MAX_EXTRACTED_BYTES = int(env("RAG_MAX_EXTRACTED_BYTES", str(5 * 1024 * 1024)))
 RAG_URL_FETCH_TIMEOUT_SECONDS = float(env("RAG_URL_FETCH_TIMEOUT_SECONDS", "30"))
+RAG_EMBEDDING_TIMEOUT_SECONDS = float(env("RAG_EMBEDDING_TIMEOUT_SECONDS", "30"))
+RAG_EMBEDDING_MAX_RETRIES = int(env("RAG_EMBEDDING_MAX_RETRIES", "2"))
 
 # Embedding provider credentials (server-side only). Only the configured
 # provider is loaded at runtime; the extras are dependency-free placeholders.
@@ -443,6 +505,7 @@ REST_FRAMEWORK = {
         "research": env("THROTTLE_RESEARCH", "10/hour"),
         "burst": env("THROTTLE_BURST", "30/minute"),
         "agent_runs": env("THROTTLE_AGENT_RUNS", "20/hour"),
+        "analytics": env("THROTTLE_ANALYTICS", "30/hour"),
     },
 }
 SPECTACULAR_SETTINGS = {
@@ -478,6 +541,12 @@ SPECTACULAR_SETTINGS = {
             ("guardrail", "Guardrail"),
         ],
         "PlanStatus": [("active", "Active"), ("archived", "Archived")],
+        "QueuedRunStatus": [
+            ("queued", "Queued"),
+            ("running", "Running"),
+            ("completed", "Completed"),
+            ("failed", "Failed"),
+        ],
         "ConsentStatus": [
             ("granted", "Granted"),
             ("denied", "Denied"),

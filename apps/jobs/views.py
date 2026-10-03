@@ -7,6 +7,7 @@ from decimal import Decimal
 from celery import current_app
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, PermissionDenied
@@ -53,10 +54,22 @@ class JobViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        return (
-            tenant_scoped_queryset(Job.objects.all(), self.request.user)
-            .select_related("organization", "conversation", "workflow_run")
-            .prefetch_related("steps__provider_attempts", "callbacks")
+        if getattr(self, "swagger_fake_view", False):
+            return Job.objects.none()
+        queryset = tenant_scoped_queryset(Job.objects.all(), self.request.user)
+        from apps.identity.models import Organization, Role, UserRole
+
+        admin_org_ids = UserRole.objects.filter(
+            user=self.request.user, role__name=Role.RoleType.ADMIN
+        ).values_list("organization_id", flat=True)
+        owned_org_ids = Organization.objects.filter(owner=self.request.user).values_list("id", flat=True)
+        queryset = queryset.filter(
+            Q(owner=self.request.user)
+            | Q(organization_id__in=admin_org_ids)
+            | Q(organization_id__in=owned_org_ids)
+        )
+        return queryset.select_related("organization", "conversation", "workflow_run").prefetch_related(
+            "steps__provider_attempts", "callbacks"
         )
 
     def get_serializer_class(self):
@@ -205,12 +218,20 @@ class JobStepViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return tenant_scoped_queryset(
-            JobStep.objects.all(),
-            self.request.user,
-            organization_field="job__organization",
-            owner_field="job__owner",
-        ).select_related("job")
+        if getattr(self, "swagger_fake_view", False):
+            return JobStep.objects.none()
+        jobs = JobViewSet()
+        jobs.request = self.request
+        return (
+            tenant_scoped_queryset(
+                JobStep.objects.all(),
+                self.request.user,
+                organization_field="job__organization",
+                owner_field="job__owner",
+            )
+            .filter(job__in=jobs.get_queryset())
+            .select_related("job")
+        )
 
 
 class WorkflowRunViewSet(viewsets.ReadOnlyModelViewSet):
@@ -219,12 +240,20 @@ class WorkflowRunViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return tenant_scoped_queryset(
-            WorkflowRun.objects.all(),
-            self.request.user,
-            organization_field="job__organization",
-            owner_field="job__owner",
-        ).select_related("job")
+        if getattr(self, "swagger_fake_view", False):
+            return WorkflowRun.objects.none()
+        jobs = JobViewSet()
+        jobs.request = self.request
+        return (
+            tenant_scoped_queryset(
+                WorkflowRun.objects.all(),
+                self.request.user,
+                organization_field="job__organization",
+                owner_field="job__owner",
+            )
+            .filter(job__in=jobs.get_queryset())
+            .select_related("job")
+        )
 
 
 class CallbackViewSet(viewsets.ReadOnlyModelViewSet):
@@ -233,12 +262,20 @@ class CallbackViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return tenant_scoped_queryset(
-            Callback.objects.all(),
-            self.request.user,
-            organization_field="job__organization",
-            owner_field="job__owner",
-        ).select_related("job")
+        if getattr(self, "swagger_fake_view", False):
+            return Callback.objects.none()
+        jobs = JobViewSet()
+        jobs.request = self.request
+        return (
+            tenant_scoped_queryset(
+                Callback.objects.all(),
+                self.request.user,
+                organization_field="job__organization",
+                owner_field="job__owner",
+            )
+            .filter(job__in=jobs.get_queryset())
+            .select_related("job")
+        )
 
 
 class JobStatusCallbackView(APIView):

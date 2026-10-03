@@ -123,7 +123,16 @@ class ConversionViewSet(viewsets.ModelViewSet):
             output = run_conversion(job)
             imagekit_url = finalize_conversion(job, output)
             job.status = ConversionJob.Status.COMPLETED
-            job.save(update_fields=["status", "output_bytes", "output_path", "output_url", "updated_at"])
+            job.save(
+                update_fields=[
+                    "status",
+                    "output_bytes",
+                    "output_path",
+                    "output_url",
+                    "output_asset",
+                    "updated_at",
+                ]
+            )
             add_outbox_event(
                 "conversion.job.completed",
                 str(job.id),

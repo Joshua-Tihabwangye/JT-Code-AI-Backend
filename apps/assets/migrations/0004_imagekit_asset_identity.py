@@ -7,11 +7,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RenameField(
-            model_name="asset",
-            old_name="cloudinary_public_id",
-            new_name="imagekit_file_id",
-        ),
         migrations.AddField(
             model_name="asset",
             name="imagekit_file_path",

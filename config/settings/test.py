@@ -7,6 +7,7 @@ HEALTHCHECK_EXTERNAL_DEPENDENCIES = False
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
+ASSET_LOCAL_FALLBACK_ENABLED = True
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "KEY_PREFIX": "jt-code:cache"},
     "rate_limits": {
@@ -34,8 +35,7 @@ SUPABASE_SECRET_KEY = "sb_secret_test-only-admin-key"  # nosec B105
 KAFKA_CONSUMER_RETRY_MAX_SECONDS = 0
 WEBHOOK_SIGNING_SECRET = "test-outbound-callback-signing-secret"  # nosec B105
 
-# Deterministic, offline embedding provider for the test suite. The pgvector
-# store itself is Postgres-only and unavailable on the SQLite test database.
+# Deterministic, offline embedding provider for the test suite.
 RAG_EMBEDDING_PROVIDER = "echo"
 
 # Deterministic offline chat backend for the test suite (no SDK/key required).

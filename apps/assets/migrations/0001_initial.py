@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
     dependencies = [migrations.swappable_dependency(settings.AUTH_USER_MODEL)]
     operations = [migrations.CreateModel(name='Asset', fields=[
         ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-        ('cloudinary_public_id', models.CharField(max_length=500, unique=True)), ('secure_url', models.URLField(max_length=1000)),
+        ('imagekit_file_id', models.CharField(max_length=500, unique=True)), ('secure_url', models.URLField(max_length=1000)),
         ('resource_type', models.CharField(max_length=50)), ('format', models.CharField(blank=True, max_length=50)),
         ('bytes', models.PositiveBigIntegerField(default=0)), ('version', models.PositiveBigIntegerField(default=0)),
         ('original_filename', models.CharField(max_length=500)),

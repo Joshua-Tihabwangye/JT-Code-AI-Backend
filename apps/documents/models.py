@@ -32,6 +32,13 @@ class Document(models.Model):
     version = models.PositiveIntegerField(default=1)
     provenance = models.JSONField(default=dict, blank=True)
     download_url = models.URLField(blank=True)
+    rendered_asset = models.ForeignKey(
+        "assets.Asset",
+        on_delete=models.SET_NULL,
+        related_name="rendered_documents",
+        null=True,
+        blank=True,
+    )
     page_count = models.PositiveIntegerField(null=True, blank=True)
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

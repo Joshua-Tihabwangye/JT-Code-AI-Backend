@@ -15,8 +15,8 @@ authorization in Django. Two responsibilities must be cleanly separated:
 2. **Authorization** — decide "what you may do". Django owns the tenant,
    membership, role and permission model and enforces it against PostgreSQL.
 
-Cloudinary historically owned asset bytes; asset identity and ownership are
-Django-owned. See ADR-002.
+Asset identity and ownership are Django-owned. See ADR-002 for the ImageKit
+provider boundary.
 
 ## Decision
 

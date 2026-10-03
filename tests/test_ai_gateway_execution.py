@@ -196,7 +196,7 @@ def test_execute_general_question_job_completes(user, org, credit_balance):
 
 @pytest.mark.django_db
 @override_settings(AI_PROVIDER="echo")
-def test_execute_rag_query_job_completes_ungrounded(user, org, credit_balance):
+def test_execute_rag_query_job_completes_with_grounded_abstention(user, org, credit_balance):
     job = _make_job(
         user,
         org,
@@ -207,7 +207,9 @@ def test_execute_rag_query_job_completes_ungrounded(user, org, credit_balance):
     assert result["status"] == "completed"
     job.refresh_from_db()
     assert job.status == Job.Status.COMPLETED
-    assert job.result["grounded"] is False
+    assert job.result["grounded"] is True
+    assert job.result["sources"] == []
+    assert "cannot answer" in job.result["answer"].lower()
     assert job.result["sources"] == []
     assert "answer" in job.result
 

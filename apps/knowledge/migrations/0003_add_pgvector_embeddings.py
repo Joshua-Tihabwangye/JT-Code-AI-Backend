@@ -8,23 +8,17 @@ INDEX_NAME = 'chunk_embedding_hnsw_idx'
 
 def enable_pgvector(apps, schema_editor):
     """Enable the Supabase `vector` extension before any vector column exists."""
-    if schema_editor.connection.vendor != 'postgresql':
-        return
     schema_editor.execute('CREATE EXTENSION IF NOT EXISTS vector')
 
 
 def create_embedding_index(apps, schema_editor):
     """Create the HNSW cosine index once ``knowledge_chunk.embedding`` exists."""
-    if schema_editor.connection.vendor != 'postgresql':
-        return
     schema_editor.execute(
         f'CREATE INDEX IF NOT EXISTS {INDEX_NAME} ON knowledge_chunk USING hnsw (embedding vector_cosine_ops)'
     )
 
 
 def drop_embedding_index(apps, schema_editor):
-    if schema_editor.connection.vendor != 'postgresql':
-        return
     schema_editor.execute(f'DROP INDEX IF EXISTS {INDEX_NAME}')
 
 

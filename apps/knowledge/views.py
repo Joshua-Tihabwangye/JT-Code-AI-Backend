@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from django.db.models import Q
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -8,19 +10,23 @@ from rest_framework.response import Response
 
 from apps.core.throttling import BurstThrottle, EmbeddingThrottle
 from apps.core.views import APIView
-from apps.events.outbox import enqueue_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
     organization_for_request,
     tenant_scoped_queryset,
 )
-from apps.knowledge.models import Chunk, Citation, Collection, Document, Source, SyncRun
+from apps.knowledge.access import accessible_chunks, accessible_documents
+from apps.knowledge.models import Chunk, Citation, Collection, Document, RAGEvaluation, Source, SyncRun
 from apps.knowledge.serializers import (
     ChunkSerializer,
     CitationSerializer,
     CollectionCreateSerializer,
     CollectionSerializer,
     DocumentSerializer,
+    KnowledgeSearchRequestSerializer,
+    RAGEvaluationRequestSerializer,
+    RAGEvaluationSerializer,
+    RAGQueryRequestSerializer,
     SourceCreateSerializer,
     SourceSerializer,
     SyncRunSerializer,
@@ -67,19 +73,12 @@ class CollectionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def sync(self, request: Request, id=None):
         collection = self.get_object()
-        # Trigger sync for all active sources
+        from apps.knowledge.tasks import sync_source
+
+        # Trigger each source directly; the task records the matching outbox event.
         sources = collection.sources.filter(is_active=True)
         for source in sources:
-            enqueue_outbox_event(
-                topic="knowledge.source.sync",
-                event_key=str(source.id),
-                payload={
-                    "source_id": str(source.id),
-                    "collection_id": str(collection.id),
-                    "organization_id": str(collection.organization_id),
-                },
-                headers={"trace_id": f"sync-{collection.id}"},
-            )
+            sync_source.delay(str(source.id))
         return Response({"detail": f"Sync triggered for {sources.count()} sources"})
 
 
@@ -89,9 +88,23 @@ class SourceViewSet(viewsets.ModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return _tenant_queryset(
+        if getattr(self, "swagger_fake_view", False):
+            return Source.objects.none()
+        queryset = _tenant_queryset(
             Source.objects.all(), self.request, organization_field="collection__organization"
-        ).select_related("collection", "collection__organization", "created_by")
+        )
+        organization_id = _selected_organization_id(self.request)
+        from apps.identity.authorization import user_has_role
+        from apps.identity.models import Role
+
+        if not (organization_id and user_has_role(self.request.user, Role.RoleType.ADMIN, organization_id)):
+            documents = accessible_documents(
+                Document.objects.all(), self.request.user, organization_id=organization_id
+            )
+            queryset = queryset.filter(
+                Q(created_by=self.request.user) | Q(documents__in=documents)
+            ).distinct()
+        return queryset.select_related("collection", "collection__organization", "created_by")
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -108,16 +121,9 @@ class SourceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def sync(self, request: Request, id=None):
         source = self.get_object()
-        enqueue_outbox_event(
-            topic="knowledge.source.sync",
-            event_key=str(source.id),
-            payload={
-                "source_id": str(source.id),
-                "collection_id": str(source.collection_id),
-                "organization_id": str(source.collection.organization_id),
-            },
-            headers={"trace_id": f"sync-{source.id}"},
-        )
+        from apps.knowledge.tasks import sync_source
+
+        sync_source.delay(str(source.id))
         return Response({"detail": "Sync triggered"})
 
     @action(detail=True, methods=["get"])
@@ -134,8 +140,11 @@ class DocumentViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return _tenant_queryset(
+        queryset = _tenant_queryset(
             Document.objects.all(), self.request, organization_field="collection__organization"
+        )
+        return accessible_documents(
+            queryset, self.request.user, organization_id=_selected_organization_id(self.request)
         ).select_related("source", "collection")
 
     @action(detail=True, methods=["get"])
@@ -186,8 +195,11 @@ class ChunkViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return _tenant_queryset(
+        queryset = _tenant_queryset(
             Chunk.objects.all(), self.request, organization_field="collection__organization"
+        )
+        return accessible_chunks(
+            queryset, self.request.user, organization_id=_selected_organization_id(self.request)
         ).select_related("document", "collection")
 
 
@@ -197,9 +209,18 @@ class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return _tenant_queryset(
-            SyncRun.objects.all(), self.request, organization_field="source__collection__organization"
-        ).select_related("source", "source__collection")
+        if getattr(self, "swagger_fake_view", False):
+            return SyncRun.objects.none()
+        sources = SourceViewSet()
+        sources.request = self.request
+        allowed_sources = sources.get_queryset()
+        return (
+            _tenant_queryset(
+                SyncRun.objects.all(), self.request, organization_field="source__collection__organization"
+            )
+            .filter(source__in=allowed_sources)
+            .select_related("source", "source__collection")
+        )
 
 
 class CitationViewSet(viewsets.ReadOnlyModelViewSet):
@@ -208,8 +229,15 @@ class CitationViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "id"
 
     def get_queryset(self):
-        return _tenant_queryset(
+        queryset = _tenant_queryset(
             Citation.objects.all(), self.request, organization_field="job__organization"
+        )
+        return queryset.filter(
+            document__in=accessible_documents(
+                Document.objects.all(),
+                self.request.user,
+                organization_id=_selected_organization_id(self.request),
+            )
         ).select_related("job", "document", "chunk")
 
 
@@ -219,14 +247,14 @@ class SearchView(APIView):
     permission_classes = [IsAuthenticated]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
+    @extend_schema(request=KnowledgeSearchRequestSerializer)
     def post(self, request: Request):
-        query = request.data.get("query")
-        collection_ids = request.data.get("collection_ids", [])
-        top_k = int(request.data.get("top_k") or 10)
-        min_similarity = request.data.get("min_similarity")
-
-        if not query or not str(query).strip():
-            return Response({"detail": "query is required"}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = KnowledgeSearchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data["query"].strip()
+        collection_ids = serializer.validated_data["collection_ids"]
+        top_k = serializer.validated_data["top_k"]
+        min_similarity = serializer.validated_data.get("min_similarity")
 
         # Resolve collections inside exactly one selected tenant before touching
         # the vector store, which accepts only one organization identifier.
@@ -242,24 +270,24 @@ class SearchView(APIView):
         organization_id = collections.first().organization_id
 
         try:
-            from apps.knowledge.embeddings import EmbeddingError, embed_texts
-            from apps.knowledge.vectorstore import VectorStoreUnavailable, semantic_search
+            from apps.knowledge.embeddings import EmbeddingError, embed_query
+            from apps.knowledge.retrieval import hybrid_search
+            from apps.knowledge.vectorstore import VectorStoreUnavailable
 
-            query_embeddings = embed_texts([str(query).strip()])
-            if not query_embeddings:
-                message = "Embedding provider returned no vector for the query."
-                return Response({"detail": message}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-            threshold = float(min_similarity) if min_similarity not in (None, "") else None
-            results = semantic_search(
-                query_embeddings[0],
+            try:
+                query_vector = embed_query(query)
+            except EmbeddingError:
+                query_vector = None
+            results = hybrid_search(
+                query,
+                query_vector,
                 collection_ids=allowed_ids,
                 organization_id=organization_id,
+                user=request.user,
                 top_k=top_k,
-                min_similarity=threshold,
+                min_similarity=min_similarity,
             )
         except VectorStoreUnavailable as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        except EmbeddingError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         return Response(
@@ -275,17 +303,17 @@ class SearchView(APIView):
 class RAGQueryView(APIView):
     """RAG query with grounded generation"""
 
-    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+    permission_classes = [IsAuthenticated]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
+    @extend_schema(request=RAGQueryRequestSerializer)
     def post(self, request: Request):
-        query = request.data.get("query")
-        collection_ids = request.data.get("collection_ids", [])
-        conversation_id = request.data.get("conversation_id")
-        include_citations = request.data.get("include_citations", True)
-
-        if not query:
-            return Response({"detail": "query is required"}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = RAGQueryRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data["query"].strip()
+        collection_ids = list(dict.fromkeys(serializer.validated_data["collection_ids"]))
+        conversation_id = serializer.validated_data.get("conversation_id")
+        include_citations = serializer.validated_data["include_citations"]
 
         # The job and every collection must belong to the selected tenant.
         organization = organization_for_request(request, required=True)
@@ -293,7 +321,7 @@ class RAGQueryView(APIView):
             id__in=collection_ids, organization=organization, is_active=True
         )
 
-        if not collections.exists():
+        if collections.count() != len(collection_ids):
             return Response({"detail": "No accessible collections"}, status=status.HTTP_403_FORBIDDEN)
 
         if conversation_id:
@@ -334,3 +362,77 @@ class RAGQueryView(APIView):
             {"job_id": str(job.id), "request_id": str(job.request_id), "status": "queued"},
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class RAGEvaluationView(APIView):
+    """Evaluate an authorized retrieval result against an expected evidence set."""
+
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+
+    @extend_schema(request=RAGEvaluationRequestSerializer, responses={201: RAGEvaluationSerializer})
+    def post(self, request: Request):
+        serializer = RAGEvaluationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        query = serializer.validated_data["query"].strip()
+        sources = serializer.validated_data["sources"]
+        answer = serializer.validated_data["answer"]
+        expected = serializer.validated_data["expected_chunk_ids"]
+        organization = organization_for_request(request, required=True)
+        supplied_ids = [item.get("chunk_id") for item in sources if isinstance(item, dict)]
+        allowed_chunks = accessible_chunks(
+            Chunk.objects.filter(
+                id__in=supplied_ids,
+                document__status=Document.Status.INDEXED,
+                collection__is_active=True,
+                document__source__is_active=True,
+            ).select_related("document"),
+            request.user,
+            organization_id=organization.id,
+        )
+        by_id = {str(chunk.id): chunk for chunk in allowed_chunks}
+        safe_sources = []
+        for supplied in sources:
+            chunk = by_id.get(str(supplied.get("chunk_id")))
+            if chunk is None:
+                continue
+            safe_sources.append(
+                {
+                    "chunk_id": str(chunk.id),
+                    "document_id": str(chunk.document_id),
+                    "document_title": chunk.document.title,
+                    "collection_id": str(chunk.collection_id),
+                    "chunk_index": chunk.chunk_index,
+                    "content": chunk.content,
+                    "score": 0.0,
+                }
+            )
+        from apps.knowledge.retrieval import evaluate_response
+
+        evaluation = evaluate_response(
+            organization=organization,
+            query=query,
+            sources=safe_sources,
+            answer=answer,
+            expected_chunk_ids=expected,
+            user=request.user,
+        )
+        return Response(evaluation, status=status.HTTP_201_CREATED)
+
+
+class RAGEvaluationViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = RAGEvaluationSerializer
+    lookup_field = "id"
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return RAGEvaluation.objects.none()
+        queryset = _tenant_queryset(
+            RAGEvaluation.objects.all(), self.request, organization_field="organization"
+        )
+        organization_id = _selected_organization_id(self.request)
+        from apps.identity.authorization import user_can_edit_organization
+
+        if organization_id and user_can_edit_organization(self.request.user, organization_id):
+            return queryset
+        return queryset.filter(created_by=self.request.user)

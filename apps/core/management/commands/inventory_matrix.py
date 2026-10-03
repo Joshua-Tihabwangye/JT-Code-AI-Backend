@@ -174,6 +174,16 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         purpose="Chat/completion and embeddings adapter (apps.ai_gateway, apps.knowledge)",
     ),
     IntegrationSpec(
+        key="analytics",
+        label="Pandas / Plotly / Matplotlib / Streamlit",
+        distributions=("pandas", "plotly", "matplotlib"),
+        modules=("pandas", "plotly", "matplotlib"),
+        purpose=(
+            "Bounded analysis and chart workers plus the separately deployed read-only viewer "
+            "(apps.analytics, streamlit_app)"
+        ),
+    ),
+    IntegrationSpec(
         key="gemini",
         label="Google Gemini",
         distributions=("google-generativeai",),
@@ -210,17 +220,6 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         distributions=("python-docx", "pypdf", "markdown"),
         modules=("docx", "pypdf", "markdown"),
         purpose="Source extraction and rendering (apps.documents, apps.knowledge)",
-    ),
-    # Retired by ADR-002. Any reference is a Phase 0 exit-criteria violation.
-    IntegrationSpec(
-        key="cloudinary",
-        label="Cloudinary (retired by ADR-002)",
-        distributions=("cloudinary",),
-        modules=("cloudinary",),
-        settings_keys=("CLOUDINARY_URL", "CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY"),
-        adr="ADR-002",
-        retired=True,
-        purpose="Removed; asset bytes are owned by ImageKit",
     ),
     # Retired by ADR-003. Any reference is a Phase 0 exit-criteria violation.
     IntegrationSpec(

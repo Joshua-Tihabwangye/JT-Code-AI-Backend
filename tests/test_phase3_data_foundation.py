@@ -53,7 +53,7 @@ def test_analytics_migration_uses_postgresql_view_syntax_and_reader_grants():
     grants_migration = grants_path.read_text(encoding="utf-8")
 
     assert "CREATE OR REPLACE VIEW" in views_migration
-    assert 'connection.vendor == "postgresql"' in views_migration
+    assert "sqlite" not in views_migration.lower()
     assert "jt_code_analytics_reader" in grants_migration
     assert "GRANT SELECT" in grants_migration
 
