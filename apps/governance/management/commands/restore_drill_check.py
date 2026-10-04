@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404 - fixed pg_dump/pg_restore argv, shell=False.
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -203,7 +203,9 @@ class Command(BaseCommand):
 
     @staticmethod
     def _run_client(command: list[str]) -> None:
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=900)
+        result = subprocess.run(  # nosec B603 - argv list built from fixed client binaries, no shell.
+            command, capture_output=True, text=True, check=False, timeout=900
+        )
         if result.returncode:
             raise CommandError("PostgreSQL backup/restore client failed; inspect its secured CI logs.")
 

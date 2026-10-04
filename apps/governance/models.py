@@ -23,9 +23,15 @@ class AuditEvent(models.Model):
         HIGH = "high", "High"
         CRITICAL = "critical", "Critical"
 
+    class Outcome(models.TextChoices):
+        SUCCESS = "success", "Success"
+        DENIED = "denied", "Denied"
+        FAILURE = "failure", "Failure"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Null for platform-level security events that no tenant owns.
     organization = models.ForeignKey(
-        "identity.Organization", on_delete=models.CASCADE, related_name="audit_events"
+        "identity.Organization", on_delete=models.CASCADE, related_name="audit_events", null=True, blank=True
     )
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -39,6 +45,7 @@ class AuditEvent(models.Model):
     resource_type = models.CharField(max_length=100)
     resource_id = models.CharField(max_length=255, blank=True)
     severity = models.CharField(max_length=10, choices=Severity.choices, default=Severity.LOW)
+    outcome = models.CharField(max_length=10, choices=Outcome.choices, default=Outcome.SUCCESS)
     description = models.TextField()
     metadata = models.JSONField(default=dict, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
@@ -54,6 +61,7 @@ class AuditEvent(models.Model):
             models.Index(fields=("actor", "-created_at")),
             models.Index(fields=("category", "-created_at")),
             models.Index(fields=("resource_type", "resource_id")),
+            models.Index(fields=("severity", "-created_at"), name="governance_audit_sev_idx"),
         ]
 
     def __str__(self):

@@ -194,3 +194,13 @@ class HasOrganizationWriteAccess(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return request.user.organizations.filter(id=organization_id).exists()
         return user_can_edit_organization(request.user, organization_id)
+
+
+class IsOrganizationAdmin(permissions.BasePermission):
+    """Governance surfaces (tool policies, credentials, MCP servers, the audit log) are admin-only."""
+
+    def has_permission(self, request, view) -> bool:
+        if not request.user or not request.user.is_authenticated:
+            return False
+        organization = organization_for_request(request, required=True)
+        return user_has_role(request.user, Role.RoleType.ADMIN, organization.id)

@@ -517,7 +517,7 @@ def test_restricted_file_document_bytes_are_not_exposed_through_the_asset_api(te
     from apps.assets.models import Asset
 
     settings.IMAGEKIT_PUBLIC_KEY = "public"
-    settings.IMAGEKIT_PRIVATE_KEY = "private"
+    settings.IMAGEKIT_PRIVATE_KEY = "private"  # pragma: allowlist secret
     settings.IMAGEKIT_ENDPOINT_URL = "https://ik.example.test/rag"
     organization, admin, editor, viewer = tenant
     asset = Asset.objects.create(

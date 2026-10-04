@@ -11,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.edge import client_ip
 from apps.governance.models import ConsentRecord
 from apps.governance.serializers import ConsentRecordSerializer
 from apps.identity.authorization import (
@@ -76,7 +77,7 @@ class SettingsConsentsView(APIView):
                 "status": requested_status,
                 "version": "1.0",
                 "granted_at": None,
-                "ip_address": request.META.get("REMOTE_ADDR", ""),
+                "ip_address": client_ip(request._request),
                 "user_agent": request.META.get("HTTP_USER_AGENT", "")[:500],
             },
         )

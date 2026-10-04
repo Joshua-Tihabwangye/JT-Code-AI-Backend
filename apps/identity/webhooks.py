@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import hmac
 import json
 
@@ -14,16 +13,29 @@ from apps.identity.models import User
 
 
 def _authenticated(request: HttpRequest) -> bool:
-    """Accept an HMAC body signature or the shared secret Supabase webhooks can send.
+    """Accept a signed request or the shared secret Supabase webhooks can send.
 
-    Supabase Database Webhooks (pg_net) cannot compute an HMAC, so they are
-    configured with ``Authorization: Bearer <SUPABASE_WEBHOOK_SIGNING_SECRET>``
-    over TLS. Custom senders may instead sign the body in ``X-Supabase-Signature``.
+    Custom senders sign with the timestamp/nonce scheme of
+    :mod:`apps.core.signing` (replay-protected). Supabase Database Webhooks
+    (pg_net) cannot compute an HMAC, so they are configured with
+    ``Authorization: Bearer <SUPABASE_WEBHOOK_SIGNING_SECRET>`` over TLS; every
+    event they deliver is an idempotent state update.
     """
+    from apps.core.signing import SIGNATURE_HEADER, SignatureError, verify_request
+
     secret = settings.SUPABASE_WEBHOOK_SIGNING_SECRET
-    if signature := request.headers.get("X-Supabase-Signature", ""):
-        expected = hmac.new(secret.encode(), request.body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(signature, expected)
+    if request.headers.get(SIGNATURE_HEADER):
+        try:
+            verify_request(
+                body=request.body,
+                headers=request.headers,
+                secrets_=[secret],
+                namespace="supabase",
+                tolerance_seconds=settings.WEBHOOK_REPLAY_TOLERANCE_SECONDS,
+            )
+        except SignatureError:
+            return False
+        return True
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
     return scheme.lower() == "bearer" and bool(token) and hmac.compare_digest(token, secret)
 

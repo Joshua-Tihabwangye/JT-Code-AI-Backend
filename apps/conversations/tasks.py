@@ -31,7 +31,7 @@ PERMANENT_GATEWAY_ERRORS = {
 
 def retry_delay_seconds(retry_count: int) -> int:
     """Bound exponential retries so one unhealthy provider cannot flood a queue."""
-    return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)
+    return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)  # nosec B311 - retry jitter
 
 
 def next_dispatch_time(delay_seconds: float = 0):

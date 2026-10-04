@@ -41,7 +41,7 @@ def member(django_user_model, organization, label, role):
 @pytest.fixture
 def imagekit(settings):
     settings.IMAGEKIT_PUBLIC_KEY = "public"
-    settings.IMAGEKIT_PRIVATE_KEY = "private"
+    settings.IMAGEKIT_PRIVATE_KEY = "private"  # pragma: allowlist secret
     settings.IMAGEKIT_ENDPOINT_URL = "https://ik.imagekit.io/jt-code"
     settings.IMAGEKIT_UPLOAD_FOLDER = "jt-code/test"
     return settings
@@ -102,7 +102,7 @@ def fake_upload(content_holder):
 
 
 def test_signed_delivery_helper_uses_imagekit_documented_relative_path(settings, monkeypatch):
-    settings.IMAGEKIT_PRIVATE_KEY = "private"
+    settings.IMAGEKIT_PRIVATE_KEY = "private"  # pragma: allowlist secret
     settings.IMAGEKIT_ENDPOINT_URL = "https://ik.imagekit.io/jt-code"
     settings.IMAGEKIT_SIGNED_URL_TTL_SECONDS = 60
     monkeypatch.setattr("apps.assets.imagekit.current_timestamp", lambda: 100)

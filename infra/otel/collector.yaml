@@ -1,0 +1,46 @@
+# OpenTelemetry Collector for JT-Code (Phase 15). The API and workers export
+# OTLP/HTTP to :4318 (OTEL_EXPORTER_OTLP_ENDPOINT); traces are scrubbed of
+# credentials and personal data before they leave the collector.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+  attributes/scrub:
+    actions:
+      - {key: http.request.header.authorization, action: delete}
+      - {key: http.request.header.cookie, action: delete}
+      - {key: http.request.header.x-jt-code-signature, action: delete}
+      - {key: http.request.header.stripe-signature, action: delete}
+      - {key: enduser.id, action: hash}
+      - {key: user.email, action: delete}
+      - {key: client.address, action: hash}
+      - {key: url.query, action: delete}
+  batch:
+    send_batch_size: 512
+    timeout: 5s
+
+exporters:
+  otlphttp/tempo:
+    endpoint: ${env:TRACES_BACKEND_ENDPOINT}
+  # Optional: forward traces to Sentry Performance or another vendor here.
+
+extensions:
+  health_check: {}
+
+service:
+  extensions: [health_check]
+  telemetry:
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/scrub, batch]
+      exporters: [otlphttp/tempo]

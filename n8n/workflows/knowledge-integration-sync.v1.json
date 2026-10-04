@@ -1,0 +1,1093 @@
+{
+  "name": "jt-code.knowledge-integration-sync.v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jt-code/knowledge-integration-sync/v1",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "0248d24a-cb23-589e-8fe6-0e77b884625d",
+      "name": "JT-Code request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "fdf62247-f61e-5e04-9121-63e6ead754f0"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the JT-Code dispatch signature (see apps/core/signing.py).\nconst crypto = require('crypto');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst secret = $env.JT_CODE_DISPATCH_SECRET;\nconst tolerance = Number($env.JT_CODE_SIGNATURE_TOLERANCE_SECONDS || 300);\nconst timestamp = String(headers['x-jt-code-timestamp'] || '');\nconst nonce = String(headers['x-jt-code-nonce'] || '');\nconst supplied = String(headers['x-jt-code-signature'] || '')\n  .split(',').map((part) => part.trim()).filter((part) => part.startsWith('v1=')).map((part) => part.slice(3));\nlet reason = '';\nlet raw = Buffer.from('');\ntry {\n  raw = await this.helpers.getBinaryDataBuffer(0, 'data');\n} catch (error) {\n  reason = 'missing raw body';\n}\nif (!secret) reason = 'JT_CODE_DISPATCH_SECRET is not configured';\nif (!reason && (!/^\\d+$/.test(timestamp) || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce) || supplied.length === 0)) {\n  reason = 'missing signature headers';\n}\nif (!reason && Math.abs(Date.now() / 1000 - Number(timestamp)) > tolerance) reason = 'stale timestamp';\nif (!reason) {\n  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.`).update(raw).digest('hex');\n  const match = supplied.some((value) => value.length === expected.length\n    && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)));\n  if (!match) reason = 'invalid signature';\n}\nif (!reason) {\n  // Best-effort replay guard; Django's run attempt and delivery ids are the durable one.\n  const store = $getWorkflowStaticData('global');\n  const now = Date.now();\n  store.nonces = (store.nonces || []).filter((entry) => entry.t > now - tolerance * 2000);\n  if (store.nonces.some((entry) => entry.v === nonce)) reason = 'replayed request';\n  else store.nonces.push({ v: nonce, t: now });\n}\nif (reason) return [{ json: { verified: false, reason } }];\nreturn [{ json: { verified: true, payload: JSON.parse(raw.toString('utf8')) } }];\n"
+      },
+      "id": "5eb9d810-0552-5cd3-91bb-e1d9527a4382",
+      "name": "Verify JT-Code signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "586f4500-5d65-53c6-80b4-48f54c988ecc",
+              "leftValue": "={{ $json.verified }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7657a695-6de6-5647-ac55-ca8e5320e799",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": true, \"executionId\": $execution.id } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "81449827-fec2-513d-a4b4-dba8d079a1f9",
+      "name": "Accept (202)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": false, \"reason\": $json.reason } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "e61dfced-53d7-5901-8e64-d1875853b58e",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Verify JT-Code signature').first().json.payload;\nreturn [{ json: { ...payload.data.integration, request: payload } }];\n"
+      },
+      "id": "cfcab836-2bad-59a0-887b-7db21e63e35c",
+      "name": "Sync request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "2153d6a1-1c07-59c4-9c76-84e0a4118e92",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "google_drive",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "google_drive"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "fb6e559b-cff3-5bb1-a9ca-190d3c0a66f7",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "notion",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "notion"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "beb8d7f1-b7a6-540d-b7eb-ba14ceba6993",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "github",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "github"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "c883ca92-2f49-5ad2-9c6f-8e5899d58bf5",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "slack",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "slack"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "e7a40754-b92d-56de-966e-c25b8d259392",
+      "name": "Provider",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ `'${$json.config.folderId}' in parents and trashed = false` }}"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name,mimeType,modifiedTime,webViewLink)"
+            },
+            {
+              "name": "pageSize",
+              "value": "200"
+            }
+          ]
+        }
+      },
+      "id": "89710fff-7c3c-52c1-afcc-1608c9c27d06",
+      "name": "Drive: list folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        -300
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "${N8N_CREDENTIAL_GOOGLE_DRIVE}",
+          "name": "JT-Code Google Drive"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "files",
+        "options": {}
+      },
+      "id": "015d67f7-a601-5fd7-9b50-b297ff71ce3a",
+      "name": "Drive: each file",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1820,
+        -300
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://www.googleapis.com/drive/v3/files/${$json.id}/export` }}",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "mimeType",
+              "value": "text/plain"
+            }
+          ]
+        }
+      },
+      "id": "9ff81e3c-ceb1-5c35-a6d0-cf8c60cb92d0",
+      "name": "Drive: export text",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        -300
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "${N8N_CREDENTIAL_GOOGLE_DRIVE}",
+          "name": "JT-Code Google Drive"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $('Drive: each file').all();\nreturn $input.all().map((item, i) => {\n  const file = (files[i] || { json: {} }).json;\n  return { json: { document: { externalId: `gdrive:${file.id}`, title: file.name,\n    text: typeof item.json.data === 'string' ? item.json.data : '', mimeType: 'text/plain',\n    externalUrl: file.webViewLink, updatedAt: file.modifiedTime } } };\n}).filter((item) => item.json.document.text && !item.json.document.externalId.endsWith('undefined'));\n"
+      },
+      "id": "5d2d768e-89d3-5733-b19c-d42f0b733e50",
+      "name": "Drive: documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        -300
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/search",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"filter\": {\"property\": \"object\", \"value\": \"page\"}, \"page_size\": 100}"
+      },
+      "id": "41acb2c8-50e7-5d02-92c6-655901a4a9c9",
+      "name": "Notion: search pages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        -100
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "${N8N_CREDENTIAL_NOTION}",
+          "name": "JT-Code Notion"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "results",
+        "options": {}
+      },
+      "id": "acaafa9e-7591-5fe7-bb63-8a231a6697a1",
+      "name": "Notion: each page",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        -100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://api.notion.com/v1/blocks/${$json.id}/children?page_size=100` }}",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        }
+      },
+      "id": "9d733b0e-6760-597e-b7a6-a3de7876b395",
+      "name": "Notion: page blocks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        -100
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "${N8N_CREDENTIAL_NOTION}",
+          "name": "JT-Code Notion"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const pages = $('Notion: each page').all();\nconst text = (block) => ((block[block.type] || {}).rich_text || []).map((t) => t.plain_text).join('');\nreturn $input.all().filter((item, i) => pages[i] && pages[i].json.id).map((item, i) => {\n  const page = pages[i].json;\n  const title = Object.values(page.properties || {}).filter((p) => p.type === 'title')\n    .map((p) => p.title.map((t) => t.plain_text).join('')).join(' ') || page.id;\n  return { json: { document: { externalId: `notion:${page.id}`, title,\n    text: (item.json.results || []).map(text).filter(Boolean).join('\\n'), mimeType: 'text/plain',\n    externalUrl: page.url, updatedAt: page.last_edited_time } } };\n}).filter((item) => item.json.document.text);\n"
+      },
+      "id": "2f4787f8-5e74-51c2-bef6-848b6bff23bd",
+      "name": "Notion: documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        -100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://api.github.com/repos/${$json.config.owner}/${$json.config.repo}/git/trees/${$json.config.branch || 'main'}?recursive=1` }}",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        }
+      },
+      "id": "03d36b06-8c0b-5975-8884-de0e32cabd64",
+      "name": "GitHub: repository tree",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        100
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "${N8N_CREDENTIAL_GITHUB}",
+          "name": "JT-Code GitHub"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Sync request').first().json.config;\nconst prefix = (config.path || '').replace(/^\\/+/, '');\nreturn ($input.first().json.tree || [])\n  .filter((f) => f.type === 'blob' && /\\.(md|mdx|txt|rst)$/i.test(f.path) && f.path.startsWith(prefix))\n  .slice(0, 500).map((f) => ({ json: { path: f.path, sha: f.sha } }));\n"
+      },
+      "id": "5a32d44c-997c-5646-ae15-6e6c25e020ab",
+      "name": "GitHub: documentation files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://api.github.com/repos/${$('Sync request').first().json.config.owner}/${$('Sync request').first().json.config.repo}/git/blobs/${$json.sha}` }}",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            }
+          ]
+        }
+      },
+      "id": "1df9ffa7-7920-5f50-a80f-1b1f8788e33d",
+      "name": "GitHub: file content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        100
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "${N8N_CREDENTIAL_GITHUB}",
+          "name": "JT-Code GitHub"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $('GitHub: documentation files').all();\nconst config = $('Sync request').first().json.config;\nreturn $input.all().filter((item, i) => files[i] && files[i].json.path).map((item, i) => ({ json: { document: {\n  externalId: `github:${config.owner}/${config.repo}:${files[i].json.path}`, title: files[i].json.path,\n  text: item.json.content ? Buffer.from(item.json.content, 'base64').toString('utf8') : '',\n  mimeType: 'text/markdown',\n  externalUrl: `https://github.com/${config.owner}/${config.repo}/blob/${config.branch || 'main'}/${files[i].json.path}` } } }))\n  .filter((item) => item.json.document.text);\n"
+      },
+      "id": "d39d7a94-9e21-59f6-be28-f691166e2abf",
+      "name": "GitHub: documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        100
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://slack.com/api/conversations.history",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{ $json.config.channelId }}"
+            },
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        }
+      },
+      "id": "1d36226b-717b-5029-8f39-0cd492ec15a7",
+      "name": "Slack: channel history",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        300
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "${N8N_CREDENTIAL_SLACK}",
+          "name": "JT-Code Slack"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Sync request').first().json.config;\nconst messages = ($input.first().json.messages || []).filter((m) => m.text).reverse();\nif (!messages.length) return [];\nreturn [{ json: { document: { externalId: `slack:${config.channelId}`,\n  title: `Slack #${config.channelName || config.channelId}`,\n  text: messages.map((m) => m.text).join('\\n'), mimeType: 'text/plain',\n  updatedAt: new Date(Number(messages[messages.length - 1].ts) * 1000).toISOString() } } }];\n"
+      },
+      "id": "9580e418-4594-5a7a-9e1f-d192f1f3bbbf",
+      "name": "Slack: documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Sync request').first().json.request;\nconst documents = $input.all().map((item) => item.json.document).filter((doc) => doc && doc.externalId);\nconst size = 25;\nconst batches = [];\nfor (let i = 0; i < documents.length; i += size) batches.push(documents.slice(i, i + size));\nif (!batches.length) batches.push([]);\nreturn batches.map((chunk, i) => ({ json: {\n  callbackUrl: request.callbacks.documents, traceparent: request.traceparent || '',\n  callbackBody: { deliveryId: request.deliveryId, syncRunId: request.data.syncRunId, documents: chunk,\n    final: i === batches.length - 1 } } }));\n"
+      },
+      "id": "a3cf1966-8a49-54bb-be25-e54cfc8ce720",
+      "name": "Batch documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign callbacks to JT-Code: v1=HMAC-SHA256(secret, \"<ts>.<nonce>.\" + body).\nconst crypto = require('crypto');\nconst secret = $env.JT_CODE_CALLBACK_SECRET;\nif (!secret) throw new Error('JT_CODE_CALLBACK_SECRET is not configured');\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.callbackBody);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const nonce = crypto.randomBytes(18).toString('base64url');\n  const digest = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex');\n  return { json: {\n    url: item.json.callbackUrl,\n    body,\n    timestamp,\n    nonce,\n    signature: `v1=${digest}`,\n    traceparent: item.json.traceparent || '',\n  } };\n});\n"
+      },
+      "id": "424171cd-9038-59aa-8b8b-9a837c868386",
+      "name": "Sign documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-JT-Code-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-JT-Code-Nonce",
+              "value": "={{ $json.nonce }}"
+            },
+            {
+              "name": "X-JT-Code-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "traceparent",
+              "value": "={{ $json.traceparent }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "b7ab197a-dd56-5426-bb0c-8919ba343715",
+      "name": "Push documents to JT-Code",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Sync request').first().json.request;\nreturn [{ json: { callbackUrl: request.callbacks.status, traceparent: request.traceparent || '',\n  callbackBody: { status: 'completed', executionId: $execution.id,\n    summary: { batches: $input.all().length } } } }];\n"
+      },
+      "id": "a6b8a051-609c-542d-be6c-1cd160caee0b",
+      "name": "Report sync completed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign callbacks to JT-Code: v1=HMAC-SHA256(secret, \"<ts>.<nonce>.\" + body).\nconst crypto = require('crypto');\nconst secret = $env.JT_CODE_CALLBACK_SECRET;\nif (!secret) throw new Error('JT_CODE_CALLBACK_SECRET is not configured');\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.callbackBody);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const nonce = crypto.randomBytes(18).toString('base64url');\n  const digest = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex');\n  return { json: {\n    url: item.json.callbackUrl,\n    body,\n    timestamp,\n    nonce,\n    signature: `v1=${digest}`,\n    traceparent: item.json.traceparent || '',\n  } };\n});\n"
+      },
+      "id": "65634eaa-03bc-5f31-b5ca-0aed626dfdc6",
+      "name": "Sign sync status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-JT-Code-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-JT-Code-Nonce",
+              "value": "={{ $json.nonce }}"
+            },
+            {
+              "name": "X-JT-Code-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "traceparent",
+              "value": "={{ $json.traceparent }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "e0fdc4cd-8413-5507-a092-3085ac6872fc",
+      "name": "Post sync status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "JT-Code request": {
+      "main": [
+        [
+          {
+            "node": "Verify JT-Code signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify JT-Code signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Accept (202)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accept (202)": {
+      "main": [
+        [
+          {
+            "node": "Sync request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync request": {
+      "main": [
+        [
+          {
+            "node": "Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provider": {
+      "main": [
+        [
+          {
+            "node": "Drive: list folder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notion: search pages",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GitHub: repository tree",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack: channel history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: list folder": {
+      "main": [
+        [
+          {
+            "node": "Drive: each file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: each file": {
+      "main": [
+        [
+          {
+            "node": "Drive: export text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: export text": {
+      "main": [
+        [
+          {
+            "node": "Drive: documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: documents": {
+      "main": [
+        [
+          {
+            "node": "Batch documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: search pages": {
+      "main": [
+        [
+          {
+            "node": "Notion: each page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: each page": {
+      "main": [
+        [
+          {
+            "node": "Notion: page blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: page blocks": {
+      "main": [
+        [
+          {
+            "node": "Notion: documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: documents": {
+      "main": [
+        [
+          {
+            "node": "Batch documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: repository tree": {
+      "main": [
+        [
+          {
+            "node": "GitHub: documentation files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: documentation files": {
+      "main": [
+        [
+          {
+            "node": "GitHub: file content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: file content": {
+      "main": [
+        [
+          {
+            "node": "GitHub: documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: documents": {
+      "main": [
+        [
+          {
+            "node": "Batch documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: channel history": {
+      "main": [
+        [
+          {
+            "node": "Slack: documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: documents": {
+      "main": [
+        [
+          {
+            "node": "Batch documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch documents": {
+      "main": [
+        [
+          {
+            "node": "Sign documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign documents": {
+      "main": [
+        [
+          {
+            "node": "Push documents to JT-Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push documents to JT-Code": {
+      "main": [
+        [
+          {
+            "node": "Report sync completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report sync completed": {
+      "main": [
+        [
+          {
+            "node": "Sign sync status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign sync status": {
+      "main": [
+        [
+          {
+            "node": "Post sync status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 1800,
+    "timezone": "UTC",
+    "errorWorkflow": "${JT_CODE_ERROR_WORKFLOW_ID}"
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "jtCode": {
+      "key": "knowledge-integration-sync",
+      "version": 1,
+      "kind": "event",
+      "description": "Pulls documents from Google Drive, Notion, GitHub or Slack into a knowledge source.",
+      "webhookPath": "jt-code/knowledge-integration-sync/v1",
+      "taskTypes": [],
+      "eventTypes": [
+        "knowledge.integration.sync_requested"
+      ],
+      "timeoutSeconds": 1800,
+      "maxAttempts": 5,
+      "requiredCredentials": [
+        "N8N_CREDENTIAL_GOOGLE_DRIVE",
+        "N8N_CREDENTIAL_NOTION",
+        "N8N_CREDENTIAL_GITHUB",
+        "N8N_CREDENTIAL_SLACK"
+      ]
+    }
+  }
+}

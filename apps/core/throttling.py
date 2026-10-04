@@ -26,7 +26,9 @@ def _rate(scope: str) -> str | None:
 
 
 def _client_ip(request: Request) -> str:
-    return str(request.META.get("REMOTE_ADDR") or "unknown")
+    from apps.core.edge import client_ip
+
+    return client_ip(request._request if hasattr(request, "_request") else request)
 
 
 def _tenant_multiplier(organization: Any) -> int:
@@ -63,7 +65,11 @@ class _Throttle(BaseThrottle):
         limit, window = parse_rate(rate)
         decision = hit(key, limit=limit * multiplier, window=window)
         if not decision.allowed:
+            from apps.core.metrics import RATE_LIMITED
+
             self._wait = max(self._wait, decision.retry_after)
+            dimension = "ip" if key.startswith("ip:") else ("org" if ":org:" in key else "user")
+            RATE_LIMITED.labels(dimension, self.scope or "ip").inc()
         return decision.allowed
 
     def wait(self) -> float | None:

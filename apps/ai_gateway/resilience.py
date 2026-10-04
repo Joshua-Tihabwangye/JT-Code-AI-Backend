@@ -90,7 +90,7 @@ def backoff_seconds(attempt: int) -> float:
         float(settings.AI_RETRY_MAX_BACKOFF_SECONDS),
         float(settings.AI_RETRY_BASE_SECONDS) * (2**attempt),
     )
-    return random.uniform(0, ceiling)  # noqa: S311 - jitter, not security
+    return random.uniform(0, ceiling)  # nosec B311 - retry jitter, not security
 
 
 class Deadline:

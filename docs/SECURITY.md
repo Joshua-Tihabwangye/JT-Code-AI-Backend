@@ -54,3 +54,18 @@ Data-loss/DR concerns are covered by the Phase 3 backup/PITR procedures.
 
 Measurement baseline: Sentry traces + `/api/v1/health/*` probes; dashboards and
 OpenTelemetry come in Phase 15.
+
+## 4. Hardening controls (Phase 15)
+
+The controls behind the threat model are documented in
+[OBSERVABILITY.md](OBSERVABILITY.md):
+
+* Sentry PII scrubbing.
+* Authenticated metrics.
+* Tracing with credential scrubbing at the collector.
+* The append-only audit pipeline, exported through Kafka.
+* Security headers and a strict API CSP.
+* Cloudflare WAF, edge rate limits and the origin lock.
+* Trusted-proxy client-IP resolution.
+* Timestamped, nonce-bound webhook signatures with replay rejection.
+* The SAST, dependency, secret and DAST gates (`manage.py security_gate` and CI).

@@ -5,13 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import dj_database_url
-import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 from kombu import Queue
-from sentry_sdk.integrations.celery import CeleryIntegration
-from sentry_sdk.integrations.django import DjangoIntegration
-from sentry_sdk.integrations.redis import RedisIntegration
 
 from config.logging import LOGGING  # noqa: F401
 
@@ -69,17 +65,22 @@ INSTALLED_APPS = [
     "apps.conversions",
     "apps.analytics",
     "apps.usage",
+    "apps.orchestration",
 ]
 
 MIDDLEWARE = [
     "apps.core.middleware.RequestContextMiddleware",
+    "apps.core.metrics.MetricsMiddleware",
+    "apps.core.edge.EdgeProtectionMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "apps.core.edge.SecurityHeadersMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.governance.audit.AuditTrailMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -202,6 +203,22 @@ CELERY_TASK_TIME_LIMIT = 600
 CELERY_TASK_SOFT_TIME_LIMIT = 540
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BEAT_SCHEDULE = {
+    "sweep-n8n-workflows": {
+        "task": "apps.orchestration.tasks.sweep_workflows",
+        "schedule": 60.0,
+    },
+    "run-due-automations": {
+        "task": "apps.orchestration.tasks.run_due_automations",
+        "schedule": 60.0,
+    },
+    "reconcile-n8n-executions": {
+        "task": "apps.orchestration.tasks.reconcile_n8n_executions",
+        "schedule": 600.0,
+    },
+    "prune-n8n-callbacks": {
+        "task": "apps.orchestration.tasks.prune_workflow_callbacks",
+        "schedule": 86400.0,
+    },
     "publish-kafka-outbox": {
         "task": "apps.events.tasks.publish_outbox_batch",
         "schedule": 2.0,
@@ -447,12 +464,33 @@ KAFKA_TOPIC_RETENTION_MS = int(env("KAFKA_TOPIC_RETENTION_MS", str(7 * 24 * 3600
 AI_PROVIDER = env("AI_PROVIDER", "disabled")
 N8N_SENTRY_RELAY_SECRET = env("N8N_SENTRY_RELAY_SECRET")
 
-# n8n Integration
+# n8n orchestration (Phase 16; docs/N8N_ORCHESTRATION.md, infra/n8n).
+# N8N_BASE_URL serves the editor and public API (workflow sync); webhooks are
+# dispatched to N8N_WEBHOOK_BASE_URL (the queue-mode webhook processors).
 N8N_BASE_URL = env("N8N_BASE_URL")
+N8N_WEBHOOK_BASE_URL = env("N8N_WEBHOOK_BASE_URL")
 N8N_API_KEY = env("N8N_API_KEY")
+# Django -> n8n requests are signed with N8N_DISPATCH_SECRET; n8n -> Django
+# callbacks with N8N_WEBHOOK_SECRET (previous value accepted during rotation).
+N8N_DISPATCH_SECRET = env("N8N_DISPATCH_SECRET")
 N8N_WEBHOOK_SECRET = env("N8N_WEBHOOK_SECRET")
+N8N_WEBHOOK_SECRET_PREVIOUS = env("N8N_WEBHOOK_SECRET_PREVIOUS")
+# Public base URL of this API as n8n reaches it, e.g. https://api.example.com/api/v1.
 N8N_CALLBACK_BASE_URL = env("N8N_CALLBACK_BASE_URL")
 N8N_WORKFLOW_PREFIX = env("N8N_WORKFLOW_PREFIX", "jt-code")
+N8N_WORKFLOWS_DIR = env("N8N_WORKFLOWS_DIR", str(BASE_DIR / "n8n" / "workflows"))
+N8N_REQUEST_TIMEOUT_SECONDS = int(env("N8N_REQUEST_TIMEOUT_SECONDS", "15"))
+N8N_RETRY_BASE_SECONDS = int(env("N8N_RETRY_BASE_SECONDS", "30"))
+N8N_RETRY_MAX_SECONDS = int(env("N8N_RETRY_MAX_SECONDS", "900"))
+# Ids of the n8n credentials the workflows use (substituted on `n8n_workflows push`).
+_N8N_CREDENTIALS = {
+    "N8N_CREDENTIAL_SLACK": env("N8N_CREDENTIAL_SLACK"),
+    "N8N_CREDENTIAL_SMTP": env("N8N_CREDENTIAL_SMTP"),
+    "N8N_CREDENTIAL_GOOGLE_DRIVE": env("N8N_CREDENTIAL_GOOGLE_DRIVE"),
+    "N8N_CREDENTIAL_NOTION": env("N8N_CREDENTIAL_NOTION"),
+    "N8N_CREDENTIAL_GITHUB": env("N8N_CREDENTIAL_GITHUB"),
+}
+N8N_CREDENTIAL_IDS = {name: value for name, value in _N8N_CREDENTIALS.items() if value}
 
 # AI Gateway
 AI_GATEWAY_DEFAULT_POLICY = env("AI_GATEWAY_DEFAULT_POLICY", "balanced")
@@ -706,17 +744,73 @@ SPECTACULAR_SETTINGS = {
 HEALTHCHECK_EXTERNAL_DEPENDENCIES = env_bool("HEALTHCHECK_EXTERNAL_DEPENDENCIES", False)
 
 SENTRY_DSN = env("SENTRY_DSN")
+SENTRY_ENVIRONMENT = env("SENTRY_ENVIRONMENT")
+SENTRY_RELEASE = env("SENTRY_RELEASE", "jt-code-api@0.1.0")
+SENTRY_TRACES_SAMPLE_RATE = env_float("SENTRY_TRACES_SAMPLE_RATE", 0.1)
+SENTRY_PROFILES_SAMPLE_RATE = env_float("SENTRY_PROFILES_SAMPLE_RATE", 0.0)
 if SENTRY_DSN:
-    sentry_sdk.init(
+    from apps.core.sentry import init_sentry
+
+    init_sentry(
         dsn=SENTRY_DSN,
-        environment=env("SENTRY_ENVIRONMENT"),
-        release=env("SENTRY_RELEASE", "jt-code-api@0.1.0"),
-        integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()],
-        traces_sample_rate=env_float("SENTRY_TRACES_SAMPLE_RATE", 0.1),
-        profiles_sample_rate=env_float("SENTRY_PROFILES_SAMPLE_RATE", 0.0),
-        send_default_pii=False,
-        max_request_body_size="never",
+        environment=SENTRY_ENVIRONMENT,
+        release=SENTRY_RELEASE,
+        traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+        profiles_sample_rate=SENTRY_PROFILES_SAMPLE_RATE,
     )
+
+# Observability (Phase 15): Prometheus metrics and OpenTelemetry tracing.
+# ``/metrics`` requires ``Authorization: Bearer <METRICS_AUTH_TOKEN>``.
+METRICS_AUTH_TOKEN = env("METRICS_AUTH_TOKEN")
+METRICS_DATABASE_STATE = env_bool("METRICS_DATABASE_STATE", True)
+METRICS_STATE_CACHE_SECONDS = int(env("METRICS_STATE_CACHE_SECONDS", "15"))
+# Celery workers serve their own exposition on this port (0 disables).
+CELERY_METRICS_PORT = int(env("CELERY_METRICS_PORT", "0"))
+OTEL_EXPORTER_OTLP_ENDPOINT = env("OTEL_EXPORTER_OTLP_ENDPOINT")
+OTEL_EXPORTER_OTLP_HEADERS = env("OTEL_EXPORTER_OTLP_HEADERS")
+OTEL_SERVICE_NAME = env("OTEL_SERVICE_NAME", "jt-code-api")
+OTEL_SERVICE_VERSION = SENTRY_RELEASE
+OTEL_ENVIRONMENT = env("OTEL_ENVIRONMENT", SENTRY_ENVIRONMENT or "development")
+OTEL_TRACES_SAMPLE_RATIO = env_float("OTEL_TRACES_SAMPLE_RATIO", 0.1)
+
+# Edge security (Phase 15). See apps/core/edge.py and infra/cloudflare.
+TRUSTED_PROXY_HOPS = int(env("TRUSTED_PROXY_HOPS", "0"))
+CLOUDFLARE_ORIGIN_SECRET = env("CLOUDFLARE_ORIGIN_SECRET")
+CLOUDFLARE_ENFORCE_ORIGIN = env_bool("CLOUDFLARE_ENFORCE_ORIGIN", False)
+CSP_API_POLICY = env(
+    "CSP_API_POLICY", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+)
+CSP_HTML_POLICY = env(
+    "CSP_HTML_POLICY",
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+)
+PERMISSIONS_POLICY = env(
+    "PERMISSIONS_POLICY",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), "
+    "payment=(), usb=(), browsing-topics=()",
+)
+CROSS_ORIGIN_RESOURCE_POLICY = env("CROSS_ORIGIN_RESOURCE_POLICY", "same-site")
+# Signed machine-to-machine webhooks (n8n, relays): timestamp window and nonce TTL.
+WEBHOOK_REPLAY_TOLERANCE_SECONDS = int(env("WEBHOOK_REPLAY_TOLERANCE_SECONDS", "300"))
+
+# Audit pipeline (Phase 15): mutating requests to these route templates are
+# audited, successful or denied - (route regex, category, severity, methods).
+AUDIT_ROUTE_RULES: tuple[tuple[str, str, str, str], ...] = (
+    (r"^api/v1/(api-keys|webhooks|connector-accounts|kafka-consumers)/", "configuration", "medium", "*"),
+    (r"^api/v1/integrations/", "configuration", "medium", "*"),
+    (r"^api/v1/(tool-policies|tool-credentials|mcp/servers)/", "security", "high", "*"),
+    (r"^api/v1/tool-approvals/", "authorization", "medium", "*"),
+    (r"^api/v1/(plans/.+/subscribe|subscriptions|wallets|payment-methods)/", "billing", "medium", "*"),
+    (r"^api/v1/billing/", "billing", "medium", "*"),
+    (r"^api/v1/(organizations|settings/organization|settings/account|settings/export)", "admin", "high", "*"),
+    (r"^api/v1/(settings/consents|consents|retention-rules)/", "configuration", "medium", "*"),
+    (r"^api/v1/(files|knowledge)/", "file_operation", "low", "DELETE"),
+    (r"^api/v1/files/.+/(restore|access)/", "file_operation", "low", "*"),
+    (r"^api/v1/(n8n/workflows|automations)", "configuration", "medium", "*"),
+)
 
 if os.getenv("DJANGO_SETTINGS_MODULE") == "config.settings.base":
     raise ImproperlyConfigured("config.settings.base is shared settings, not a deployable profile.")

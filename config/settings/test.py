@@ -51,6 +51,14 @@ STRIPE_SECRET_KEY = "sk_test_jtcode_unit_tests"  # nosec B105 # pragma: allowlis
 STRIPE_WEBHOOK_SECRET = "whsec_jtcode_unit_tests"  # nosec B105 # pragma: allowlist secret
 FRONTEND_URL = "https://app.example.test"
 
+# n8n is off unless a test configures it (Phase 16 tests use a fake n8n).
+N8N_BASE_URL = ""
+N8N_WEBHOOK_BASE_URL = ""
+N8N_API_KEY = ""
+N8N_DISPATCH_SECRET = ""  # nosec B105 - disables n8n in tests
+N8N_CALLBACK_BASE_URL = ""
+N8N_CREDENTIAL_IDS = {}  # noqa: F405
+
 # Deterministic offline chat backend for the test suite (no SDK/key required).
 AI_PROVIDER = "echo"
 

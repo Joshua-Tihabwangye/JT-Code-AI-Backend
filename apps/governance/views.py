@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, time
+
 from django.db.models import Count
 from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -23,7 +27,11 @@ from apps.governance.serializers import (
     SupportCaseSerializer,
     SupportCaseUpdateSerializer,
 )
-from apps.identity.authorization import HasOrganizationWriteAccess, organization_for_request
+from apps.identity.authorization import (
+    HasOrganizationWriteAccess,
+    IsOrganizationAdmin,
+    organization_for_request,
+)
 
 
 def _tenant_queryset(queryset, request: Request, *, organization_field: str = "organization"):
@@ -34,7 +42,9 @@ def _tenant_queryset(queryset, request: Request, *, organization_field: str = "o
 
 
 class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [IsAuthenticated]
+    """The tenant audit trail: organization admins only (it contains IPs and actors)."""
+
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
     serializer_class = AuditEventSerializer
     lookup_field = "id"
 
@@ -58,14 +68,16 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
         if actor_id:
             queryset = queryset.filter(actor_id=actor_id)
 
-        # Date range
-        start_date = self.request.query_params.get("start_date")
-        end_date = self.request.query_params.get("end_date")
-        if start_date:
-            queryset = queryset.filter(created_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__lte=end_date)
-
+        for name, lookup in (("start_date", "created_at__gte"), ("end_date", "created_at__lte")):
+            if value := self.request.query_params.get(name):
+                moment = parse_datetime(value) or (
+                    datetime.combine(day, time.min, tzinfo=UTC) if (day := parse_date(value)) else None
+                )
+                if moment is None:
+                    raise ValidationError({name: "Use an ISO-8601 date or datetime."})
+                queryset = queryset.filter(**{lookup: moment})
+        if outcome := self.request.query_params.get("outcome"):
+            queryset = queryset.filter(outcome=outcome)
         return queryset
 
 

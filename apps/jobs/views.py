@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import secrets
 import uuid
 
 from celery import current_app
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import status, viewsets
@@ -21,7 +19,7 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
-from apps.jobs.dispatch import NATIVE_TASK_TYPES, enqueue_job
+from apps.jobs.dispatch import enqueue_job
 from apps.jobs.metrics import queue_depths
 from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
 from apps.jobs.serializers import (
@@ -118,7 +116,9 @@ class JobViewSet(viewsets.ModelViewSet):
                 {"detail": "Job can only be retried from failed/cancelled/expired status"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if job.task_type not in NATIVE_TASK_TYPES:
+        from apps.jobs.dispatch import supported_task_types
+
+        if job.task_type not in supported_task_types():
             return Response(
                 {"detail": "This task type is not supported by the job runtime."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -244,11 +244,14 @@ class JobStatusCallbackView(APIView):
     permission_classes = []
     authentication_classes = []
 
+    throttle_classes: list = []
+
     def post(self, request: Request, job_id: uuid.UUID):
-        secret = request.headers.get("X-JT-Code-Webhook-Secret")
-        expected_secret = settings.N8N_WEBHOOK_SECRET
-        if not expected_secret or not secret or not secrets.compare_digest(secret, expected_secret):
-            return Response({"detail": "Invalid webhook secret"}, status=status.HTTP_401_UNAUTHORIZED)
+        from apps.core.webhooks import n8n_callback_secrets, reject_unsigned
+
+        rejection = reject_unsigned(request, source="n8n", secrets_=n8n_callback_secrets())
+        if rejection is not None:
+            return rejection
         serializer = JobStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:

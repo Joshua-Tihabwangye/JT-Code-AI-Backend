@@ -166,6 +166,17 @@ class WorkflowRun(models.Model):
     n8n_workflow_id = models.CharField(max_length=100)
     n8n_execution_id = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    # Phase 16: n8n-executed runs (max_attempts > 0). Django owns attempts and retries.
+    workflow_key = models.CharField(max_length=100, blank=True)
+    workflow_version = models.PositiveIntegerField(default=0)
+    attempt = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=0)
+    timeout_seconds = models.PositiveIntegerField(default=1800)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    next_attempt_at = models.DateTimeField(null=True, blank=True)
+    deadline_at = models.DateTimeField(null=True, blank=True)
+    last_callback_at = models.DateTimeField(null=True, blank=True)
+    last_error_code = models.CharField(max_length=64, blank=True)
     input_payload = models.JSONField()
     output_payload = models.JSONField(null=True, blank=True)
     steps_completed = models.PositiveIntegerField(default=0)
@@ -179,6 +190,7 @@ class WorkflowRun(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
+        indexes = [models.Index(fields=("status", "next_attempt_at"), name="jobs_wfrun_due_idx")]
 
     def __str__(self):
         return f"WorkflowRun {self.id} - {self.status}"

@@ -78,3 +78,12 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Terraform
+*.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# n8n deployment secrets
+infra/n8n/n8n.env

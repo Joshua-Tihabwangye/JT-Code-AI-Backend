@@ -325,14 +325,14 @@ def test_topup_endpoint_enforces_bounds_and_snapshots_credits(django_user_model,
 
     def fake_create(**kwargs):
         created.update(kwargs)
-        return SimpleNamespace(id="pi_new", client_secret="secret_123")
+        return SimpleNamespace(id="pi_new", client_secret="secret_123")  # pragma: allowlist secret
 
     monkeypatch.setattr(stripe.PaymentIntent, "create", fake_create)
     api = client_for(owner, organization)
     assert api.post("/api/v1/wallets/me/topup/", {"amount_cents": 100}, format="json").status_code == 400
     response = api.post("/api/v1/wallets/me/topup/", {"amount_cents": 2500}, format="json")
     assert response.status_code == 200, response.content
-    assert response.json()["clientSecret"] == "secret_123"
+    assert response.json()["clientSecret"] == "secret_123"  # pragma: allowlist secret
     assert created["metadata"]["credits"] == "2500.000000" and created["metadata"]["kind"] == "topup"
     assert Payment.objects.get(provider_payment_id="pi_new").status == Payment.Status.PENDING
 
@@ -409,7 +409,9 @@ def test_wallet_settings_and_payment_methods(django_user_model, monkeypatch):
         lambda **kwargs: SimpleNamespace(id="seti_1", client_secret="seti_secret"),
     )
     setup = api.post("/api/v1/payment-methods/", {}, format="json")
-    assert setup.status_code == 200 and setup.json()["clientSecret"] == "seti_secret"
+    assert (
+        setup.status_code == 200 and setup.json()["clientSecret"] == "seti_secret"  # pragma: allowlist secret
+    )  # pragma: allowlist secret
     assert api.get("/api/v1/payment-methods/me/").json() is None
 
     monkeypatch.setattr(stripe.Customer, "modify", lambda *args, **kwargs: None)

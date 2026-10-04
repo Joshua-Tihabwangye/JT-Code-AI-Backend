@@ -44,12 +44,15 @@ _REQUIRED_STRICT = (
     "N8N_API_KEY",
     "N8N_WEBHOOK_SECRET",
     "N8N_SENTRY_RELAY_SECRET",
+    "N8N_DISPATCH_SECRET",
+    "N8N_CALLBACK_BASE_URL",
     "STRIPE_SECRET_KEY",
     "WEBHOOK_ALLOWED_HOSTS",
     "WEBHOOK_SIGNING_SECRET",
     "STRIPE_WEBHOOK_SECRET",
     "SENTRY_DSN",
     "SENTRY_ENVIRONMENT",
+    "METRICS_AUTH_TOKEN",
 )
 _SECRET_ENV = (
     "DJANGO_SECRET_KEY",
@@ -58,6 +61,7 @@ _SECRET_ENV = (
     "N8N_SENTRY_RELAY_SECRET",
     "N8N_API_KEY",
     "N8N_WEBHOOK_SECRET",
+    "N8N_DISPATCH_SECRET",
     "KAFKA_SASL_PASSWORD",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
@@ -67,6 +71,8 @@ _SECRET_ENV = (
     "GEMINI_API_KEY",
     "LLAMA_API_KEY",
     "SENTRY_DSN",
+    "METRICS_AUTH_TOKEN",
+    "CLOUDFLARE_ORIGIN_SECRET",
 )
 _BOOL_ENV = (
     "DJANGO_DEBUG",
@@ -76,6 +82,8 @@ _BOOL_ENV = (
     "BROWSER_TOOL_ENABLED",
     "ENABLE_MCP",
     "ASSET_LOCAL_FALLBACK_ENABLED",
+    "METRICS_DATABASE_STATE",
+    "CLOUDFLARE_ENFORCE_ORIGIN",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
@@ -165,6 +173,13 @@ _INT_ENV = (
     "ANALYTICS_SANDBOX_CPU_SECONDS",
     "ANALYTICS_SANDBOX_TIMEOUT_SECONDS",
     "ANALYTICS_INLINE_SPEC_BYTES",
+    "METRICS_STATE_CACHE_SECONDS",
+    "CELERY_METRICS_PORT",
+    "TRUSTED_PROXY_HOPS",
+    "WEBHOOK_REPLAY_TOLERANCE_SECONDS",
+    "N8N_REQUEST_TIMEOUT_SECONDS",
+    "N8N_RETRY_BASE_SECONDS",
+    "N8N_RETRY_MAX_SECONDS",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
@@ -187,6 +202,7 @@ _FLOAT_ENV = (
     "CHAT_SSE_POLL_SECONDS",
     "CHAT_SSE_RECONCILIATION_SECONDS",
     "WEBHOOK_DELIVERY_TIMEOUT_SECONDS",
+    "OTEL_TRACES_SAMPLE_RATIO",
 )
 _FRACTION_ENV = {
     "VECTOR_MIN_SIMILARITY": (0.0, 1.0),
@@ -194,6 +210,7 @@ _FRACTION_ENV = {
     "RAG_EVAL_MIN_MRR": (0.0, 1.0),
     "SENTRY_TRACES_SAMPLE_RATE": (0.0, 1.0),
     "SENTRY_PROFILES_SAMPLE_RATE": (0.0, 1.0),
+    "OTEL_TRACES_SAMPLE_RATIO": (0.0, 1.0),
 }
 _THROTTLE_ENV = (
     "THROTTLE_CHAT",
@@ -359,6 +376,41 @@ def _check_billing(problems: list[str], *, strict: bool) -> None:
         problems.append("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret (whsec_).")
 
 
+def _check_observability(problems: list[str], *, strict: bool) -> None:
+    tolerance = _val("WEBHOOK_REPLAY_TOLERANCE_SECONDS", "300")
+    if tolerance.isdigit() and not 30 <= int(tolerance) <= 900:
+        problems.append("WEBHOOK_REPLAY_TOLERANCE_SECONDS must be between 30 and 900.")
+    hops = _val("TRUSTED_PROXY_HOPS", "0")
+    if hops.isdigit() and int(hops) > 5:
+        problems.append("TRUSTED_PROXY_HOPS must be the number of proxies you operate (0-5).")
+    enforce = _val("CLOUDFLARE_ENFORCE_ORIGIN", "false").lower() in {"1", "true", "yes", "on"}
+    if enforce and len(_val("CLOUDFLARE_ORIGIN_SECRET")) < 32:
+        problems.append("CLOUDFLARE_ENFORCE_ORIGIN requires CLOUDFLARE_ORIGIN_SECRET (32+ characters).")
+    if not strict:
+        return
+    if (token := _val("METRICS_AUTH_TOKEN")) and len(token) < 32:
+        problems.append("METRICS_AUTH_TOKEN must be at least 32 characters.")
+    if (endpoint := _val("OTEL_EXPORTER_OTLP_ENDPOINT")) and urlparse(endpoint).scheme != "https":
+        problems.append("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS in deployable environments.")
+
+
+def _check_n8n(problems: list[str], *, strict: bool) -> None:
+    base, ceiling = _val("N8N_RETRY_BASE_SECONDS", "30"), _val("N8N_RETRY_MAX_SECONDS", "900")
+    if base.isdigit() and ceiling.isdigit() and not 0 < int(base) <= int(ceiling):
+        problems.append("N8N_RETRY_BASE_SECONDS must be positive and at most N8N_RETRY_MAX_SECONDS.")
+    dispatch, callback = _val("N8N_DISPATCH_SECRET"), _val("N8N_WEBHOOK_SECRET")
+    if dispatch and dispatch == callback:
+        problems.append("N8N_DISPATCH_SECRET and N8N_WEBHOOK_SECRET must differ (one per direction).")
+    if not strict:
+        return
+    for name in ("N8N_DISPATCH_SECRET", "N8N_WEBHOOK_SECRET"):
+        if (value := _val(name)) and len(value) < 32:
+            problems.append(f"{name} must be at least 32 characters.")
+    for name in ("N8N_WEBHOOK_BASE_URL", "N8N_CALLBACK_BASE_URL"):
+        if (value := _val(name)) and urlparse(value).scheme != "https":
+            problems.append(f"{name} must use HTTPS in deployable environments.")
+
+
 def _check_rag(problems: list[str], *, strict: bool) -> None:
     provider = _val("RAG_EMBEDDING_PROVIDER", "gemini").lower()
     if provider not in {"openai", "gemini", "echo"}:
@@ -412,6 +464,8 @@ def validate_environment(profile: str) -> list[str]:
     _check_analytics(problems)
     _check_billing(problems, strict=strict)
     _check_tools(problems, strict=strict)
+    _check_observability(problems, strict=strict)
+    _check_n8n(problems, strict=strict)
     if not strict:
         return problems
 

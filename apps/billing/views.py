@@ -41,8 +41,10 @@ from apps.billing.serializers import (
 )
 from apps.billing.services import CreditService
 from apps.billing.webhooks import apply_subscription, process_event, record_event
+from apps.core.metrics import SECURITY_EVENTS, WEBHOOKS
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
+from apps.governance.audit import security_event
 from apps.identity.authorization import organization_for_request, require_organization_write_access
 
 _INVOICE_PDF_HOSTS = {"pay.stripe.com", "files.stripe.com", "invoice.stripe.com"}
@@ -380,11 +382,23 @@ class StripeWebhookView(APIView):
                 tolerance=settings.STRIPE_WEBHOOK_TOLERANCE_SECONDS,
             )
         except ValueError:
+            WEBHOOKS.labels("stripe", "invalid_payload").inc()
             return Response({"detail": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
         except stripe.SignatureVerificationError:
+            # Covers forged signatures and replays outside the timestamp tolerance.
+            WEBHOOKS.labels("stripe", "invalid").inc()
+            SECURITY_EVENTS.labels("webhook_invalid").inc()
+            security_event(
+                "webhook.rejected",
+                resource_type="stripe",
+                description="Rejected Stripe webhook: invalid or expired signature",
+                request=request._request,
+                reason="invalid",
+            )
             return Response({"detail": "Invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
         payload = event.to_dict_recursive() if hasattr(event, "to_dict_recursive") else dict(event)
         row, created = record_event(payload)
+        WEBHOOKS.labels("stripe", "accepted" if created else "duplicate").inc()
         if created:
             enqueue_outbox_event(
                 topic="billing.stripe.webhook",

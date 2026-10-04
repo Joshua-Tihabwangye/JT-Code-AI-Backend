@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from collections.abc import Callable
 
-import sentry_sdk
 from celery import current_app
 from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
-from rest_framework import status
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
@@ -75,24 +72,3 @@ class ReadyView(APIView):
         return Response(
             {"status": "ok" if ready else "degraded", "checks": checks}, status=200 if ready else 503
         )
-
-
-class N8nSentryRelayView(APIView):
-    permission_classes = [AllowAny]
-    authentication_classes: list[type[BaseAuthentication]] = []
-
-    def post(self, request: Request) -> Response:
-        expected = settings.N8N_SENTRY_RELAY_SECRET
-        supplied = request.headers.get("X-JT-Code-Relay-Secret", "")
-        if not expected or not secrets.compare_digest(expected, supplied):
-            logger.warning("rejected n8n sentry relay request")
-            return Response({"detail": "Unauthorized relay request."}, status=status.HTTP_401_UNAUTHORIZED)
-        payload = request.data if isinstance(request.data, dict) else {}
-        with sentry_sdk.push_scope() as scope:
-            scope.set_tag("source", "n8n")
-            scope.set_context(
-                "n8n", {k: payload.get(k) for k in ("workflowId", "executionId", "step", "errorCode")}
-            )
-            sentry_sdk.capture_message(str(payload.get("message", "n8n workflow failure")), level="error")
-        logger.error("n8n reported workflow failure", extra={"workflow_id": payload.get("workflowId")})
-        return Response(status=status.HTTP_202_ACCEPTED)

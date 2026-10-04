@@ -58,6 +58,7 @@ class Source(models.Model):
         FILE = "file", "File Upload"
         URL = "url", "Web URL"
         TEXT = "text", "Raw Text"
+        INTEGRATION = "integration", "Integration (synced by n8n)"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

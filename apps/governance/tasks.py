@@ -4,35 +4,66 @@ from celery import shared_task
 from django.utils import timezone
 
 
+def _allow_audit_purge() -> None:
+    """The append-only trigger permits retention deletes only inside this transaction."""
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT set_config('jt_code.ledger_purge', 'on', true)")
+
+
 @shared_task
-def cleanup_old_audit_events():
-    """Clean up audit events older than retention period"""
+def cleanup_old_audit_events() -> dict[str, int]:
+    """Apply audit retention: tenant ``audit_events`` rules, else ``AUDIT_EVENT_RETENTION_DAYS``.
+
+    A rule under legal hold keeps everything. ``anonymize`` strips the actor,
+    IP address and user agent but keeps the event; ``archive`` and
+    ``soft_delete`` keep events in place (the Kafka export is the archive).
+    """
+    from django.conf import settings
+    from django.db import transaction
+
     from apps.governance.models import AuditEvent, RetentionRule
 
-    rules = RetentionRule.objects.filter(is_active=True)
-
+    now = timezone.now()
+    deleted = anonymized = 0
+    rules = RetentionRule.objects.filter(
+        is_active=True, data_category=RetentionRule.DataCategory.AUDIT_EVENTS
+    )
+    ruled_orgs = []
     for rule in rules:
-        cutoff = timezone.now() - timezone.timedelta(days=rule.retention_days + rule.grace_period_days)
-        events = AuditEvent.objects.filter(
-            organization=rule.organization, category=rule.data_category, created_at__lt=cutoff
+        ruled_orgs.append(rule.organization_id)
+        if rule.legal_hold:
+            continue
+        cutoff = now - timezone.timedelta(days=rule.retention_days + rule.grace_period_days)
+        events = AuditEvent.objects.filter(organization_id=rule.organization_id, created_at__lt=cutoff)
+        with transaction.atomic():
+            _allow_audit_purge()
+            if rule.action == RetentionRule.Action.HARD_DELETE:
+                deleted += events.delete()[0]
+            elif rule.action == RetentionRule.Action.ANONYMIZE:
+                anonymized += events.exclude(actor=None, ip_address=None, user_agent="").update(
+                    actor=None, ip_address=None, user_agent=""
+                )
+    default_cutoff = now - timezone.timedelta(days=settings.AUDIT_EVENT_RETENTION_DAYS)
+    with transaction.atomic():
+        _allow_audit_purge()
+        deleted += (
+            AuditEvent.objects.filter(created_at__lt=default_cutoff)
+            .exclude(organization_id__in=ruled_orgs)
+            .delete()[0]
         )
-
-        if rule.action == RetentionRule.Action.HARD_DELETE:
-            events.delete()
-        elif rule.action == RetentionRule.Action.SOFT_DELETE:
-            # Mark as deleted (would need a deleted_at field)
-            pass
-        elif rule.action == RetentionRule.Action.ANONYMIZE:
-            # Anonymize sensitive fields
-            pass
+    return {"deleted": deleted, "anonymized": anonymized}
 
 
 @shared_task
 def cleanup_old_safety_events():
     """Clean up old safety events"""
+    from django.conf import settings
+
     from apps.governance.models import SafetyEvent
 
-    cutoff = timezone.now() - timezone.timedelta(days=2555)  # 7 years
+    cutoff = timezone.now() - timezone.timedelta(days=settings.SAFETY_EVENT_RETENTION_DAYS)
     SafetyEvent.objects.filter(created_at__lt=cutoff).delete()
 
 

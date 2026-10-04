@@ -6,12 +6,14 @@ from apps.integrations.views import (
     ConnectorAccountViewSet,
     ConnectorViewSet,
     IncomingWebhookView,
+    IntegrationViewSet,
     KafkaConsumerViewSet,
     WebhookDeliveryViewSet,
     WebhookViewSet,
 )
 
 router = DefaultRouter()
+router.register(r"integrations", IntegrationViewSet, basename="integration")
 router.register(r"connectors", ConnectorViewSet, basename="connector")
 router.register(r"connector-accounts", ConnectorAccountViewSet, basename="connector-account")
 router.register(r"webhooks", WebhookViewSet, basename="webhook")

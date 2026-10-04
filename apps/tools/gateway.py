@@ -166,10 +166,11 @@ def _record(
 
 
 def _audit(invocation: ToolInvocation) -> None:
+    from apps.governance.audit import record_audit_event
     from apps.governance.models import AuditEvent
 
     denied = invocation.status == ToolInvocation.Status.DENIED
-    AuditEvent.objects.create(
+    record_audit_event(
         organization_id=invocation.organization_id,
         actor=invocation.user,
         category=AuditEvent.Category.SECURITY if denied else AuditEvent.Category.DATA_MODIFICATION,
@@ -177,6 +178,7 @@ def _audit(invocation: ToolInvocation) -> None:
         resource_type="tool",
         resource_id=invocation.tool_name,
         severity=AuditEvent.Severity.MEDIUM if denied else AuditEvent.Severity.LOW,
+        outcome=AuditEvent.Outcome.DENIED if denied else AuditEvent.Outcome.SUCCESS,
         description=f"Tool {invocation.tool_name} {invocation.status} {invocation.deny_code}".strip(),
         metadata={"invocationId": str(invocation.id), "source": invocation.source},
         trace_id=invocation.trace_id,

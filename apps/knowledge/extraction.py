@@ -136,6 +136,15 @@ def extract_source_text(
     if source_type == "url":
         return _fetch_url(str(config.get("url") or ""))
 
+    if source_type == "integration":
+        # Pushed by the knowledge-integration-sync n8n workflow (apps.orchestration.knowledge).
+        pushed = metadata.get("integration") or {}
+        if pushed.get("text"):
+            return _result(str(pushed["text"]), "text/plain")
+        if pushed.get("url"):
+            return _fetch_url(str(pushed["url"]))
+        raise ExtractionError("The integration document has no content.")
+
     if source_type == "file":
         asset_id = config.get("asset_id")
         if not asset_id:

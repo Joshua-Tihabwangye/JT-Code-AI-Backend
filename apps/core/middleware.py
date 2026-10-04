@@ -10,6 +10,7 @@ import sentry_sdk
 from django.http import HttpRequest, HttpResponse
 
 from apps.core.context import request_id_var, trace_id_var
+from apps.core.tracing import current_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,10 @@ class RequestContextMiddleware:
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         request_id = self._identifier(request.headers.get("X-Request-ID"))
-        trace_id = self._identifier(request.headers.get("X-Trace-ID"))
+        # Prefer the caller's trace id, then the active OpenTelemetry trace, so
+        # log lines, Sentry events, outbox events and traces share one id.
+        supplied = request.headers.get("X-Trace-ID")
+        trace_id = self._identifier(supplied if supplied else (current_trace_id() or None))
         request.request_id = request_id  # type: ignore[attr-defined]
         request.trace_id = trace_id  # type: ignore[attr-defined]
         request_token = request_id_var.set(request_id)

@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      observability:
+        patterns: ["opentelemetry-*", "prometheus-client", "sentry-sdk*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directory: /infra/cloudflare
+    schedule:
+      interval: monthly

@@ -1,0 +1,149 @@
+{
+  "name": "jt-code.error-handler.v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "51e35e33-1a6b-5b4c-ba54-b691fc5ed743",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nreturn [{ json: {\n  callbackUrl: `${$env.JT_CODE_API_BASE_URL}/n8n/errors/`,\n  callbackBody: {\n    message: (e.execution && e.execution.error && e.execution.error.message) || 'n8n workflow failure',\n    workflowId: e.workflow && e.workflow.id,\n    workflowName: e.workflow && e.workflow.name,\n    executionId: e.execution && e.execution.id,\n    step: e.execution && e.execution.lastNodeExecuted,\n    mode: e.execution && e.execution.mode,\n    retryOf: e.execution && e.execution.retryOf,\n  },\n} }];\n"
+      },
+      "id": "300de36d-a08a-5978-818f-ca09e885f2ed",
+      "name": "Build relay event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign callbacks to JT-Code: v1=HMAC-SHA256(secret, \"<ts>.<nonce>.\" + body).\nconst crypto = require('crypto');\nconst secret = $env.JT_CODE_RELAY_SECRET;\nif (!secret) throw new Error('JT_CODE_RELAY_SECRET is not configured');\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.callbackBody);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const nonce = crypto.randomBytes(18).toString('base64url');\n  const digest = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex');\n  return { json: {\n    url: item.json.callbackUrl,\n    body,\n    timestamp,\n    nonce,\n    signature: `v1=${digest}`,\n    traceparent: item.json.traceparent || '',\n  } };\n});\n"
+      },
+      "id": "4e6a2866-1b76-5f07-b046-3d35af572eb1",
+      "name": "Sign relay",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-JT-Code-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-JT-Code-Nonce",
+              "value": "={{ $json.nonce }}"
+            },
+            {
+              "name": "X-JT-Code-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "traceparent",
+              "value": "={{ $json.traceparent }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "9271e7ea-7c3a-58c8-90ce-1cc9ee03c6c3",
+      "name": "Relay to JT-Code (Sentry)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Build relay event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build relay event": {
+      "main": [
+        [
+          {
+            "node": "Sign relay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign relay": {
+      "main": [
+        [
+          {
+            "node": "Relay to JT-Code (Sentry)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 120,
+    "timezone": "UTC",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "jtCode": {
+      "key": "error-handler",
+      "version": 1,
+      "kind": "error",
+      "description": "Error workflow for every JT-Code workflow: relays failures to Django, Sentry and retries.",
+      "webhookPath": "",
+      "taskTypes": [],
+      "eventTypes": [],
+      "timeoutSeconds": 120,
+      "maxAttempts": 1,
+      "requiredCredentials": []
+    }
+  }
+}
