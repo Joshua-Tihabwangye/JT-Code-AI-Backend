@@ -1,0 +1,10 @@
+# Copy to backend.hcl (git-ignored) and run: terraform init -backend-config=backend.hcl
+# Any S3-compatible store works (AWS S3, Cloudflare R2, Backblaze B2, MinIO).
+bucket                      = "jt-code-terraform-state"
+key                         = "staging/terraform.tfstate"
+region                      = "auto"
+endpoints                   = { s3 = "https://<account-id>.r2.cloudflarestorage.com" }
+skip_credentials_validation = true
+skip_region_validation      = true
+skip_requesting_account_id  = true
+use_path_style              = true

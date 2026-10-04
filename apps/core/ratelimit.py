@@ -9,6 +9,7 @@ sliding estimate weights the previous window by its remaining overlap.
 from __future__ import annotations
 
 import contextlib
+import logging
 import time
 from dataclasses import dataclass
 
@@ -34,8 +35,28 @@ def _increment(cache: BaseCache, key: str, ttl: int) -> int:
     return int(cache.get(key) or 0)
 
 
+logger = logging.getLogger(__name__)
+
+
 def hit(key: str, *, limit: int, window: int, now: float | None = None) -> Decision:
-    """Count one request against ``key``; deny once the sliding count exceeds ``limit``."""
+    """Count one request against ``key``; deny once the sliding count exceeds ``limit``.
+
+    If the rate-limit store (Redis) is unreachable the request is **allowed**
+    (fail open): availability wins over in-app rate limiting, which is backed up
+    by Cloudflare's edge limits and by quotas/credits enforced in PostgreSQL.
+    Every fail-open is counted (``jt_security_events_total{kind="ratelimit_unavailable"}``).
+    """
+    try:
+        return _hit(key, limit=limit, window=window, now=now)
+    except Exception:  # noqa: BLE001 - any cache/transport error
+        from apps.core.metrics import SECURITY_EVENTS
+
+        SECURITY_EVENTS.labels("ratelimit_unavailable").inc()
+        logger.warning("rate-limit store unavailable; failing open", exc_info=True)
+        return Decision(True, limit, limit, 0.0)
+
+
+def _hit(key: str, *, limit: int, window: int, now: float | None = None) -> Decision:
     cache = caches["rate_limits"]
     moment = time.time() if now is None else now
     bucket = int(moment // window)

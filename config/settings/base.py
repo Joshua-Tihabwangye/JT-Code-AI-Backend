@@ -358,6 +358,7 @@ CELERY_TASK_QUEUES = (
     Queue("jobs.visualization"),
     Queue("analytics.analysis"),
     Queue("analytics.visualization"),
+    Queue("orchestration"),
 )
 CELERY_TASK_ROUTES = {
     "apps.analytics.tasks.execute_analysis_run": {"queue": "analytics.analysis"},
@@ -373,6 +374,7 @@ CELERY_TASK_ROUTES = {
     "apps.agents.tasks.*": {"queue": "jobs.analysis"},
     "apps.tools.tasks.*": {"queue": "jobs.default"},
     "apps.usage.tasks.*": {"queue": "jobs.default"},
+    "apps.orchestration.tasks.*": {"queue": "orchestration"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -773,7 +775,7 @@ OTEL_SERVICE_VERSION = SENTRY_RELEASE
 OTEL_ENVIRONMENT = env("OTEL_ENVIRONMENT", SENTRY_ENVIRONMENT or "development")
 OTEL_TRACES_SAMPLE_RATIO = env_float("OTEL_TRACES_SAMPLE_RATIO", 0.1)
 
-# Edge security (Phase 15). See apps/core/edge.py and infra/cloudflare.
+# Edge security (Phase 15). See apps/core/edge.py and infra/terraform/modules/cloudflare_edge.
 TRUSTED_PROXY_HOPS = int(env("TRUSTED_PROXY_HOPS", "0"))
 CLOUDFLARE_ORIGIN_SECRET = env("CLOUDFLARE_ORIGIN_SECRET")
 CLOUDFLARE_ENFORCE_ORIGIN = env_bool("CLOUDFLARE_ENFORCE_ORIGIN", False)

@@ -146,7 +146,7 @@ def test_ci_security_scans_are_gating():
     assert "python manage.py migrate --noinput --settings=config.settings.ci" in ci
     assert "python manage.py check --deploy --settings=config.settings.production" in ci
     assert "- run: mypy" in ci
-    assert "python-version: '3.14.4'" in ci
+    assert 'PYTHON_VERSION: "3.14.4"' in ci and "python-version: ${{ env.PYTHON_VERSION }}" in ci
     assert "bandit -q -r apps config manage.py" in ci
     assert "pip-audit --strict" in ci
     assert "|| true" not in ci

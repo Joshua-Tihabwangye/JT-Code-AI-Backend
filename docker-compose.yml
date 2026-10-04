@@ -1,0 +1,178 @@
+# Local full-stack integration (Phase 17). The database is Supabase - there is
+# deliberately no local PostgreSQL: DATABASE_URL, TEST_DATABASE_URL and the
+# Supabase keys come from .env. Everything else runs here:
+#
+#   docker compose up --build                         # API, workers, beat, consumer, Redis, Kafka, n8n, Streamlit
+#   docker compose --profile observability up        # + Prometheus, Grafana, OTel collector, Tempo
+#   docker compose run --rm migrate                   # apply migrations to the Supabase database in .env
+#
+# Containers use config.settings.development and the same image as production.
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  image: jt-code-api:local
+  env_file: .env
+  environment: &app-env
+    DJANGO_SETTINGS_MODULE: config.settings.development
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+    N8N_BASE_URL: http://n8n:5678
+    N8N_WEBHOOK_BASE_URL: http://n8n:5678
+    N8N_CALLBACK_BASE_URL: http://api:8000/api/v1
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  depends_on:
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    command: ["api", "--reload"]
+    ports: ["127.0.0.1:8000:8000"]
+    read_only: false  # --reload watches the bind-mounted source
+    volumes: [./apps:/app/apps:ro, ./config:/app/config:ro]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    environment:
+      <<: *app-env
+      CELERY_QUEUES: jobs.default,jobs.analysis,jobs.ingestion,analytics.analysis,analytics.visualization,orchestration
+      CELERY_CONCURRENCY: "4"
+
+  worker-documents:
+    <<: *app
+    build:
+      context: .
+      target: office
+    image: jt-code-api-office:local
+    command: ["worker"]
+    environment:
+      <<: *app-env
+      CELERY_QUEUES: jobs.visualization
+      CELERY_CONCURRENCY: "2"
+      HOME: /tmp
+
+  beat:
+    <<: *app
+    command: ["beat"]
+
+  consumer:
+    <<: *app
+    command: ["consumer", "integrations.webhook.received", "--consumer-name", "integration-webhooks"]
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    restart: "no"
+    profiles: [tools]
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    volumes: [redis-data:/data]
+
+  kafka:
+    # Kafka-compatible single binary for local work (production uses SASL_SSL Kafka).
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda start --mode dev-container --smp 1 --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092
+      - --advertise-kafka-addr internal://kafka:9092
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes: [kafka-data:/var/lib/redpanda/data]
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.88.0
+    environment:
+      N8N_HOST: localhost
+      WEBHOOK_URL: http://n8n:5678/
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      JT_CODE_API_BASE_URL: http://api:8000/api/v1
+      JT_CODE_DISPATCH_SECRET: ${N8N_DISPATCH_SECRET:-}
+      JT_CODE_CALLBACK_SECRET: ${N8N_WEBHOOK_SECRET:-}
+      JT_CODE_RELAY_SECRET: ${N8N_SENTRY_RELAY_SECRET:-}
+    ports: ["127.0.0.1:5678:5678"]
+    volumes: [n8n-data:/home/node/.n8n]
+
+  streamlit:
+    build: ./streamlit_app
+    image: jt-code-streamlit:local
+    environment:
+      JT_CODE_API_BASE_URL: http://api:8000/api/v1
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+    ports: ["127.0.0.1:8501:8501"]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on: [api]
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    profiles: [observability]
+    command: ["--config.file=/etc/prometheus/local.yml"]
+    volumes:
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./infra/prometheus/local.yml:/etc/prometheus/local.yml:ro
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    profiles: [observability]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.112.0
+    profiles: [observability]
+    command: ["--config=/etc/otel/collector.yaml"]
+    environment:
+      TRACES_BACKEND_ENDPOINT: http://tempo:4318
+    volumes: [./infra/otel/collector.yaml:/etc/otel/collector.yaml:ro]
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    profiles: [observability]
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes: [./infra/otel/tempo-local.yaml:/etc/tempo.yaml:ro]
+
+volumes:
+  redis-data: {}
+  kafka-data: {}
+  n8n-data: {}

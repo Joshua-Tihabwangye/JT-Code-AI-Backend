@@ -1,0 +1,44 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jt-code-production
+resources:
+  - ../../base
+components:
+  - ../../components/keda
+  - ../../components/monitoring
+  - ../../components/ingress-hosts
+# Production deploys promote the exact digests verified on staging.
+images:
+  - name: jt-code-api
+    newName: ghcr.io/joshua-tihabwangye/jt-code-api
+    newTag: production
+  - name: jt-code-api-office
+    newName: ghcr.io/joshua-tihabwangye/jt-code-api-office
+    newTag: production
+  - name: jt-code-streamlit
+    newName: ghcr.io/joshua-tihabwangye/jt-code-streamlit
+    newTag: production
+configMapGenerator:
+  - name: jt-code-config
+    envs: [config.env]
+    options:
+      labels: {app.kubernetes.io/component: config}
+  - name: jt-code-streamlit-config
+    envs: [streamlit.env]
+    options:
+      labels: {app.kubernetes.io/component: config}
+patches:
+  - target: {kind: HorizontalPodAutoscaler, name: jt-code-api}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 3}
+      - {op: replace, path: /spec/maxReplicas, value: 20}
+  - target: {kind: Deployment, name: jt-code-api}
+    patch: |-
+      - {op: replace, path: /spec/replicas, value: 3}
+  - target: {kind: PodDisruptionBudget, name: jt-code-api}
+    patch: |-
+      - {op: replace, path: /spec/minAvailable, value: 2}
+  - target: {kind: ScaledObject, name: jt-code-worker-ai}
+    patch: |-
+      - {op: replace, path: /spec/minReplicaCount, value: 2}
+      - {op: replace, path: /spec/maxReplicaCount, value: 20}

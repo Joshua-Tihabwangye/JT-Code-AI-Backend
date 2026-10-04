@@ -7,7 +7,7 @@
 | Dashboards and alerts | `infra/grafana`, `infra/prometheus/alerts.yml` | Grafana provisioning |
 | Tracing | OpenTelemetry (`apps/core/tracing.py`), `infra/otel/collector.yaml` | `OTEL_*` |
 | Audit | `apps/governance/audit.py`, append-only table, Kafka export | `AUDIT_ROUTE_RULES`, `AUDIT_EVENT_RETENTION_DAYS` |
-| Edge and WAF | `infra/cloudflare`, `apps/core/edge.py` | `CLOUDFLARE_*`, `TRUSTED_PROXY_HOPS` |
+| Edge and WAF | `infra/terraform/modules/cloudflare_edge`, `apps/core/edge.py` | `CLOUDFLARE_*`, `TRUSTED_PROXY_HOPS` |
 | Webhook replay protection | `apps/core/signing.py`, `apps/core/webhooks.py` | `WEBHOOK_REPLAY_TOLERANCE_SECONDS` |
 | Security gates | `manage.py security_gate`, CI (bandit, pip-audit, detect-secrets, OWASP ZAP) | `.zap/rules.tsv` |
 
@@ -145,7 +145,7 @@ Retention (`cleanup_old_audit_events`) applies tenant `audit_events` rules:
   * Rate limits and audit rows use this resolved address.
 * **Origin lock:** with `CLOUDFLARE_ENFORCE_ORIGIN=true`, requests without the
   `X-JT-Origin-Auth` header get 403. Health probes are exempt.
-* **WAF:** `infra/cloudflare` provides:
+* **WAF:** `infra/terraform/modules/cloudflare_edge` provides:
   * the Managed and OWASP rulesets;
   * path, method and body-size rules;
   * an admin allowlist;

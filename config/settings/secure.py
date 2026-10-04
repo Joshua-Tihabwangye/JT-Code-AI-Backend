@@ -2,6 +2,9 @@
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
+# Kubelet probes and the Prometheus scrape reach pods directly over HTTP (TLS
+# terminates at the ingress); every other path is redirected to HTTPS.
+SECURE_REDIRECT_EXEMPT = [r"^api/v1/health/", r"^metrics$"]
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SAMESITE = "Lax"

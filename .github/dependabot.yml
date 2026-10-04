@@ -12,7 +12,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: docker
+    directories: ["/", "/streamlit_app"]
+    schedule:
+      interval: weekly
   - package-ecosystem: terraform
-    directory: /infra/cloudflare
+    directories: ["/infra/terraform/envs/staging", "/infra/terraform/envs/production"]
     schedule:
       interval: monthly

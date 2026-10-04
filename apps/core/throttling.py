@@ -8,6 +8,7 @@ throttle is also the default for views without a scoped throttle.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from django.conf import settings
@@ -32,15 +33,17 @@ def _client_ip(request: Request) -> str:
 
 
 def _tenant_multiplier(organization: Any) -> int:
-    cache = caches["rate_limits"]
-    key = f"rl-plan:{organization.id}"
-    cached = cache.get(key)
-    if cached is not None:
-        return int(cached)
     from apps.usage.services import plan_limit
 
+    cache = caches["rate_limits"]
+    key = f"rl-plan:{organization.id}"
+    with contextlib.suppress(Exception):  # an unavailable cache only costs a plan lookup
+        cached = cache.get(key)
+        if cached is not None:
+            return int(cached)
     multiplier = plan_limit(organization, "rate_multiplier", settings.THROTTLE_TENANT_MULTIPLIER)
-    cache.set(key, multiplier, timeout=60)
+    with contextlib.suppress(Exception):
+        cache.set(key, multiplier, timeout=60)
     return multiplier
 
 

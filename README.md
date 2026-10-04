@@ -276,27 +276,23 @@ make check
 
 ## Production Deployment
 
-### Settings
-Use `config.settings.production` which enables:
-- Secure cookies (HTTPS only)
-- HSTS headers
-- Content security headers
-- SSL redirect
+Deployments are containerized and run on Kubernetes. The full runbook (images,
+Kustomize overlays, Terraform, the CI/CD pipeline, and building staging from
+clean infrastructure) is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-### Database
-Set `DATABASE_URL` to Supabase PostgreSQL direct/session-pooler URI with `sslmode=require`.
-
-### Static Files
-```bash
-python manage.py collectstatic --noinput
-```
-Files served via WhiteNoise in production.
-
-### Application server
-```bash
-python manage.py collectstatic --noinput
-gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 2
-```
+- **Image:** `Dockerfile` (target `runtime`, plus `office` for document
+  conversion). It runs as non-root; the role (`api`, `worker`, `beat`,
+  `consumer`, `migrate`) is chosen by `docker/entrypoint.sh`.
+- **Settings:** `config.settings.production` / `staging`. Validation is fail-closed:
+  the app refuses to start with missing or placeholder secrets.
+- **Database:** Supabase PostgreSQL through the transaction pooler, with
+  `sslmode=require`, `DATABASE_POOLER_MODE=transaction` and `DATABASE_CONN_MAX_AGE=0`.
+- **Pipeline:**
+  - Pushes to `main` build, sign and scan the images, then deploy their
+    digests to staging.
+  - Production is a manually approved promotion of the same digests.
+- **Local full stack:** `docker compose up --build`. The database is still
+  Supabase, taken from `.env`.
 
 ## Architecture
 

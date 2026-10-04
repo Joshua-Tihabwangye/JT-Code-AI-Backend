@@ -1,6 +1,5 @@
-# Cloudflare edge and WAF policy for the JT-Code API (Phase 15).
-#
-#   terraform init && terraform plan -var-file=production.tfvars
+# Cloudflare edge and WAF policy for one JT-Code environment (Phases 15/17).
+# Used by infra/terraform/envs/<env>; the provider is configured by the caller.
 #
 # What it enforces:
 #   * TLS: Full (strict), TLS 1.2+, HTTPS only, HSTS.
@@ -25,16 +24,28 @@ terraform {
   }
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
+locals {
+  # Zone-level rules cover the API host of every environment in the zone.
+  api_hosts = sort(nonsensitive(keys(var.origin_auth_secrets)))
+  on_api    = "(http.host in {${join(" ", [for host in local.api_hosts : "\"${host}\""])}})"
+  zone      = var.manage_zone_policy ? 1 : 0
 }
 
-locals {
-  api_host = "${var.api_subdomain}.${var.zone_name}"
-  on_api   = "(http.host eq \"${local.api_host}\")"
+# DNS: the API, Streamlit and the n8n webhook processors are proxied through
+# Cloudflare to the cluster's ingress load balancer.
+resource "cloudflare_record" "hosts" {
+  for_each = toset(var.proxied_subdomains)
+  zone_id  = var.zone_id
+  name     = each.value
+  type     = "A"
+  content  = var.origin_ip
+  proxied  = true
+  ttl      = 1
+  comment  = "jt-code ${var.environment} (managed by Terraform)"
 }
 
 resource "cloudflare_zone_settings_override" "jt_code" {
+  count   = local.zone
   zone_id = var.zone_id
   settings {
     ssl                      = "strict"
@@ -55,6 +66,7 @@ resource "cloudflare_zone_settings_override" "jt_code" {
 }
 
 resource "cloudflare_ruleset" "managed_waf" {
+  count       = local.zone
   zone_id     = var.zone_id
   name        = "jt-code managed WAF"
   description = "Cloudflare Managed Ruleset and OWASP Core Ruleset"
@@ -67,7 +79,7 @@ resource "cloudflare_ruleset" "managed_waf" {
     expression  = local.on_api
     enabled     = true
     action_parameters {
-      id = "efb7b8c949ac4650a09736fc376e9aee"  # pragma: allowlist secret
+      id = "efb7b8c949ac4650a09736fc376e9aee" # pragma: allowlist secret
     }
   }
 
@@ -77,7 +89,7 @@ resource "cloudflare_ruleset" "managed_waf" {
     expression  = local.on_api
     enabled     = true
     action_parameters {
-      id = "4814384a9e5d4991b9815dcfc25d2f1f"  # pragma: allowlist secret
+      id = "4814384a9e5d4991b9815dcfc25d2f1f" # pragma: allowlist secret
       overrides {
         categories {
           category = "paranoia-level-3"
@@ -88,7 +100,7 @@ resource "cloudflare_ruleset" "managed_waf" {
           enabled  = false
         }
         rules {
-          id              = "6179ae15870a4bb7b2d480d4843b323c"  # pragma: allowlist secret
+          id              = "6179ae15870a4bb7b2d480d4843b323c" # pragma: allowlist secret
           action          = "block"
           score_threshold = 40
         }
@@ -98,6 +110,7 @@ resource "cloudflare_ruleset" "managed_waf" {
 }
 
 resource "cloudflare_ruleset" "custom_waf" {
+  count       = local.zone
   zone_id     = var.zone_id
   name        = "jt-code custom WAF"
   description = "Path, method and size policy for the API host"
@@ -155,6 +168,7 @@ resource "cloudflare_ruleset" "custom_waf" {
 }
 
 resource "cloudflare_ruleset" "rate_limits" {
+  count       = local.zone
   zone_id     = var.zone_id
   name        = "jt-code edge rate limits"
   description = "Coarse per-IP limits in front of Django's per-user and per-tenant limits"
@@ -202,28 +216,33 @@ resource "cloudflare_ruleset" "rate_limits" {
 }
 
 resource "cloudflare_ruleset" "origin_auth" {
+  count       = local.zone
   zone_id     = var.zone_id
   name        = "jt-code origin authentication"
   description = "Prove to Django that the request passed through Cloudflare"
   kind        = "zone"
   phase       = "http_request_late_transform"
 
-  rules {
-    action      = "rewrite"
-    description = "Inject X-JT-Origin-Auth (CLOUDFLARE_ORIGIN_SECRET)"
-    expression  = local.on_api
-    enabled     = true
-    action_parameters {
-      headers {
-        name      = "X-JT-Origin-Auth"
-        operation = "set"
-        value     = var.origin_auth_secret
+  dynamic "rules" {
+    for_each = nonsensitive(toset(keys(var.origin_auth_secrets)))
+    content {
+      action      = "rewrite"
+      description = "Inject X-JT-Origin-Auth for ${rules.key} (its CLOUDFLARE_ORIGIN_SECRET)"
+      expression  = "(http.host eq \"${rules.key}\")"
+      enabled     = true
+      action_parameters {
+        headers {
+          name      = "X-JT-Origin-Auth"
+          operation = "set"
+          value     = var.origin_auth_secrets[rules.key]
+        }
       }
     }
   }
 }
 
 resource "cloudflare_ruleset" "cache" {
+  count       = local.zone
   zone_id     = var.zone_id
   name        = "jt-code cache policy"
   description = "Never cache API responses at the edge"

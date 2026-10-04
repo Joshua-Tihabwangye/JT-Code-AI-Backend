@@ -65,6 +65,8 @@ KNOWN_EVENT_TYPES: tuple[str, ...] = (
     "knowledge.source.deleted",
     "knowledge.source.sync",
     "knowledge.integration.sync_requested",
+    "operations.drill.ping",
+    "operations.drill.poison",
     *(
         f"orchestration.workflow.{name}"
         for name in ("dispatched", "progress", "step", "retry_scheduled", "completed", "failed", "error")

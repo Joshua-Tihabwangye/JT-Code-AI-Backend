@@ -1,4 +1,4 @@
-# Cloudflare edge policy
+# Cloudflare edge policy (module)
 
 Terraform for the API hostname's TLS settings, WAF (Cloudflare Managed and OWASP
 Core rulesets plus custom path, method and size rules), edge rate limits, the
@@ -19,12 +19,8 @@ firewall limited to Cloudflare's IP ranges as defence in depth.
 
 ## Apply
 
-```bash
-cd infra/cloudflare
-terraform init
-terraform plan -var-file=production.tfvars   # never commit *.tfvars
-terraform apply -var-file=production.tfvars
-```
+This module is applied by the environment roots in `infra/terraform/envs/`
+(see [docs/DEPLOYMENT.md](../../../../docs/DEPLOYMENT.md)).
 
 `bot_management_enabled` needs Cloudflare Bot Management. The managed ruleset
 IDs are Cloudflare's published constants for the Managed and OWASP rulesets.

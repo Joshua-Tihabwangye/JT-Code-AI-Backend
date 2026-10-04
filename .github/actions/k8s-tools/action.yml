@@ -1,0 +1,29 @@
+name: Kubernetes tools
+description: Install kubectl and kustomize and write the environment's kubeconfig.
+inputs:
+  kubeconfig:
+    description: kubeconfig contents (environment secret KUBECONFIG)
+    required: true
+  kustomize-version:
+    description: kustomize release
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: azure/setup-kubectl@v4
+    - name: kustomize
+      shell: bash
+      run: |
+        curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+          | sudo tar xz -C /usr/local/bin
+      env:
+        KUSTOMIZE_VERSION: ${{ inputs.kustomize-version }}
+    - name: kubeconfig
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.kube"
+        printf '%s' "$KUBECONFIG_CONTENT" > "$HOME/.kube/config"
+        chmod 600 "$HOME/.kube/config"
+        kubectl version --client
+      env:
+        KUBECONFIG_CONTENT: ${{ inputs.kubeconfig }}

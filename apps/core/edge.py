@@ -14,7 +14,7 @@ by rate limits and audit records is resolved in this order:
 
 **Origin lock.** With ``CLOUDFLARE_ENFORCE_ORIGIN`` every request except health
 probes must carry the origin-auth header, so the WAF cannot be bypassed by
-calling the origin directly (see ``infra/cloudflare``).
+calling the origin directly (see ``infra/terraform/modules/cloudflare_edge``).
 
 **Security headers.** A restrictive CSP for API responses (JSON never needs to
 load anything), a separate policy for the admin and API docs, Permissions-Policy,

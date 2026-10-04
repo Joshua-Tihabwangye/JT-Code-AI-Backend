@@ -1,7 +1,15 @@
-variable "cloudflare_api_token" {
-  description = "Token with Zone:Edit, Zone WAF:Edit and Zone Settings:Edit on the zone."
+variable "environment" {
+  type = string
+}
+
+variable "origin_ip" {
+  description = "Public IP of the cluster ingress load balancer."
   type        = string
-  sensitive   = true
+}
+
+variable "proxied_subdomains" {
+  description = "Subdomains (relative to zone_name) proxied to the ingress, e.g. api.staging."
+  type        = list(string)
 }
 
 variable "zone_id" {
@@ -13,18 +21,20 @@ variable "zone_name" {
   type        = string
 }
 
-variable "api_subdomain" {
-  type    = string
-  default = "api"
+variable "manage_zone_policy" {
+  description = "Apply the zone-wide TLS/WAF/rate-limit/cache/origin-auth rulesets. Exactly one root per zone sets this."
+  type        = bool
+  default     = false
 }
 
-variable "origin_auth_secret" {
-  description = "Same value as CLOUDFLARE_ORIGIN_SECRET in the API environment (32+ random characters)."
-  type        = string
+variable "origin_auth_secrets" {
+  description = "API host => its CLOUDFLARE_ORIGIN_SECRET (32+ chars). Lists every environment's API host in the zone."
+  type        = map(string)
   sensitive   = true
+  default     = {}
   validation {
-    condition     = length(var.origin_auth_secret) >= 32
-    error_message = "origin_auth_secret must be at least 32 characters."
+    condition     = alltrue([for secret in values(var.origin_auth_secrets) : length(secret) >= 32])
+    error_message = "Every origin auth secret must be at least 32 characters."
   }
 }
 

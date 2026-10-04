@@ -1,0 +1,44 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jt-code-staging
+resources:
+  - ../../base
+components:
+  - ../../components/keda
+  - ../../components/monitoring
+  - ../../components/ingress-hosts
+# CI pins each image to the digest it just built: `kustomize edit set image`.
+images:
+  - name: jt-code-api
+    newName: ghcr.io/joshua-tihabwangye/jt-code-api
+    newTag: staging
+  - name: jt-code-api-office
+    newName: ghcr.io/joshua-tihabwangye/jt-code-api-office
+    newTag: staging
+  - name: jt-code-streamlit
+    newName: ghcr.io/joshua-tihabwangye/jt-code-streamlit
+    newTag: staging
+configMapGenerator:
+  - name: jt-code-config
+    envs: [config.env]
+    options:
+      labels: {app.kubernetes.io/component: config}
+  - name: jt-code-streamlit-config
+    envs: [streamlit.env]
+    options:
+      labels: {app.kubernetes.io/component: config}
+patches:
+  # Staging is small: one API replica floor, modest autoscaling ceilings.
+  - target: {kind: HorizontalPodAutoscaler, name: jt-code-api}
+    patch: |-
+      - {op: replace, path: /spec/minReplicas, value: 1}
+      - {op: replace, path: /spec/maxReplicas, value: 3}
+  - target: {kind: Deployment, name: jt-code-api}
+    patch: |-
+      - {op: replace, path: /spec/replicas, value: 1}
+  - target: {kind: PodDisruptionBudget, name: jt-code-api}
+    patch: |-
+      - {op: replace, path: /spec/minAvailable, value: 0}
+  - target: {kind: ScaledObject}
+    patch: |-
+      - {op: replace, path: /spec/maxReplicaCount, value: 3}
