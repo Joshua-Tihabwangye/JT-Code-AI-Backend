@@ -501,15 +501,32 @@ def _authorized_collection_ids(request: Request, requested: list) -> tuple[objec
 
 
 def _search(request: Request, *, query: str, requested: list, top_k: int | None, min_similarity=None):
-    from apps.knowledge.retrieval import embed_query_or_none, hybrid_retrieve
+    import uuid
+
+    from apps.usage.models import Feature
+    from apps.usage.services import metered
 
     organization, allowed_ids = _authorized_collection_ids(request, requested)
     if requested and len(allowed_ids) != len(set(requested)):
         raise NotFound("One or more collections were not found in the selected organization.")
     if not allowed_ids:
         return organization, allowed_ids, None
+    with metered(
+        organization=organization,
+        user=request.user,
+        feature=Feature.SEARCH_QUERIES,
+        source_type="knowledge_search",
+        source_id=uuid.uuid4(),
+    ):
+        retrieval = _run_search(request, query, allowed_ids, organization, top_k, min_similarity)
+    return organization, allowed_ids, retrieval
+
+
+def _run_search(request, query, allowed_ids, organization, top_k, min_similarity):
+    from apps.knowledge.retrieval import embed_query_or_none, hybrid_retrieve
+
     query_vector, _reason = embed_query_or_none(query)
-    retrieval = hybrid_retrieve(
+    return hybrid_retrieve(
         query,
         query_vector,
         collection_ids=allowed_ids,
@@ -519,7 +536,6 @@ def _search(request: Request, *, query: str, requested: list, top_k: int | None,
         min_similarity=min_similarity,
         trace_id=getattr(request, "trace_id", "") or "",
     )
-    return organization, allowed_ids, retrieval
 
 
 def _search_result(item: dict) -> dict:

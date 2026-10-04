@@ -51,6 +51,7 @@ def _strict_env() -> dict[str, str]:
         "TOOL_CREDENTIALS_ENCRYPTION_KEYS": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "GEMINI_API_KEY": "gemini-production-key-9mY7Kq2V",
         "RAG_EMBEDDING_PROVIDER": "gemini",
+        "FRONTEND_URL": "https://app.example.com",
         "DJANGO_DEBUG": "false",
     }
 

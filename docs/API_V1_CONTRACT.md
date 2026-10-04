@@ -85,6 +85,26 @@ table is in [AGENTIC_RAG_DESIGN.md](AGENTIC_RAG_DESIGN.md#api-apiv1knowledge). H
   `uploadParams` to send to `uploadUrl`; then `POST /api/v1/files/complete/` with
   `uploadIntentId`, `uploadToken`, `fileId` and `filePath`.
 
+## Usage, quotas and limits
+
+See [USAGE_METERING.md](USAGE_METERING.md). Billable endpoints reserve credits before work and can
+refuse with `402 insufficient_credits`, `402 spending_limit_reached`, `429 quota_exceeded` or
+`429 concurrency_limit`; rate limits return `429` with `Retry-After`.
+
+- `GET /api/v1/usage/` — current-period `totalCredits`, `byType`, `byFeature`, `quotas`, `spending`,
+  `reservedCredits` and `concurrency` for the selected organization.
+- `GET /api/v1/usage/records/?feature=&period=YYYY-MM` — immutable usage records.
+- Staff only: `GET /api/v1/internal/usage/summary/`, `/internal/usage/organizations/`,
+  `/internal/usage/reconciliations/`, `/internal/usage/reservations/`.
+
+## Billing (Stripe)
+
+See [BILLING_AND_STRIPE.md](BILLING_AND_STRIPE.md#api-frontend-contract). Plans, Checkout
+(`POST /api/v1/plans/{slug}/subscribe/`), `GET /api/v1/subscriptions/` with
+`POST /subscriptions/cancel/` and `/reactivate/`, `GET, PATCH /api/v1/wallets/me/`,
+`POST /api/v1/wallets/me/topup/`, payment methods via SetupIntent, the Billing Portal, invoices and
+`POST /api/v1/webhooks/stripe/` (signed, idempotent per Stripe event id).
+
 ## Inbound webhooks
 
 `POST /api/v1/inbound-webhooks/{webhookId}/` (public, signature-authenticated). Send

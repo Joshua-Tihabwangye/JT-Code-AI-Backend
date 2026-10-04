@@ -132,6 +132,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        from apps.usage import services as metering
+        from apps.usage.models import Feature
+
+        reservation = metering.reserve(
+            organization=document.organization,
+            user=request.user,
+            feature=Feature.DOCUMENT_RENDERS,
+            source_type="document_render",
+            source_id=uuid.uuid4(),
+        )
         document.status = Document.Status.RENDERING
         document.error_message = ""
         document.save(update_fields=["status", "error_message", "updated_at"])
@@ -146,6 +156,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 content = render_docx(document)
                 pages = None
         except Exception as exc:
+            metering.release(reservation.id, reason="render failed")
             document.status = Document.Status.FAILED
             document.error_message = str(exc)[:500]
             document.save(update_fields=["status", "error_message", "updated_at"])
@@ -166,6 +177,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         try:
             download_url, rendered_asset = self._save_render(document, content, fmt)
         except Exception as exc:
+            metering.release(reservation.id, reason="render storage failed")
             document.status = Document.Status.FAILED
             document.error_message = str(exc)[:500]
             document.save(update_fields=["status", "error_message", "updated_at"])
@@ -173,6 +185,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {"detail": "Rendered asset storage failed."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
+        metering.settle(reservation.id)
         soft_delete_asset(document.rendered_asset)
         document.status = Document.Status.READY
         document.download_url = download_url if rendered_asset is None else ""

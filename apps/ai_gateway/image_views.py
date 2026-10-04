@@ -18,7 +18,6 @@ from rest_framework.views import APIView
 from apps.ai_gateway.models import GeneratedImage, Model, Provider
 from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
 from apps.assets.services import register_generated_asset
-from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ImageThrottle
 from apps.events.outbox import add_outbox_event
 from apps.governance.models import SafetyEvent
@@ -27,6 +26,8 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
+from apps.usage.models import Feature
+from apps.usage.services import metered
 
 IMAGE_RENDER_ROOT = Path(settings.BASE_DIR) / "generated_images"
 
@@ -108,14 +109,6 @@ def _resolve_image_model(request: Request) -> Model | None:
         .order_by("quality_score")
         .first()
     )
-
-
-def _check_quota(organization, n: int) -> tuple[bool, str | None]:
-    wallet = CreditService.get_or_create_wallet(organization)
-    estimated = 100 * n
-    if wallet.balance < estimated:
-        return False, "Insufficient credits for image generation"
-    return True, None
 
 
 def _generate_placeholder(prompt: str, size: tuple[int, int], seed: str) -> bytes:
@@ -210,35 +203,35 @@ class ImageGenerationView(APIView):
         except TypeError, ValueError:
             n = DEFAULT_N
 
-        ok, error = _check_quota(organization, n)
-        if not ok:
-            return Response({"detail": error}, status=status.HTTP_402_PAYMENT_REQUIRED)
-
         size = _size_tuple(str(request.data.get("size", "1024x1024")))
         model = _resolve_image_model(request)
-
-        generated: list[dict] = []
-        for _ in range(n):
-            image_id = uuid.uuid4()
-            if settings.AI_PROVIDER == "echo" and settings.DEBUG or model:
-                content = _generate_placeholder(prompt, size, str(image_id))
-            else:
-                return Response(
-                    {"detail": "No image model is configured. Set up an AI image provider first."},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            url, image = _save_image(content, image_id, organization=organization, owner=request.user)
-            generated.append(
-                {"url": url, "id": str(image_id), "asset_id": str(image.asset_id) if image.asset_id else None}
+        if not (settings.AI_PROVIDER == "echo" and settings.DEBUG or model):
+            return Response(
+                {"detail": "No image model is configured. Set up an AI image provider first."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        CreditService.reserve_credits(
-            user=request.user,
-            amount=100 * n,
-            request_id=request_id,
-            reason="Image generation",
+        generated: list[dict] = []
+        with metered(
             organization=organization,
-        )
+            user=request.user,
+            feature=Feature.IMAGE_GENERATIONS,
+            source_type="image_generation",
+            source_id=request_id,
+            quantity=n,
+        ) as usage:
+            for _ in range(n):
+                image_id = uuid.uuid4()
+                content = _generate_placeholder(prompt, size, str(image_id))
+                url, image = _save_image(content, image_id, organization=organization, owner=request.user)
+                generated.append(
+                    {
+                        "url": url,
+                        "id": str(image_id),
+                        "asset_id": str(image.asset_id) if image.asset_id else None,
+                    }
+                )
+            usage.quantity = len(generated)
         add_outbox_event(
             "images.generated",
             str(request_id),
@@ -273,10 +266,6 @@ class ImageEditView(APIView):
             _log_safety_event(request.user, organization, prompt, reason, request_id)
             return _safety_violation()
 
-        ok, error = _check_quota(organization, 1)
-        if not ok:
-            return Response({"detail": error}, status=status.HTTP_402_PAYMENT_REQUIRED)
-
         size = _size_tuple(str(request.data.get("size", "1024x1024")))
         model = _resolve_image_model(request)
         if settings.AI_PROVIDER != "echo" and not model:
@@ -286,16 +275,15 @@ class ImageEditView(APIView):
             )
 
         image_id = uuid.uuid4()
-        content = _generate_placeholder(f"{prompt} (edited)", size, str(image_id))
-        url, image = _save_image(content, image_id, organization=organization, owner=request.user)
-
-        CreditService.reserve_credits(
-            user=request.user,
-            amount=100,
-            request_id=request_id,
-            reason="Image edit",
+        with metered(
             organization=organization,
-        )
+            user=request.user,
+            feature=Feature.IMAGE_GENERATIONS,
+            source_type="image_generation",
+            source_id=request_id,
+        ):
+            content = _generate_placeholder(f"{prompt} (edited)", size, str(image_id))
+            url, image = _save_image(content, image_id, organization=organization, owner=request.user)
         add_outbox_event(
             "images.edited",
             str(request_id),
@@ -335,10 +323,6 @@ class ImageUnderstandingView(APIView):
             _log_safety_event(request.user, organization, prompt, reason, request_id)
             return _safety_violation()
 
-        ok, error = _check_quota(organization, 1)
-        if not ok:
-            return Response({"detail": error}, status=status.HTTP_402_PAYMENT_REQUIRED)
-
         model = _resolve_image_model(request)
         if settings.AI_PROVIDER != "echo" and not model:
             return Response(
@@ -346,21 +330,19 @@ class ImageUnderstandingView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        echo_mode = settings.AI_PROVIDER == "echo" and settings.DEBUG
-        if echo_mode:
-            description = (
-                f"{prompt} — Image analysis: received {file.name} ({file.size} bytes, {file.content_type})."
-            )
-        else:
-            description = f"Analyzed {file.name} ({file.size} bytes)."
-
-        CreditService.reserve_credits(
-            user=request.user,
-            amount=50,
-            request_id=request_id,
-            reason="Image understanding",
+        with metered(
             organization=organization,
-        )
+            user=request.user,
+            feature=Feature.IMAGE_GENERATIONS,
+            source_type="image_generation",
+            source_id=request_id,
+        ):
+            echo_mode = settings.AI_PROVIDER == "echo" and settings.DEBUG
+            if echo_mode:
+                received = f"{file.name} ({file.size} bytes, {file.content_type})"
+                description = f"{prompt} — Image analysis: received {received}."
+            else:
+                description = f"Analyzed {file.name} ({file.size} bytes)."
         add_outbox_event(
             "images.understood",
             str(request_id),

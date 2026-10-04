@@ -141,6 +141,7 @@ def test_conversion_requires_input(authenticated_client, user, org, credit_balan
 
 
 @pytest.mark.django_db
+@pytest.mark.unfunded
 def test_conversion_insufficient_credits(authenticated_client, user, org):
     response = authenticated_client.post(
         "/api/v1/conversions/",
@@ -275,7 +276,9 @@ def test_research_job_created(authenticated_client, user, org, credit_balance):
     assert response.status_code == 202, response.content
     body = response.json()
     assert body["status"] == "queued"
-    assert body["estimated_credits"] == "75"
+    from apps.usage.pricing import reservation_credits
+
+    assert body["estimated_credits"] == str(reservation_credits("search_queries"))
     assert "job_id" in body
     from apps.jobs.models import Job
 
@@ -294,7 +297,9 @@ def test_research_job_deep_cost(authenticated_client, user, org, credit_balance)
         },
     )
     assert response.status_code == 202, response.content
-    assert response.json()["estimated_credits"] == "150"
+    from apps.usage.pricing import reservation_credits
+
+    assert response.json()["estimated_credits"] == str(reservation_credits("search_queries") * 2)
 
 
 @pytest.mark.django_db
@@ -316,6 +321,7 @@ def test_research_job_rejects_bad_depth(authenticated_client, user, org, credit_
 
 
 @pytest.mark.django_db
+@pytest.mark.unfunded
 def test_research_job_insufficient_credits(authenticated_client, user, org):
     response = authenticated_client.post(
         "/api/v1/research/jobs/",
@@ -357,12 +363,12 @@ def test_repeated_research_jobs_get_unique_idempotency_keys(authenticated_client
 
 
 @pytest.mark.django_db
-def test_chat_throttle_blocks_burst(authenticated_client, user, org, monkeypatch):
+def test_chat_throttle_blocks_burst(authenticated_client, user, org, settings):
     from apps.conversations.models import Conversation
-    from apps.core.throttling import BurstThrottle
 
     # A small burst keeps the whole loop inside one window even on a remote database.
-    monkeypatch.setitem(BurstThrottle.THROTTLE_RATES, "burst", "5/minute")
+    rates = {**settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"], "burst": "5/minute"}
+    settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "DEFAULT_THROTTLE_RATES": rates}
     conversation = Conversation.objects.create(owner=user, organization=org, title="Throttle test")
     cache.clear()
     responses = []
@@ -381,10 +387,17 @@ def test_chat_throttle_blocks_burst(authenticated_client, user, org, monkeypatch
 
 
 @pytest.mark.django_db
-def test_embedding_throttle(authenticated_client, user, org):
+def test_embedding_throttle(authenticated_client, user, org, settings):
+    # A small rate keeps the loop short: each allowed request is metered (several
+    # round trips to the remote database), so 120+ requests would take minutes.
+    rates = {**settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"], "embeddings": "3/hour"}
+    settings.REST_FRAMEWORK = {**settings.REST_FRAMEWORK, "DEFAULT_THROTTLE_RATES": rates}
     cache.clear()
     responses = []
-    for _ in range(121):
+    for _ in range(6):
         response = authenticated_client.post("/api/v1/embeddings/", {"texts": ["embed me"]})
         responses.append(response.status_code)
-    assert 429 in responses
+        if response.status_code == 429:
+            break
+    assert responses[:3] == [200, 200, 200], responses
+    assert responses[-1] == 429

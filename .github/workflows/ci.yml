@@ -57,6 +57,7 @@ jobs:
           KAFKA_SASL_MECHANISM: SCRAM-SHA-512
           KAFKA_SASL_USERNAME: ci
           KAFKA_SASL_PASSWORD: ci-kafka-password
+          FRONTEND_URL: https://app.example.test
           SUPABASE_URL: https://project.example.test
           SUPABASE_JWKS_URL: https://project.example.test/auth/v1/.well-known/jwks.json
           SUPABASE_SECRET_KEY: sb_secret_ci9mY7Kq2Vx5Zp8Lr3

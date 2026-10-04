@@ -104,7 +104,23 @@ def create_chat_request(
     celery_task_id = str(uuid4())
     try:
         with transaction.atomic():
+            from apps.usage import services as metering
+            from apps.usage.concurrency import enforce_concurrency
+            from apps.usage.models import Feature
+
+            # A replayed Idempotency-Key raises IntegrityError below and rolls
+            # this hold back, so retries are never charged twice.
+            chat_request_id = uuid4()
+            enforce_concurrency(conversation.organization, "chat_requests")
+            metering.reserve(
+                organization=conversation.organization,
+                user=request.user,
+                feature=Feature.CHAT_MESSAGES,
+                source_type="chat_request",
+                source_id=chat_request_id,
+            )
             chat_request = ChatRequest.objects.create(
+                id=chat_request_id,
                 owner=request.user,
                 organization=conversation.organization,
                 conversation=conversation,

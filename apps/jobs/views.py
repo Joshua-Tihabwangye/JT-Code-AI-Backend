@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from decimal import Decimal
 
 from celery import current_app
 from django.conf import settings
@@ -15,7 +14,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ResearchThrottle
 from apps.core.views import APIView
 from apps.identity.authorization import (
@@ -309,19 +307,12 @@ class ResearchJobsView(APIView):
                 ).values_list("id", flat=True)
             )
 
-        estimated_credits = Decimal("150") if depth == "deep" else Decimal("75")
-        request_id = uuid.uuid4()
-        try:
-            CreditService.reserve_credits(
-                user=request.user,
-                amount=estimated_credits,
-                request_id=request_id,
-                reason=f"Deep research: {depth}",
-                organization=organization,
-            )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED)
+        from apps.usage import services as metering
+        from apps.usage.concurrency import enforce_concurrency
+        from apps.usage.models import Feature
+        from apps.usage.pricing import reservation_credits
 
+        request_id = uuid.uuid4()
         job = Job.objects.create(
             owner=request.user,
             organization=organization,
@@ -332,10 +323,22 @@ class ResearchJobsView(APIView):
                 "collection_ids": [str(c) for c in collections],
                 "depth": depth,
             },
-            reserved_credits=estimated_credits,
             request_id=request_id,
             trace_id=getattr(request, "trace_id", ""),
         )
+        enforce_concurrency(organization, "jobs", exclude=job.pk)
+        # Deep research runs a longer agent loop, so its ceiling is doubled.
+        estimated_credits = reservation_credits(Feature.SEARCH_QUERIES) * (2 if depth == "deep" else 1)
+        reservation = metering.reserve(
+            organization=organization,
+            user=request.user,
+            feature=Feature.SEARCH_QUERIES,
+            source_type="job",
+            source_id=job.id,
+            credits=estimated_credits,
+        )
+        job.reserved_credits = reservation.credits_reserved
+        job.save(update_fields=["reserved_credits", "updated_at"])
 
         enqueue_job(job)
 

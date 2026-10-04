@@ -141,6 +141,10 @@ def execute_analysis_run(run_id: str) -> None:
     except Exception:
         logger.exception("Unexpected analysis worker failure", extra={"analysis_run_id": run_id})
         _fail(run, "The analysis worker failed. Retry the analysis run.", [result_asset])
+    finally:
+        from apps.usage.services import finalize_source
+
+        finalize_source("analysis_run", run.id)
 
 
 def _claim_visualization(visualization_id: str):

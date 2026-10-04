@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     "apps.documents",
     "apps.conversions",
     "apps.analytics",
+    "apps.usage",
 ]
 
 MIDDLEWARE = [
@@ -225,6 +226,31 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.knowledge.tasks.sync_sources",
         "schedule": 300.0,
     },
+    "settle-finished-usage-reservations": {
+        "task": "apps.usage.tasks.settle_finished_reservations",
+        "schedule": 60.0,
+        "options": {"expires": 60},
+    },
+    "reconcile-stripe-billing": {
+        "task": "apps.billing.tasks.reconcile_stripe_billing",
+        "schedule": 3600.0,
+        "options": {"expires": 3600},
+    },
+    "retry-failed-stripe-events": {
+        "task": "apps.billing.tasks.retry_failed_stripe_events",
+        "schedule": 300.0,
+        "options": {"expires": 300},
+    },
+    "run-auto-topups": {
+        "task": "apps.billing.tasks.run_auto_topups",
+        "schedule": 600.0,
+        "options": {"expires": 600},
+    },
+    "reconcile-provider-usage": {
+        "task": "apps.usage.tasks.reconcile_provider_usage",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
+    },
     "recover-stalled-knowledge-ingestion": {
         "task": "apps.knowledge.tasks.recover_stalled_ingestion",
         "schedule": 600.0,
@@ -250,9 +276,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 300.0,
         "options": {"expires": 300},
     },
-    "process-billing-webhooks": {
-        "task": "apps.billing.tasks.process_webhooks",
-        "schedule": 60.0,
+    "grant-free-plan-credits": {
+        "task": "apps.billing.tasks.grant_free_plan_credits",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
+    },
+    "billing-renewal-notices": {
+        "task": "apps.billing.tasks.check_subscription_renewals",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
     },
     "recover-stalled-jobs": {
         "task": "apps.jobs.tasks.recover_stalled_jobs",
@@ -323,6 +355,7 @@ CELERY_TASK_ROUTES = {
     "apps.conversations.tasks.*": {"queue": "jobs.analysis"},
     "apps.agents.tasks.*": {"queue": "jobs.analysis"},
     "apps.tools.tasks.*": {"queue": "jobs.default"},
+    "apps.usage.tasks.*": {"queue": "jobs.default"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -478,9 +511,44 @@ BILLING_CREDIT_VALUE_USD = env_float("BILLING_CREDIT_VALUE_USD", 0.01)
 BILLING_FX_BUFFER = env_float("BILLING_FX_BUFFER", 1.05)
 BILLING_MARGIN_MULTIPLIER = env_float("BILLING_MARGIN_MULTIPLIER", 1.25)
 BILLING_DEFAULT_PLAN = env("BILLING_DEFAULT_PLAN", "free")
+
+# Usage metering (Phase 13). Credits are reserved before work starts and settled
+# afterwards from recorded provider cost (cost_usd x FX buffer x margin / credit
+# value) or the feature's flat price; a settlement never exceeds its reservation.
+_DEFAULT_USAGE_RESERVATIONS = (
+    "chat_messages=10,rag_queries=25,search_queries=40,knowledge_documents=100,image_generations=100,"
+    "document_renders=20,file_conversions=15,workflow_executions=10,agent_runs=50,analysis_runs=10,api_calls=1"
+)
+USAGE_RESERVATION_CREDITS = env("USAGE_RESERVATION_CREDITS", _DEFAULT_USAGE_RESERVATIONS)
+# Flat prices for features without metered provider cost (and the minimum for AI features).
+_DEFAULT_USAGE_FLAT = (
+    "chat_messages=1,rag_queries=2,search_queries=5,knowledge_documents=10,image_generations=100,"
+    "document_renders=20,file_conversions=15,workflow_executions=10,agent_runs=2,analysis_runs=10,api_calls=1"
+)
+USAGE_FLAT_CREDITS = env("USAGE_FLAT_CREDITS", _DEFAULT_USAGE_FLAT)
+USAGE_RESERVATION_TTL_MINUTES = int(env("USAGE_RESERVATION_TTL_MINUTES", "120"))
+USAGE_RECONCILIATION_DRIFT_RATIO = env_float("USAGE_RECONCILIATION_DRIFT_RATIO", 0.01)
+# Per-tenant concurrency ceilings (a plan's ``limits`` may override each key).
+MAX_CONCURRENT_JOBS_PER_TENANT = int(env("MAX_CONCURRENT_JOBS_PER_TENANT", "20"))
+MAX_CONCURRENT_CHAT_REQUESTS_PER_TENANT = int(env("MAX_CONCURRENT_CHAT_REQUESTS_PER_TENANT", "20"))
+MAX_CONCURRENT_ANALYSIS_RUNS_PER_TENANT = int(env("MAX_CONCURRENT_ANALYSIS_RUNS_PER_TENANT", "5"))
+# Tenant-wide request ceiling = per-user scope rate x this multiplier (plan-overridable).
+THROTTLE_TENANT_MULTIPLIER = int(env("THROTTLE_TENANT_MULTIPLIER", "10"))
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
 STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+# Pinned so a change to the Stripe account's default API version cannot change
+# the payload shapes this code parses.
+STRIPE_API_VERSION = env("STRIPE_API_VERSION", "2023-10-16")
+STRIPE_WEBHOOK_TOLERANCE_SECONDS = int(env("STRIPE_WEBHOOK_TOLERANCE_SECONDS", "300"))
+STRIPE_EVENT_MAX_ATTEMPTS = int(env("STRIPE_EVENT_MAX_ATTEMPTS", "8"))
+# Frontend origin for Checkout/Portal return URLs; client-supplied return URLs
+# must share an allowed origin (this plus CORS_ALLOWED_ORIGINS).
+FRONTEND_URL = env("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+BILLING_TOPUP_MIN_CENTS = int(env("BILLING_TOPUP_MIN_CENTS", "500"))
+BILLING_TOPUP_MAX_CENTS = int(env("BILLING_TOPUP_MAX_CENTS", "100000"))
+# Auto top-up charges the saved default payment method at most once per window.
+BILLING_AUTO_TOPUP_COOLDOWN_MINUTES = int(env("BILLING_AUTO_TOPUP_COOLDOWN_MINUTES", "60"))
 
 # Knowledge/RAG
 # Supabase PostgreSQL (pgvector) is the only vector store. The `vector` extension
@@ -542,7 +610,9 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 50,
     "EXCEPTION_HANDLER": "apps.core.exceptions.api_exception_handler",
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_THROTTLE_CLASSES": ["apps.core.throttling.IPRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {
+        "ip": env("THROTTLE_IP", "300/minute"),
         "chat": env("THROTTLE_CHAT", "60/hour"),
         "images": env("THROTTLE_IMAGES", "30/hour"),
         "embeddings": env("THROTTLE_EMBEDDINGS", "120/hour"),
@@ -562,6 +632,8 @@ SPECTACULAR_SETTINGS = {
     "COMPONENT_SPLIT_REQUEST": True,
     "ENUM_NAME_OVERRIDES": {
         "AssetVisibility": "apps.assets.models.Asset.Visibility",
+        "UsageFeature": "apps.usage.models.Feature",
+        "EntitlementFeature": "apps.billing.models.Entitlement.FeatureType",
         "VisualizationKind": "apps.analytics.models.Visualization.Kind",
         "KnowledgeDocumentVisibility": "apps.knowledge.models.Document.Visibility",
         "ModelStatus": [

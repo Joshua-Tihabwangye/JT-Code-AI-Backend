@@ -51,8 +51,11 @@ def test_signature_issues_v2_jwt_binding_every_upload_parameter(authenticated_cl
 
 
 @pytest.mark.django_db
-@override_settings(**IMAGEKIT)
 def test_signature_rejects_disallowed_types_and_oversize(authenticated_client, org, settings):
+    # Only the settings fixture here: mixing it with @override_settings restores
+    # overrides out of order and leaks settings into later tests.
+    for name, value in IMAGEKIT.items():
+        setattr(settings, name, value)
     svg = authenticated_client.post(
         "/api/v1/files/signature/", {"originalFilename": "x.svg", "contentType": "image/svg+xml", "bytes": 10}
     )

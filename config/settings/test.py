@@ -43,6 +43,14 @@ RAG_EMBEDDING_MAX_RETRIES = 0
 RAG_RERANKER = "deterministic"
 RAG_JUDGE = "deterministic"
 
+# Unsubscribed tenants fall back to no plan in tests (the seeded "free" plan's
+# quotas and concurrency limits would otherwise apply to every test tenant);
+# plan behaviour is exercised explicitly.
+BILLING_DEFAULT_PLAN = ""
+STRIPE_SECRET_KEY = "sk_test_jtcode_unit_tests"  # nosec B105 # pragma: allowlist secret
+STRIPE_WEBHOOK_SECRET = "whsec_jtcode_unit_tests"  # nosec B105 # pragma: allowlist secret
+FRONTEND_URL = "https://app.example.test"
+
 # Deterministic offline chat backend for the test suite (no SDK/key required).
 AI_PROVIDER = "echo"
 

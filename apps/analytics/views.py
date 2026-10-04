@@ -40,6 +40,9 @@ from apps.identity.authorization import (
     organization_for_request,
     require_organization_write_access,
 )
+from apps.usage import services as metering
+from apps.usage.concurrency import enforce_concurrency
+from apps.usage.models import Feature
 
 
 def _organization(view):
@@ -174,6 +177,16 @@ class DatasetGrantViewSet(viewsets.ModelViewSet):
         serializer.save()
 
 
+def _reserve_run(run: AnalysisRun, user) -> None:
+    metering.reserve(
+        organization=run.dataset.organization,
+        user=user,
+        feature=Feature.ANALYSIS_RUNS,
+        source_type="analysis_run",
+        source_id=run.id,
+    )
+
+
 def _can_manage_run(user, run: AnalysisRun) -> bool:
     return run.owner_id == user.id or can_manage_dataset(user, run.dataset)
 
@@ -214,7 +227,10 @@ class AnalysisRunViewSet(viewsets.ModelViewSet):
         )
         if dataset is None:
             return Response({"detail": "Dataset not found."}, status=status.HTTP_404_NOT_FOUND)
-        run = serializer.save(owner=request.user, dataset=dataset)
+        with transaction.atomic():
+            enforce_concurrency(organization, "analysis_runs")
+            run = serializer.save(owner=request.user, dataset=dataset)
+            _reserve_run(run, request.user)
         transaction.on_commit(lambda: execute_analysis_run.delay(str(run.id)))
         return Response(AnalysisRunSerializer(run).data, status=status.HTTP_202_ACCEPTED)
 
@@ -235,7 +251,12 @@ class AnalysisRunViewSet(viewsets.ModelViewSet):
         organization = organization_for_request(request, required=True)
         if not datasets_analyzable_by(request.user, organization).filter(id=run.dataset_id).exists():
             raise PermissionDenied("You may not analyze this dataset.")
-        retried = AnalysisRun.objects.create(dataset=run.dataset, owner=request.user, transform=run.transform)
+        with transaction.atomic():
+            enforce_concurrency(organization, "analysis_runs")
+            retried = AnalysisRun.objects.create(
+                dataset=run.dataset, owner=request.user, transform=run.transform
+            )
+            _reserve_run(retried, request.user)
         transaction.on_commit(lambda: execute_analysis_run.delay(str(retried.id)))
         return Response(AnalysisRunSerializer(retried).data, status=status.HTTP_202_ACCEPTED)
 

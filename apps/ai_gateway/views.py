@@ -35,6 +35,8 @@ from apps.identity.authorization import (
 from apps.jobs.dispatch import enqueue_job
 from apps.jobs.models import Job
 from apps.knowledge.serializers import EmbeddingsRequestSerializer
+from apps.usage.models import Feature
+from apps.usage.services import metered
 
 
 class ProviderViewSet(viewsets.ReadOnlyModelViewSet):
@@ -351,11 +353,18 @@ class EmbeddingView(APIView):
 
         serializer = EmbeddingsRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        organization_for_request(request, required=True)
+        organization = organization_for_request(request, required=True)
         try:
-            vectors = embed_texts(
-                serializer.validated_data["texts"], task_type=serializer.validated_data["taskType"]
-            )
+            with metered(
+                organization=organization,
+                user=request.user,
+                feature=Feature.API_CALLS,
+                source_type="embedding",
+                source_id=uuid.uuid4(),
+            ):
+                vectors = embed_texts(
+                    serializer.validated_data["texts"], task_type=serializer.validated_data["taskType"]
+                )
             model_name, version = embedding_model_name(), embedding_version()
         except EmbeddingNotConfigured as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)

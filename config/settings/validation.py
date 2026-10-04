@@ -127,6 +127,16 @@ _INT_ENV = (
     "AGENT_RUN_STALLED_TIMEOUT_SECONDS",
     "AGENT_RUN_MAX_ATTEMPTS",
     "MAX_CONCURRENT_AGENT_RUNS_PER_TENANT",
+    "MAX_CONCURRENT_JOBS_PER_TENANT",
+    "MAX_CONCURRENT_CHAT_REQUESTS_PER_TENANT",
+    "MAX_CONCURRENT_ANALYSIS_RUNS_PER_TENANT",
+    "USAGE_RESERVATION_TTL_MINUTES",
+    "THROTTLE_TENANT_MULTIPLIER",
+    "STRIPE_WEBHOOK_TOLERANCE_SECONDS",
+    "STRIPE_EVENT_MAX_ATTEMPTS",
+    "BILLING_TOPUP_MIN_CENTS",
+    "BILLING_TOPUP_MAX_CENTS",
+    "BILLING_AUTO_TOPUP_COOLDOWN_MINUTES",
     "AI_MAX_RETRIES",
     "AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
     "CHAT_REQUEST_STALLED_TIMEOUT_SECONDS",
@@ -161,6 +171,7 @@ _FLOAT_ENV = (
     "BILLING_CREDIT_VALUE_USD",
     "BILLING_FX_BUFFER",
     "BILLING_MARGIN_MULTIPLIER",
+    "USAGE_RECONCILIATION_DRIFT_RATIO",
     "VECTOR_MIN_SIMILARITY",
     "RAG_EVAL_MIN_RECALL",
     "RAG_EVAL_MIN_MRR",
@@ -193,6 +204,7 @@ _THROTTLE_ENV = (
     "THROTTLE_BURST",
     "THROTTLE_AGENT_RUNS",
     "THROTTLE_ANALYTICS",
+    "THROTTLE_IP",
 )
 _URL_LIST_ENV = ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS")
 
@@ -332,6 +344,21 @@ def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
         problems.append("GEMINI_SAFETY_THRESHOLD must not disable Gemini safety filtering in production.")
 
 
+def _check_billing(problems: list[str], *, strict: bool) -> None:
+    low, high = _val("BILLING_TOPUP_MIN_CENTS", "500"), _val("BILLING_TOPUP_MAX_CENTS", "100000")
+    if low.isdigit() and high.isdigit() and int(low) >= int(high):
+        problems.append("BILLING_TOPUP_MIN_CENTS must be below BILLING_TOPUP_MAX_CENTS.")
+    if not strict:
+        return
+    frontend = _val("FRONTEND_URL")
+    if not frontend.startswith("https://"):
+        problems.append("FRONTEND_URL must be an https:// origin in staging/production.")
+    if not _val("STRIPE_SECRET_KEY").startswith(("sk_", "rk_")):
+        problems.append("STRIPE_SECRET_KEY must be a Stripe secret (sk_) or restricted (rk_) key.")
+    if not _val("STRIPE_WEBHOOK_SECRET").startswith("whsec_"):
+        problems.append("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret (whsec_).")
+
+
 def _check_rag(problems: list[str], *, strict: bool) -> None:
     provider = _val("RAG_EMBEDDING_PROVIDER", "gemini").lower()
     if provider not in {"openai", "gemini", "echo"}:
@@ -383,6 +410,7 @@ def validate_environment(profile: str) -> list[str]:
     _check_rag(problems, strict=strict)
     _check_agents(problems)
     _check_analytics(problems)
+    _check_billing(problems, strict=strict)
     _check_tools(problems, strict=strict)
     if not strict:
         return problems
