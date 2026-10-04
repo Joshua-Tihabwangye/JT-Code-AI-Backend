@@ -164,7 +164,7 @@ def finalize_conversion(job: ConversionJob, output: bytes) -> str | None:
         owner=job.owner,
         organization=job.organization,
         file_name=f"{job.id}.{job.output_format}",
-        folder=f"/{settings.IMAGEKIT_UPLOAD_FOLDER.strip('/')}/{job.owner_id}/conversions",
+        kind="conversions",
         content_type=content_types.get(job.output_format, "application/octet-stream"),
         provenance={"conversion_job_id": str(job.id)},
     )

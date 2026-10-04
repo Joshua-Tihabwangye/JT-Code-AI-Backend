@@ -3,7 +3,8 @@ from __future__ import annotations
 import uuid
 
 from django.db.models import Q
-from rest_framework import status, viewsets
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
@@ -33,6 +34,7 @@ from apps.identity.authorization import (
 )
 from apps.jobs.dispatch import enqueue_job
 from apps.jobs.models import Job
+from apps.knowledge.serializers import EmbeddingsRequestSerializer
 
 
 class ProviderViewSet(viewsets.ReadOnlyModelViewSet):
@@ -280,11 +282,9 @@ class CompletionView(APIView):
             },
         )
 
-        from apps.jobs.views import JobViewSet
+        from apps.jobs.services import reserve_job_credits
 
-        viewset = JobViewSet()
-        viewset.request = request
-        viewset._reserve_credits(job)
+        reserve_job_credits(job, request.user)
 
         enqueue_outbox_event(
             topic="ai_gateway.job.created",
@@ -314,63 +314,60 @@ class CompletionView(APIView):
 
 
 class EmbeddingView(APIView):
-    """Generate embeddings for text"""
+    """Embed texts with the server-configured RAG embedding model.
+
+    Vectors share the knowledge base's embedding space (``embeddingVersion``),
+    so clients can compare them with stored chunk vectors. Clients cannot pick a
+    different model: mixing embedding spaces would make similarities meaningless.
+    """
 
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     throttle_classes = [EmbeddingThrottle, BurstThrottle]
 
-    def post(self, request: Request):
-        texts = request.data.get("texts", [])
-        model_id = request.data.get("model_id")
-
-        if not texts:
-            return Response({"detail": "texts required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if model_id:
-            try:
-                model = Model.objects.get(id=model_id, modality=Model.Modality.EMBEDDING)
-            except Model.DoesNotExist:
-                return Response({"detail": "Embedding model not found"}, status=status.HTTP_404_NOT_FOUND)
-        else:
-            model = Model.objects.filter(
-                modality=Model.Modality.EMBEDDING,
-                status=Model.Status.ACTIVE,
-                provider__status=Provider.Status.ACTIVE,
-            ).first()
-
-        if not model:
-            return Response(
-                {"detail": "No embedding model available"},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    @extend_schema(
+        request=EmbeddingsRequestSerializer,
+        responses={
+            200: inline_serializer(
+                "EmbeddingsResponse",
+                {
+                    "model": serializers.CharField(),
+                    "embeddingVersion": serializers.CharField(),
+                    "dimensions": serializers.IntegerField(),
+                    "embeddings": serializers.ListField(
+                        child=serializers.ListField(child=serializers.FloatField())
+                    ),
+                },
             )
-
-        # Create job for embedding
-        from apps.jobs.models import Job
-
-        job = Job.objects.create(
-            owner=request.user,
-            organization=organization_for_request(request, required=True),
-            task_type=Job.TaskType.RAG_QUERY,  # Reuse or add EMBEDDING task type
-            input_payload={
-                "texts": texts,
-                "model": model.name,
-            },
+        },
+    )
+    def post(self, request: Request):
+        from apps.knowledge.embeddings import (
+            EmbeddingError,
+            EmbeddingNotConfigured,
+            embed_texts,
+            embedding_model_name,
+            embedding_version,
         )
 
-        from apps.jobs.views import JobViewSet
-
-        viewset = JobViewSet()
-        viewset.request = request
-        viewset._reserve_credits(job)
-        viewset._enqueue_job(job)
-
+        serializer = EmbeddingsRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        organization_for_request(request, required=True)
+        try:
+            vectors = embed_texts(
+                serializer.validated_data["texts"], task_type=serializer.validated_data["taskType"]
+            )
+            model_name, version = embedding_model_name(), embedding_version()
+        except EmbeddingNotConfigured as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except EmbeddingError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(
             {
-                "job_id": str(job.id),
-                "request_id": str(job.request_id),
-                "status": "queued",
-            },
-            status=status.HTTP_202_ACCEPTED,
+                "model": model_name,
+                "embeddingVersion": version,
+                "dimensions": len(vectors[0]) if vectors else 0,
+                "embeddings": vectors,
+            }
         )
 
 

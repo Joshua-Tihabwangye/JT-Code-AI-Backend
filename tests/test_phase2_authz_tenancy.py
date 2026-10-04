@@ -329,7 +329,7 @@ def test_collection_creation_uses_selected_tenant_and_requires_editor_role(api_c
     owner.organizations.add(organization)
     user.organizations.add(organization)
     api_client.force_authenticate(user)
-    payload = {"name": "Private knowledge", "embedding_model": "text-embedding-3-small"}
+    payload = {"name": "Private knowledge"}
 
     blocked = api_client.post(
         reverse("collection-list"), payload, HTTP_X_ORGANIZATION_ID=str(organization.id)
@@ -343,7 +343,7 @@ def test_collection_creation_uses_selected_tenant_and_requires_editor_role(api_c
     )
 
     assert allowed.status_code == 201, allowed.content
-    assert allowed.json()["organization"] == str(organization.id)
+    assert allowed.json()["organizationId"] == str(organization.id)
 
 
 @pytest.mark.django_db

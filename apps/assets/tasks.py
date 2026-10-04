@@ -1,50 +1,74 @@
-"""Lifecycle jobs for provider-owned assets."""
+"""Lifecycle jobs for provider-owned assets.
+
+* ``purge_deleted_assets`` removes provider files after the recovery window.
+* ``reconcile_assets`` verifies READY records in bounded batches (each asset at
+  most every ``IMAGEKIT_RECONCILE_INTERVAL_HOURS``) and quarantines records whose
+  provider object disappeared or changed version.
+* ``sweep_orphans`` walks the application's ImageKit folder tree and deletes
+  aged files that no record references (e.g. a crash between upload and
+  registration).
+"""
 
 from __future__ import annotations
+
+import logging
+from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task
 def purge_deleted_assets() -> int:
-    """Purge soft-deleted remote files after the recovery window, idempotently."""
+    """Purge soft-deleted provider files after the recovery window, idempotently."""
     from apps.assets.imagekit import delete_imagekit_file, imagekit_is_configured
     from apps.assets.models import Asset
 
     if not imagekit_is_configured():
         return 0
-    cutoff = timezone.now() - timezone.timedelta(days=settings.ASSET_DELETE_GRACE_DAYS)
+    cutoff = timezone.now() - timedelta(days=settings.ASSET_DELETE_GRACE_DAYS)
     count = 0
     asset_ids = Asset.objects.filter(
-        status=Asset.Status.DELETED, deleted_at__lte=cutoff, provider_deleted_at__isnull=True
+        status=Asset.Status.DELETED,
+        deleted_at__lte=cutoff,
+        provider_deleted_at__isnull=True,
+        deletion_attempts__lt=settings.ASSET_DELETE_MAX_ATTEMPTS,
     ).values_list("id", flat=True)
-    for asset_id in asset_ids.iterator():
+    for asset_id in list(asset_ids):
         with transaction.atomic():
-            asset = Asset.objects.select_for_update().get(id=asset_id)
-            if asset.provider_deleted_at is not None:
+            asset = Asset.objects.select_for_update(skip_locked=True).filter(id=asset_id).first()
+            if asset is None or asset.provider_deleted_at is not None or asset.status != Asset.Status.DELETED:
                 continue
-        try:
-            delete_imagekit_file(asset.imagekit_file_id)
-        except Exception as exc:  # provider failure is retried by the next sweep
             asset.deletion_attempts += 1
-            asset.deletion_error = str(exc)[:1000]
-            asset.save(update_fields=["deletion_attempts", "deletion_error", "updated_at"])
-            continue
-        asset.deletion_attempts += 1
-        asset.deletion_error = ""
-        asset.provider_deleted_at = timezone.now()
-        asset.save(update_fields=["deletion_attempts", "deletion_error", "provider_deleted_at", "updated_at"])
-        count += 1
+            try:
+                delete_imagekit_file(asset.imagekit_file_id)
+            except Exception as exc:  # retried by the next sweep until the attempt cap
+                asset.deletion_error = str(exc)[:1000]
+                asset.save(update_fields=["deletion_attempts", "deletion_error", "updated_at"])
+                if asset.deletion_attempts >= settings.ASSET_DELETE_MAX_ATTEMPTS:
+                    logger.error(
+                        "Asset provider deletion exhausted retries", extra={"asset_id": str(asset.id)}
+                    )
+                continue
+            asset.deletion_error = ""
+            asset.provider_deleted_at = timezone.now()
+            asset.save(
+                update_fields=["deletion_attempts", "deletion_error", "provider_deleted_at", "updated_at"]
+            )
+            count += 1
     return count
 
 
 @shared_task
 def reconcile_asset(asset_id: str) -> bool:
-    """Verify a local ready record without quarantining transient outages."""
+    """Verify one READY record without quarantining on transient outages."""
     from apps.assets.imagekit import (
+        FINGERPRINT_VERSION,
         ImageKitNotFound,
         provider_identity_fingerprint,
         verify_imagekit_file,
@@ -65,65 +89,88 @@ def reconcile_asset(asset_id: str) -> bool:
         asset.deletion_error = f"Transient provider verification error: {exc}"[:1000]
         asset.save(update_fields=["deletion_error", "updated_at"])
         return False
-    mismatched = (
-        resource.get("filePath") != asset.imagekit_file_path
-        or int(resource.get("size", -1)) != asset.bytes
-        or provider_identity_fingerprint(resource) != asset.provider_fingerprint
+    fingerprint = provider_identity_fingerprint(resource)
+    identity_matches = (
+        resource.get("filePath") == asset.imagekit_file_path and int(resource.get("size", -1)) == asset.bytes
     )
-    if mismatched:
+    if identity_matches and (asset.provenance or {}).get("fingerprintVersion") != FINGERPRINT_VERSION:
+        # Records registered before the version-based fingerprint are upgraded
+        # once their path and size are confirmed.
+        asset.provider_fingerprint = fingerprint
+        asset.provenance = {**(asset.provenance or {}), "fingerprintVersion": FINGERPRINT_VERSION}
+    if not identity_matches or fingerprint != asset.provider_fingerprint:
         asset.status = Asset.Status.QUARANTINED
-        asset.deletion_error = "Provider identity or metadata changed after registration."
+        asset.deletion_error = "Provider identity, size or version changed after registration."
         asset.save(update_fields=["status", "deletion_error", "updated_at"])
         return False
-    if asset.deletion_error:
-        asset.deletion_error = ""
-        asset.save(update_fields=["deletion_error", "updated_at"])
+    asset.deletion_error = ""
+    asset.last_verified_at = timezone.now()
+    asset.save(
+        update_fields=[
+            "provider_fingerprint",
+            "provenance",
+            "deletion_error",
+            "last_verified_at",
+            "updated_at",
+        ]
+    )
     return True
 
 
 @shared_task
 def reconcile_assets() -> dict[str, int]:
-    """Reconcile local records and delete aged provider orphans under the app root."""
-    from apps.assets.imagekit import (
-        delete_imagekit_file,
-        imagekit_is_configured,
-        list_imagekit_files,
-        provider_created_at,
-    )
+    """Verify the next batch of READY records that are due for re-verification."""
+    from apps.assets.imagekit import imagekit_is_configured
     from apps.assets.models import Asset
 
     if not imagekit_is_configured():
-        return {"verified": 0, "quarantined": 0, "orphans_deleted": 0}
-    verified = quarantined = orphans_deleted = 0
-    for asset_id in Asset.objects.filter(status=Asset.Status.READY).values_list("id", flat=True).iterator():
-        if reconcile_asset(str(asset_id)):
-            verified += 1
-        elif Asset.objects.filter(id=asset_id, status=Asset.Status.QUARANTINED).exists():
-            quarantined += 1
+        return {"verified": 0, "quarantined": 0}
+    due = timezone.now() - timedelta(hours=settings.IMAGEKIT_RECONCILE_INTERVAL_HOURS)
+    batch = list(
+        Asset.objects.filter(status=Asset.Status.READY)
+        .filter(Q(last_verified_at__isnull=True) | Q(last_verified_at__lt=due))
+        .order_by("last_verified_at", "created_at")
+        .values_list("id", flat=True)[: settings.IMAGEKIT_RECONCILE_BATCH_SIZE]
+    )
+    verified = sum(1 for asset_id in batch if reconcile_asset(str(asset_id)))
+    quarantined = Asset.objects.filter(id__in=batch, status=Asset.Status.QUARANTINED).count()
+    return {"verified": verified, "quarantined": quarantined}
 
-    known_ids = set(Asset.objects.values_list("imagekit_file_id", flat=True))
-    cutoff = timezone.now() - timezone.timedelta(hours=settings.ASSET_ORPHAN_GRACE_HOURS)
-    root = "/" + settings.IMAGEKIT_UPLOAD_FOLDER.strip("/")
-    page_size = settings.IMAGEKIT_RECONCILE_PAGE_SIZE
-    orphan_ids: list[str] = []
-    for page in range(settings.IMAGEKIT_RECONCILE_MAX_PAGES):
-        resources = list_imagekit_files(path=root, skip=page * page_size, limit=page_size)
-        for resource in resources:
-            file_id = str(resource.get("fileId") or "")
-            created_at = provider_created_at(resource)
-            if not file_id or file_id in known_ids or created_at is None or created_at > cutoff:
-                continue
-            orphan_ids.append(file_id)
-        if len(resources) < page_size:
-            break
-    for file_id in orphan_ids:
+
+@shared_task
+def sweep_orphans() -> dict[str, int]:
+    """Delete aged provider files under the app root that no record references."""
+    from apps.assets.imagekit import (
+        delete_imagekit_file,
+        imagekit_is_configured,
+        provider_created_at,
+        root_folder,
+        walk_imagekit_files,
+    )
+    from apps.assets.models import Asset, UploadIntent
+
+    if not imagekit_is_configured():
+        return {"scanned": 0, "orphans_deleted": 0}
+    cutoff = timezone.now() - timedelta(hours=settings.ASSET_ORPHAN_GRACE_HOURS)
+    scanned = deleted = 0
+    for resource in walk_imagekit_files(
+        root_folder(),
+        max_depth=settings.IMAGEKIT_RECONCILE_MAX_DEPTH,
+        page_size=settings.IMAGEKIT_RECONCILE_PAGE_SIZE,
+        max_pages=settings.IMAGEKIT_RECONCILE_MAX_PAGES,
+    ):
+        scanned += 1
+        file_id = str(resource.get("fileId") or "")
+        created_at = provider_created_at(resource)
+        if not file_id or created_at is None or created_at > cutoff:
+            continue
+        if Asset.objects.filter(imagekit_file_id=file_id).exists():
+            continue
+        if UploadIntent.objects.filter(imagekit_file_id=file_id).exists():
+            continue
         delete_imagekit_file(file_id)
-        orphans_deleted += 1
-    return {
-        "verified": verified,
-        "quarantined": quarantined,
-        "orphans_deleted": orphans_deleted,
-    }
+        deleted += 1
+    return {"scanned": scanned, "orphans_deleted": deleted}
 
 
 @shared_task

@@ -1,20 +1,122 @@
 [
   {
     "name": "deployment rollback",
-    "query": "How should deployment rollback be performed?",
+    "query": "How should a deployment rollback be performed?",
     "documents": [
-      {"label": "rollback", "content": "Use the rollback checklist before deployment rollback."},
-      {"label": "billing", "content": "Invoices are generated at the end of each billing period."}
+      {"label": "rollback", "content": "# Release runbook\n\n## Rollback\n\nUse the rollback checklist before a deployment rollback. Redeploy the previous image tag and verify health checks."},
+      {"label": "billing", "content": "Invoices are generated at the end of each billing period and emailed to the account owner."},
+      {"label": "deploy", "content": "New deployments are promoted from staging after the smoke test suite passes."}
     ],
     "expected_labels": ["rollback"]
   },
   {
     "name": "credential rotation",
-    "query": "When must credentials be rotated?",
+    "query": "When must production credentials be rotated?",
     "documents": [
-      {"label": "rotation", "content": "Production credentials must be rotated every ninety days."},
-      {"label": "backup", "content": "Database backups run every night."}
+      {"label": "rotation", "content": "Production credentials must be rotated every ninety days and immediately after staff departures."},
+      {"label": "backup", "content": "Database backups run every night and are retained for thirty days."},
+      {"label": "passwords", "content": "User passwords must contain at least twelve characters."}
     ],
     "expected_labels": ["rotation"]
+  },
+  {
+    "name": "refund window",
+    "query": "How many days do customers have to request a refund?",
+    "documents": [
+      {"label": "refunds", "content": "Customers may request a refund within fourteen days of purchase by contacting support."},
+      {"label": "shipping", "content": "Orders ship within two business days. Tracking numbers are emailed automatically."},
+      {"label": "warranty", "content": "Hardware carries a one-year limited warranty covering manufacturing defects."}
+    ],
+    "expected_labels": ["refunds"]
+  },
+  {
+    "name": "incident severity",
+    "query": "What qualifies as a severity one incident?",
+    "documents": [
+      {"label": "severity", "content": "A severity one incident is a full outage or data loss affecting all customers. Page the on-call engineer immediately."},
+      {"label": "oncall", "content": "The on-call rotation changes every Monday at nine in the morning."},
+      {"label": "postmortem", "content": "Postmortems are written within five business days of an incident and shared with the team."}
+    ],
+    "expected_labels": ["severity"]
+  },
+  {
+    "name": "data retention",
+    "query": "How long are audit logs retained?",
+    "documents": [
+      {"label": "audit", "content": "Audit logs are retained for seven years to satisfy compliance requirements."},
+      {"label": "analytics", "content": "Product analytics events are aggregated daily and raw events are deleted after ninety days."},
+      {"label": "email", "content": "Marketing emails can be unsubscribed from at any time."}
+    ],
+    "expected_labels": ["audit"]
+  },
+  {
+    "name": "vpn access",
+    "query": "Which network do engineers need to connect to before reaching internal dashboards?",
+    "documents": [
+      {"label": "vpn", "content": "Engineers must connect to the corporate VPN before opening internal dashboards such as Grafana."},
+      {"label": "wifi", "content": "Guest wifi credentials are posted at the reception desk."},
+      {"label": "laptops", "content": "Company laptops are replaced every three years."}
+    ],
+    "expected_labels": ["vpn"]
+  },
+  {
+    "name": "parental leave",
+    "query": "How many weeks of parental leave are offered?",
+    "documents": [
+      {"label": "leave", "content": "Employees receive sixteen weeks of paid parental leave, which may be taken within the first year."},
+      {"label": "holidays", "content": "The company observes twelve public holidays per year."},
+      {"label": "sick", "content": "Sick leave does not require a doctor's note for absences shorter than three days."}
+    ],
+    "expected_labels": ["leave"]
+  },
+  {
+    "name": "api rate limits",
+    "query": "What is the API rate limit per minute?",
+    "documents": [
+      {"label": "ratelimit", "content": "The public API allows six hundred requests per minute per API key; excess requests receive HTTP 429."},
+      {"label": "auth", "content": "API keys are created in the developer settings page and can be revoked at any time."},
+      {"label": "sdk", "content": "Official SDKs are available for Python and TypeScript."}
+    ],
+    "expected_labels": ["ratelimit"]
+  },
+  {
+    "name": "encryption at rest",
+    "query": "Is customer data encrypted at rest?",
+    "documents": [
+      {"label": "encryption", "content": "All customer data is encrypted at rest with AES-256 and in transit with TLS 1.2 or later."},
+      {"label": "sso", "content": "Single sign-on is available on the enterprise plan through SAML."},
+      {"label": "regions", "content": "Data residency is offered in the European Union and the United States."}
+    ],
+    "expected_labels": ["encryption"]
+  },
+  {
+    "name": "two relevant documents",
+    "query": "What are the steps for onboarding a new engineer?",
+    "documents": [
+      {"label": "onboarding-accounts", "content": "Onboarding a new engineer starts with creating accounts for email, chat and the code host."},
+      {"label": "onboarding-mentor", "content": "Each new engineer is assigned an onboarding mentor for their first month."},
+      {"label": "offboarding", "content": "Offboarding requires revoking all access on the employee's last day."}
+    ],
+    "expected_labels": ["onboarding-accounts", "onboarding-mentor"]
+  },
+  {
+    "name": "expense approval",
+    "query": "Who approves expenses above the limit?",
+    "documents": [
+      {"label": "expenses", "content": "Expenses above five hundred dollars must be approved by a director before reimbursement."},
+      {"label": "travel", "content": "Book travel at least two weeks in advance through the travel portal."},
+      {"label": "payroll", "content": "Payroll runs on the last business day of each month."}
+    ],
+    "expected_labels": ["expenses"]
+  },
+  {
+    "name": "code review",
+    "query": "How many approvals does a pull request need before merging?",
+    "documents": [
+      {"label": "review", "content": "Every pull request needs two approvals and passing checks before merging to the main branch."},
+      {"label": "branches", "content": "Feature branches are named after their ticket identifier."},
+      {"label": "releases", "content": "Releases are tagged with semantic version numbers."}
+    ],
+    "expected_labels": ["review"]
   }
 ]

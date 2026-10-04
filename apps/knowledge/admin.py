@@ -68,7 +68,7 @@ class DocumentAdmin(admin.ModelAdmin):
         "id",
         "content_hash",
         "chunk_count",
-        "vector_ids",
+        "index_attempts",
         "indexed_at",
         "deleted_at",
         "created_at",
@@ -80,10 +80,19 @@ class DocumentAdmin(admin.ModelAdmin):
 
 @admin.register(Chunk)
 class ChunkAdmin(admin.ModelAdmin):
-    list_display = ("id", "document", "chunk_index", "token_count", "vector_id", "created_at")
+    list_display = (
+        "id",
+        "document",
+        "chunk_index",
+        "page_number",
+        "token_count",
+        "embedding_version",
+        "created_at",
+    )
     list_filter = ("created_at",)
-    search_fields = ("document__title", "content", "vector_id")
-    readonly_fields = ("id", "created_at", "updated_at")
+    search_fields = ("document__title", "content")
+    readonly_fields = ("id", "embedding_version", "created_at", "updated_at")
+    exclude = ("embedding",)
     ordering = ("document", "chunk_index")
     raw_id_fields = ("document", "collection")
 
@@ -108,12 +117,12 @@ class SyncRunAdmin(admin.ModelAdmin):
 
 @admin.register(Citation)
 class CitationAdmin(admin.ModelAdmin):
-    list_display = ("id", "job", "document", "citation_index", "relevance_score", "created_at")
+    list_display = ("id", "job", "agent_run", "document", "citation_index", "relevance_score", "created_at")
     list_filter = ("created_at",)
     search_fields = ("job__id", "document__title")
     readonly_fields = ("id", "created_at")
     ordering = ("job", "citation_index")
-    raw_id_fields = ("job", "chunk", "document")
+    raw_id_fields = ("job", "agent_run", "chunk", "document")
 
 
 @admin.register(DocumentAccessGrant)

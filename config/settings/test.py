@@ -35,8 +35,13 @@ SUPABASE_SECRET_KEY = "sb_secret_test-only-admin-key"  # nosec B105
 KAFKA_CONSUMER_RETRY_MAX_SECONDS = 0
 WEBHOOK_SIGNING_SECRET = "test-outbound-callback-signing-secret"  # nosec B105
 
-# Deterministic, offline embedding provider for the test suite.
+# Deterministic, offline embedding provider for the test suite. Real pgvector and
+# full-text search still run against the Supabase test database.
 RAG_EMBEDDING_PROVIDER = "echo"
+RAG_EMBEDDING_MAX_RETRIES = 0
+# Model reranking/judging go through the AI gateway; tests opt in with a mock.
+RAG_RERANKER = "deterministic"
+RAG_JUDGE = "deterministic"
 
 # Deterministic offline chat backend for the test suite (no SDK/key required).
 AI_PROVIDER = "echo"

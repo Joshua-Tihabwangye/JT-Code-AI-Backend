@@ -26,7 +26,6 @@ whitenoise>=6.9,<7
 
 # AI Providers
 openai>=1.40,<2
-google-generativeai>=0.8,<1
 
 # Agent Runtime (LangGraph + LangChain core messages)
 langgraph>=0.3,<2

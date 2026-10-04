@@ -102,8 +102,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 content,
                 owner=instance.owner,
                 organization=instance.organization,
-                file_name=f"{instance.id}.{fmt}",
-                folder=f"/{settings.IMAGEKIT_UPLOAD_FOLDER.strip('/')}/{instance.owner_id}/documents",
+                file_name=f"{instance.id}-v{instance.version}.{fmt}",
+                kind="documents",
                 content_type=content_types[fmt],
                 provenance={"document_id": str(instance.id), "document_version": instance.version},
             )

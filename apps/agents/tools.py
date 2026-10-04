@@ -76,40 +76,39 @@ def _knowledge_search(user: Any, organization_id: Any, *, query: str = "", top_k
     if not query:
         return "A query is required for knowledge.search."
     top_k = min(max(int(top_k or 5), 1), 10)
-    try:
-        from apps.knowledge.embeddings import EmbeddingError, embed_query
-        from apps.knowledge.models import Collection
-        from apps.knowledge.retrieval import hybrid_search
+    from apps.knowledge.evidence import record_agent_evidence
+    from apps.knowledge.models import Collection
+    from apps.knowledge.retrieval import embed_query_or_none, hybrid_retrieve
 
-        collection_ids = list(
-            Collection.objects.filter(organization_id=organization_id, is_active=True).values_list(
-                "id", flat=True
-            )
+    collection_ids = list(
+        Collection.objects.filter(organization_id=organization_id, is_active=True).values_list(
+            "id", flat=True
         )
-        if not collection_ids:
-            return "No knowledge collections exist for this organization."
-
-        try:
-            query_vector = embed_query(query)
-        except EmbeddingError:
-            query_vector = None
-        results = hybrid_search(
-            query,
-            query_vector,
-            collection_ids=collection_ids,
-            organization_id=organization_id,
-            user=user,
-            top_k=top_k,
-        )
-    except Exception as exc:  # noqa: BLE001 - tool failures are surfaced to the model
-        return f"Knowledge search failed: {exc}"
-    if not results:
-        return "No results found matching the query."
-    return "\n".join(
-        f"[{i + 1}] {r.get('document_title', 'Document')} "
-        f"(chunk {r.get('chunk_index', '?')}): {r['content'][:1000]}"
-        for i, r in enumerate(results)
     )
+    if not collection_ids:
+        return "No knowledge collections exist for this organization."
+    query_vector, _reason = embed_query_or_none(query)
+    retrieval = hybrid_retrieve(
+        query,
+        query_vector,
+        collection_ids=collection_ids,
+        organization_id=organization_id,
+        user=user,
+        top_k=top_k,
+    )
+    if not retrieval.results:
+        return "No results found matching the query."
+    evidence = record_agent_evidence(retrieval.results)
+    lines = ["Cite evidence by its number in square brackets, for example [1]."]
+    for item in evidence:
+        location = f"chunk {item.get('chunk_index', '?')}"
+        if item.get("page_number"):
+            location += f", page {item['page_number']}"
+        lines.append(
+            f"[{item['citation_index']}] {item.get('document_title', 'Document')} ({location}): "
+            f"{item['content'][:1000]}"
+        )
+    return "\n".join(lines)
 
 
 def _system_now(user: Any, organization_id: Any) -> str:  # noqa: ARG001

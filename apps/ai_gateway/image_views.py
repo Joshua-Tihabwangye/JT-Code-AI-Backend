@@ -162,7 +162,7 @@ def _save_image(content: bytes, image_id: uuid.UUID, *, organization, owner) -> 
             owner=owner,
             organization=organization,
             file_name=f"{image_id}.png",
-            folder=f"/{settings.IMAGEKIT_UPLOAD_FOLDER.strip('/')}/{owner.id}/images",
+            kind="images",
             content_type="image/png",
             provenance={"generated_image_id": str(image_id)},
         )
