@@ -1,6 +1,15 @@
+"""Analysis and visualization workers.
+
+Each task claims its record under a row lock (``FOR UPDATE OF`` the record only,
+so optional related rows can be joined), fetches and verifies source bytes,
+runs all pandas/Plotly/Matplotlib work in the isolated engine process, stores
+artifacts privately in ImageKit, and validates the result against the
+versioned result schema before saving it.
+"""
+
 from __future__ import annotations
 
-import json
+import base64
 import logging
 from datetime import timedelta
 
@@ -10,6 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+RESULT_SCHEMA_VERSION = "1"
 
 
 def _claim_analysis(run_id: str):
@@ -17,7 +27,7 @@ def _claim_analysis(run_id: str):
 
     with transaction.atomic():
         run = (
-            AnalysisRun.objects.select_for_update()
+            AnalysisRun.objects.select_for_update(of=("self",))
             .select_related("dataset__asset", "owner", "dataset__organization")
             .filter(id=run_id, status=AnalysisRun.Status.QUEUED)
             .first()
@@ -31,6 +41,17 @@ def _claim_analysis(run_id: str):
         return run
 
 
+def _fail(record, message: str, assets) -> None:
+    from apps.assets.services import soft_delete_asset
+
+    for asset in assets:
+        soft_delete_asset(asset)
+    record.status = record.Status.FAILED
+    record.error_message = message[:2000]
+    record.completed_at = timezone.now()
+    record.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+
+
 @shared_task(
     acks_late=True,
     reject_on_worker_lost=True,
@@ -39,34 +60,31 @@ def _claim_analysis(run_id: str):
 )
 def execute_analysis_run(run_id: str) -> None:
     from apps.analytics.models import AnalysisRun
-    from apps.analytics.services import (
-        AnalysisError,
-        apply_transform,
-        dataframe_for_dataset,
-        frame_as_csv,
-        frame_preview,
-        profile_frame,
-    )
-    from apps.assets.services import register_generated_asset, soft_delete_asset
+    from apps.analytics.sandbox import run_engine
+    from apps.analytics.serializers import AnalysisResultSchemaSerializer
+    from apps.analytics.services import AnalysisError, dataset_bytes
+    from apps.assets.services import register_generated_asset
 
     run = _claim_analysis(run_id)
     if run is None:
         return
     result_asset = None
     try:
-        source_frame = dataframe_for_dataset(run.dataset)
-        source_profile = profile_frame(source_frame)
-        run.dataset.schema = {
-            "columns": source_profile["columns"],
-            "dtypes": source_profile["dtypes"],
-        }
-        run.dataset.row_count = source_profile["rows"]
-        if run.dataset.asset_id:
-            run.dataset.byte_size = run.dataset.asset.bytes
-            run.dataset.source_checksum_sha256 = run.dataset.asset.checksum_sha256
-        run.dataset.save(
+        dataset = run.dataset
+        output = run_engine(
+            "analyze", dataset_bytes(dataset), mime_type=dataset.mime_type, transform=run.transform
+        )
+        source_profile = output["sourceProfile"]
+        dataset.schema = {"columns": source_profile["columns"], "dtypes": source_profile["dtypes"]}
+        dataset.profile = source_profile
+        dataset.row_count = source_profile["rows"]
+        if dataset.asset_id:
+            dataset.byte_size = dataset.asset.bytes
+            dataset.source_checksum_sha256 = dataset.asset.checksum_sha256
+        dataset.save(
             update_fields=[
                 "schema",
+                "profile",
                 "row_count",
                 "byte_size",
                 "source_checksum_sha256",
@@ -74,33 +92,36 @@ def execute_analysis_run(run_id: str) -> None:
             ]
         )
 
-        frame = apply_transform(source_frame, run.transform)
-        result_bytes = frame_as_csv(frame)
-        if not result_bytes or len(result_bytes) > settings.ANALYTICS_MAX_RESULT_BYTES:
-            raise AnalysisError("The analysis result exceeds the configured artifact limit.")
+        result = base64.b64decode(output["result"])
         result_asset = register_generated_asset(
-            result_bytes,
+            result,
             owner=run.owner,
-            organization=run.dataset.organization,
+            organization=dataset.organization,
             file_name=f"analysis-{run.id}.csv",
-            folder=f"/jt-code/analytics/{run.dataset.organization_id}/results",
+            kind="analytics/results",
             content_type="text/csv",
             provenance={
                 "kind": "analytics-result",
                 "analysis_run_id": str(run.id),
-                "dataset_id": str(run.dataset_id),
+                "dataset_id": str(dataset.id),
             },
         )
-        run.profile = profile_frame(frame)
-        run.result_schema = {
-            "version": "1",
-            "format": "csv",
-            "columns": run.profile["columns"],
-            "dtypes": run.profile["dtypes"],
-            "rows": run.profile["rows"],
-            "bytes": len(result_bytes),
-        }
-        run.result_preview = frame_preview(frame)
+        profile = output["profile"]
+        schema = AnalysisResultSchemaSerializer(
+            data={
+                "version": RESULT_SCHEMA_VERSION,
+                "format": "csv",
+                "columns": profile["columns"],
+                "dtypes": profile["dtypes"],
+                "rows": profile["rows"],
+                "bytes": len(result),
+                "checksumSha256": result_asset.checksum_sha256,
+            }
+        )
+        schema.is_valid(raise_exception=True)
+        run.profile = profile
+        run.result_schema = schema.validated_data
+        run.result_preview = output["preview"]
         run.result_asset = result_asset
         run.status = AnalysisRun.Status.COMPLETED
         run.completed_at = timezone.now()
@@ -116,18 +137,10 @@ def execute_analysis_run(run_id: str) -> None:
             ]
         )
     except AnalysisError as exc:
-        soft_delete_asset(result_asset)
-        run.status = AnalysisRun.Status.FAILED
-        run.error_message = str(exc)[:2000]
-        run.completed_at = timezone.now()
-        run.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+        _fail(run, str(exc), [result_asset])
     except Exception:
         logger.exception("Unexpected analysis worker failure", extra={"analysis_run_id": run_id})
-        soft_delete_asset(result_asset)
-        run.status = AnalysisRun.Status.FAILED
-        run.error_message = "The analysis worker failed. Retry with a new analysis run."
-        run.completed_at = timezone.now()
-        run.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+        _fail(run, "The analysis worker failed. Retry the analysis run.", [result_asset])
 
 
 def _claim_visualization(visualization_id: str):
@@ -135,7 +148,7 @@ def _claim_visualization(visualization_id: str):
 
     with transaction.atomic():
         visualization = (
-            Visualization.objects.select_for_update()
+            Visualization.objects.select_for_update(of=("self",))
             .select_related(
                 "analysis_run__result_asset",
                 "analysis_run__owner",
@@ -160,50 +173,77 @@ def _claim_visualization(visualization_id: str):
     time_limit=settings.ANALYTICS_TASK_TIME_LIMIT_SECONDS,
 )
 def execute_visualization(visualization_id: str) -> None:
+    import json
+
     from apps.analytics.models import Visualization
-    from apps.analytics.services import AnalysisError, chart, dataframe_for_result, sha256
-    from apps.assets.services import register_generated_asset, soft_delete_asset
+    from apps.analytics.sandbox import run_engine
+    from apps.analytics.serializers import VisualizationResultSchemaSerializer
+    from apps.analytics.services import AnalysisError, result_bytes, sha256
+    from apps.assets.services import register_generated_asset
 
     visualization = _claim_visualization(visualization_id)
     if visualization is None:
         return
-    artifact = None
+    artifact = spec_asset = None
     try:
-        frame = dataframe_for_result(visualization.analysis_run)
-        spec, png = chart(
-            frame,
+        run = visualization.analysis_run
+        organization = run.dataset.organization
+        output = run_engine(
+            "chart",
+            result_bytes(run),
+            mime_type="text/csv",
             kind=visualization.kind,
             x=visualization.x_column,
             y=visualization.y_column,
+            title=visualization.title,
+            color=visualization.color_column,
         )
-        if (
-            len(json.dumps(spec, separators=(",", ":")).encode("utf-8"))
-            > settings.ANALYTICS_MAX_PLOTLY_SPEC_BYTES
-        ):
-            raise AnalysisError("The interactive chart specification exceeds the configured limit.")
+        png = base64.b64decode(output["png"])
+        spec_bytes = output["spec"].encode("utf-8")
+        provenance = {
+            "kind": "analytics-visualization",
+            "visualization_id": str(visualization.id),
+            "analysis_run_id": str(run.id),
+        }
         artifact = register_generated_asset(
             png,
-            owner=visualization.analysis_run.owner,
-            organization=visualization.analysis_run.dataset.organization,
+            owner=run.owner,
+            organization=organization,
             file_name=f"visualization-{visualization.id}.png",
-            folder=f"/jt-code/analytics/{visualization.analysis_run.dataset.organization_id}/charts",
+            kind="analytics/charts",
             content_type="image/png",
-            provenance={
-                "kind": "analytics-visualization",
-                "visualization_id": str(visualization.id),
-                "analysis_run_id": str(visualization.analysis_run_id),
-            },
+            provenance=provenance,
         )
-        visualization.plotly_spec = spec
+        spec_asset = register_generated_asset(
+            spec_bytes,
+            owner=run.owner,
+            organization=organization,
+            file_name=f"visualization-{visualization.id}.plotly.json",
+            kind="analytics/charts",
+            content_type="application/json",
+            provenance={**provenance, "kind": "analytics-visualization-spec"},
+        )
+        schema = VisualizationResultSchemaSerializer(
+            data={
+                "version": RESULT_SCHEMA_VERSION,
+                "kind": visualization.kind,
+                "staticFormat": "png",
+                "interactiveFormat": "plotly-json",
+                "bytes": len(png),
+                "specBytes": len(spec_bytes),
+                "points": output["points"],
+                "checksumSha256": sha256(png),
+                "specChecksumSha256": sha256(spec_bytes),
+            }
+        )
+        schema.is_valid(raise_exception=True)
+        visualization.plotly_spec = (
+            json.loads(spec_bytes) if len(spec_bytes) <= settings.ANALYTICS_INLINE_SPEC_BYTES else {}
+        )
         visualization.artifact_checksum_sha256 = sha256(png)
         visualization.artifact_asset = artifact
-        visualization.result_schema = {
-            "version": "1",
-            "static_format": "png",
-            "interactive_format": "plotly-json",
-            "bytes": len(png),
-            "points": len(frame.index),
-        }
+        visualization.spec_asset = spec_asset
+        visualization.result_schema = schema.validated_data
         visualization.status = Visualization.Status.READY
         visualization.completed_at = timezone.now()
         visualization.save(
@@ -211,6 +251,7 @@ def execute_visualization(visualization_id: str) -> None:
                 "plotly_spec",
                 "artifact_checksum_sha256",
                 "artifact_asset",
+                "spec_asset",
                 "result_schema",
                 "status",
                 "completed_at",
@@ -218,21 +259,14 @@ def execute_visualization(visualization_id: str) -> None:
             ]
         )
     except AnalysisError as exc:
-        soft_delete_asset(artifact)
-        visualization.status = Visualization.Status.FAILED
-        visualization.error_message = str(exc)[:2000]
-        visualization.completed_at = timezone.now()
-        visualization.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+        _fail(visualization, str(exc), [artifact, spec_asset])
     except Exception:
         logger.exception(
-            "Unexpected visualization worker failure",
-            extra={"visualization_id": visualization_id},
+            "Unexpected visualization worker failure", extra={"visualization_id": visualization_id}
         )
-        soft_delete_asset(artifact)
-        visualization.status = Visualization.Status.FAILED
-        visualization.error_message = "The visualization worker failed. Create a new visualization to retry."
-        visualization.completed_at = timezone.now()
-        visualization.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+        _fail(
+            visualization, "The visualization worker failed. Retry the visualization.", [artifact, spec_asset]
+        )
 
 
 @shared_task
@@ -244,18 +278,14 @@ def recover_stalled_analytics() -> dict[str, int]:
 
     cutoff = timezone.now() - timedelta(minutes=settings.ANALYTICS_STALLED_AFTER_MINUTES)
     now = timezone.now()
-    analyses = AnalysisRun.objects.filter(
-        status=AnalysisRun.Status.RUNNING,
-        started_at__lt=cutoff,
-    ).update(
+    analyses = AnalysisRun.objects.filter(status=AnalysisRun.Status.RUNNING, started_at__lt=cutoff).update(
         status=AnalysisRun.Status.FAILED,
         error_message="The analysis worker stopped before completion.",
         completed_at=now,
         updated_at=now,
     )
     visualizations = Visualization.objects.filter(
-        status=Visualization.Status.RUNNING,
-        started_at__lt=cutoff,
+        status=Visualization.Status.RUNNING, started_at__lt=cutoff
     ).update(
         status=Visualization.Status.FAILED,
         error_message="The visualization worker stopped before completion.",
@@ -266,24 +296,12 @@ def recover_stalled_analytics() -> dict[str, int]:
     # linking the asset. Provenance makes those rows recoverable without ever
     # treating user-supplied source assets as garbage.
     orphan_cutoff = now - timedelta(hours=settings.ASSET_ORPHAN_GRACE_HOURS)
-    orphan_results = Asset.objects.filter(
-        status=Asset.Status.READY,
-        provenance__kind="analytics-result",
-        analysis_results__isnull=True,
-        created_at__lt=orphan_cutoff,
-    )
-    orphan_charts = Asset.objects.filter(
-        status=Asset.Status.READY,
-        provenance__kind="analytics-visualization",
-        analytics_visualizations__isnull=True,
-        created_at__lt=orphan_cutoff,
-    )
-    orphan_assets = 0
-    for asset in [*orphan_results, *orphan_charts]:
+    candidates = Asset.objects.filter(status=Asset.Status.READY, created_at__lt=orphan_cutoff)
+    orphans = [
+        *candidates.filter(provenance__kind="analytics-result", analysis_results__isnull=True),
+        *candidates.filter(provenance__kind="analytics-visualization", analytics_visualizations__isnull=True),
+        *candidates.filter(provenance__kind="analytics-visualization-spec", analytics_specs__isnull=True),
+    ]
+    for asset in orphans:
         soft_delete_asset(asset)
-        orphan_assets += 1
-    return {
-        "analysis_runs": analyses,
-        "visualizations": visualizations,
-        "orphan_assets": orphan_assets,
-    }
+    return {"analysis_runs": analyses, "visualizations": visualizations, "orphan_assets": len(orphans)}

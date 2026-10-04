@@ -173,7 +173,6 @@ See `.env.example` for all available variables. Key variables:
 | `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap servers | Yes |
 | `SENTRY_DSN` | Sentry DSN for error tracking | No |
 | `AI_PROVIDER` | AI provider adapter (`echo`/`disabled`) | No |
-| `PGVECTOR_ENABLED` | Enable Supabase pgvector semantic search | No (default: true) |
 | `VECTOR_EMBEDDING_DIMENSIONS` | Embedding width for the `chunk.embedding` column | No (default: 1536) |
 | `RAG_EMBEDDING_PROVIDER` | `openai`, `gemini` or `echo` (offline dev/test) | No (default: openai) |
 | `RAG_EMBEDDING_MODEL` | Embedding model name for OpenAI | No |

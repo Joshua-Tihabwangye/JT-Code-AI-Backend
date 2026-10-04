@@ -10,7 +10,7 @@ from django.db import transaction
 from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import APIException, PermissionDenied
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -34,13 +34,8 @@ from apps.jobs.serializers import (
     JobStepSerializer,
     WorkflowRunSerializer,
 )
+from apps.jobs.services import reserve_job_credits
 from apps.jobs.transitions import InvalidJobTransition, apply_status_update
-
-
-class PaymentRequired(APIException):
-    status_code = status.HTTP_402_PAYMENT_REQUIRED
-    default_detail = "Insufficient credits for this job."
-    default_code = "insufficient_credits"
 
 
 class JobViewSet(viewsets.ModelViewSet):
@@ -88,40 +83,7 @@ class JobViewSet(viewsets.ModelViewSet):
             self._enqueue_job(job)
 
     def _reserve_credits(self, job: Job):
-        # Calculate estimated cost based on task type
-        estimated_credits = self._estimate_credits(job.task_type, job.input_payload)
-        job.reserved_credits = estimated_credits
-        job.save(update_fields=["reserved_credits"])
-
-        # Reserve credits from the tenant wallet; the surrounding transaction
-        # rolls the job back when the wallet cannot cover the estimate.
-        try:
-            CreditService.reserve_credits(
-                user=self.request.user,
-                amount=estimated_credits,
-                request_id=job.request_id,
-                job_id=job.id,
-                reason=f"Job reservation: {job.task_type}",
-                organization=job.organization,
-            )
-        except ValueError as exc:
-            raise PaymentRequired(str(exc)) from exc
-
-    def _estimate_credits(self, task_type: str, input_payload: dict) -> Decimal:
-        # Simple estimation based on task type
-        estimates = {
-            Job.TaskType.GENERAL_QUESTION: Decimal("10"),
-            Job.TaskType.IMAGE_UNDERSTANDING: Decimal("50"),
-            Job.TaskType.IMAGE_GENERATION: Decimal("100"),
-            Job.TaskType.DOCUMENT_DRAFTING: Decimal("30"),
-            Job.TaskType.DOCUMENT_RENDERING: Decimal("20"),
-            Job.TaskType.FILE_CONVERSION: Decimal("15"),
-            Job.TaskType.SEARCH_RESEARCH: Decimal("40"),
-            Job.TaskType.RAG_QUERY: Decimal("25"),
-            Job.TaskType.KNOWLEDGE_INGESTION: Decimal("100"),
-            Job.TaskType.SCHEDULED_AUTOMATION: Decimal("10"),
-        }
-        return estimates.get(task_type, Decimal("10"))
+        reserve_job_credits(job, self.request.user)
 
     def _enqueue_job(self, job: Job):
         enqueue_job(job)

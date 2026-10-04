@@ -340,11 +340,11 @@ def test_visualization_uses_persisted_result_and_json_safe_plotly(analytics_org,
         return make_asset(
             organization,
             owner,
-            "chart-artifact",
+            kwargs["file_name"],
             format="png",
             original_filename=kwargs["file_name"],
             bytes=len(content),
-            checksum_sha256="c" * 64,
+            checksum_sha256=hashlib.sha256(content).hexdigest(),
         )
 
     monkeypatch.setattr("apps.assets.services.register_generated_asset", register)
@@ -353,6 +353,8 @@ def test_visualization_uses_persisted_result_and_json_safe_plotly(analytics_org,
     assert visualization.status == Visualization.Status.READY
     assert visualization.artifact_asset_id is not None
     assert visualization.result_schema["points"] == 1
+    assert visualization.spec_asset_id is not None
+    assert visualization.spec_asset.original_filename.endswith(".plotly.json")
     json.dumps(visualization.plotly_spec)
 
 
@@ -406,23 +408,213 @@ def test_analytics_tasks_have_dedicated_routes_and_limits():
 
 def test_streamlit_service_is_read_only_and_database_free():
     source = (Path(settings.BASE_DIR) / "streamlit_app" / "app.py").read_text()
-    lowered = source.lower()
+    tree = ast.parse(source)
     imports = {
         alias.name.split(".")[0]
-        for node in ast.walk(ast.parse(source))
+        for node in ast.walk(tree)
         if isinstance(node, ast.Import)
         for alias in node.names
     }
     imports.update(
         node.module.split(".")[0]
-        for node in ast.walk(ast.parse(source))
+        for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module
     )
-    assert "django" not in imports
-    assert "database_url" not in lowered
-    assert ".post(" not in lowered
-    assert ".put(" not in lowered
-    assert ".patch(" not in lowered
-    assert ".delete(" not in lowered
-    assert "text_input" not in lowered
-    assert 'client.get(f"{api_base}/visualizations/"' in lowered
+    assert "django" not in imports and "psycopg" not in imports
+    lowered = source.lower()
+    assert "database_url" not in lowered and "secret" not in lowered
+    calls = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"get", "post", "put", "patch", "delete"}
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "client"
+    ]
+    # Every JT-Code API call is a GET; the single POST is the Supabase sign-in.
+    assert calls.count("post") == 1 and not {"put", "patch", "delete"} & set(calls)
+    sign_in = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "supabase_sign_in"
+    )
+    assert "/auth/v1/token?grant_type=password" in ast.get_source_segment(source, sign_in)
+    assert "client.post(" not in "".join(
+        ast.get_source_segment(source, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name != "supabase_sign_in"
+    )
+
+
+# --- Isolation, ACL and new endpoints -------------------------------------------
+
+
+def test_sandbox_child_gets_no_credentials_and_isolated_interpreter(monkeypatch):
+    import subprocess
+
+    from apps.analytics import sandbox
+
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured.update(argv=argv, env=kwargs["env"], cwd=kwargs["cwd"])
+        return subprocess.CompletedProcess(argv, 0, stdout=b'{"ok": true, "profile": {}}', stderr=b"")
+
+    monkeypatch.setattr(sandbox.subprocess, "run", fake_run)
+    sandbox.run_engine("profile", b"x\n1\n", mime_type="text/csv")
+    assert captured["argv"][1] == "-I" and captured["argv"][2].endswith("engine.py")
+    joined = " ".join(f"{key}={value}" for key, value in captured["env"].items())
+    for secret in (
+        "DATABASE_URL",
+        "DJANGO_SECRET_KEY",
+        "IMAGEKIT_PRIVATE_KEY",
+        "SUPABASE",
+        "GEMINI",
+        "OPENAI",
+    ):
+        assert secret not in joined
+    assert captured["cwd"] == captured["env"]["HOME"]
+
+
+def test_sandbox_enforces_memory_and_time_limits(settings, monkeypatch):
+    import subprocess
+
+    from apps.analytics import sandbox
+
+    settings.ANALYTICS_SANDBOX_MEMORY_MB = 48
+    with pytest.raises((AnalysisError, sandbox.SandboxError)):
+        sandbox.run_engine("profile", b"x\n1\n", mime_type="text/csv")
+
+    def too_slow(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    monkeypatch.setattr(sandbox.subprocess, "run", too_slow)
+    with pytest.raises(AnalysisError, match="time limit"):
+        sandbox.run_engine("profile", b"x\n1\n", mime_type="text/csv")
+
+
+def test_inline_dataset_is_profiled_in_the_sandbox(api_client, analytics_org):
+    organization, owner, _viewer, _analyst = analytics_org
+    api_client.force_authenticate(owner)
+    response = api_client.post(
+        "/api/v1/analysis/datasets/",
+        {"name": "Sales", "mime_type": "text/csv", "inline_data": "team,amount\na,5\nb,7\n"},
+        format="json",
+        HTTP_X_ORGANIZATION_ID=str(organization.id),
+    )
+    assert response.status_code == 201, response.content
+    profiles = {column["name"]: column for column in response.json()["profile"]["columnProfiles"]}
+    assert profiles["amount"]["kind"] == "numeric" and profiles["amount"]["mean"] == 6.0
+    assert profiles["team"]["topValues"][0]["count"] == 1
+
+
+def test_datasets_cannot_wrap_another_members_private_asset(api_client, analytics_org):
+    organization, owner, viewer, _analyst = analytics_org
+    private = make_asset(organization, owner, "private-input", metadata={"content_type": "text/csv"})
+    editor_role = Role.objects.get(name=Role.RoleType.EDITOR)
+    UserRole.objects.create(user=viewer, role=editor_role, organization=organization)
+    api_client.force_authenticate(viewer)
+    response = api_client.post(
+        "/api/v1/analysis/datasets/",
+        {"name": "Leak", "mime_type": "text/csv", "asset": str(private.id)},
+        format="json",
+        HTTP_X_ORGANIZATION_ID=str(organization.id),
+    )
+    assert response.status_code == 400
+    assert "not found" in str(response.json()).lower()
+
+
+def test_end_to_end_pie_chart_stores_png_and_spec_with_valid_schema(analytics_org, monkeypatch):
+    organization, owner, _viewer, _analyst = analytics_org
+    dataset = make_dataset(organization, owner)
+    run = AnalysisRun.objects.create(
+        dataset=dataset,
+        owner=owner,
+        transform={"group_by": ["region"], "aggregate": {"revenue": "sum"}},
+    )
+    stored: dict[str, bytes] = {}
+
+    def register(content, **kwargs):
+        stored[kwargs["file_name"]] = content
+        return make_asset(
+            organization,
+            owner,
+            kwargs["file_name"],
+            bytes=len(content),
+            checksum_sha256=hashlib.sha256(content).hexdigest(),
+            original_filename=kwargs["file_name"],
+            metadata={"content_type": kwargs["content_type"]},
+        )
+
+    monkeypatch.setattr("apps.assets.services.register_generated_asset", register)
+    execute_analysis_run(str(run.id))
+    run.refresh_from_db()
+    assert run.status == AnalysisRun.Status.COMPLETED, run.error_message
+    assert run.result_schema["checksumSha256"] == hashlib.sha256(stored[f"analysis-{run.id}.csv"]).hexdigest()
+    monkeypatch.setattr(
+        "apps.analytics.services.bytes_for_asset", lambda asset: stored[asset.original_filename]
+    )
+    chart = Visualization.objects.create(
+        analysis_run=run,
+        kind=Visualization.Kind.PIE,
+        x_column="region",
+        y_column="revenue_sum",
+        title="Revenue",
+    )
+    execute_visualization(str(chart.id))
+    chart.refresh_from_db()
+    assert chart.status == Visualization.Status.READY, chart.error_message
+    assert chart.result_schema["kind"] == "pie" and chart.result_schema["points"] == 2
+    assert stored[f"visualization-{chart.id}.png"].startswith(b"\x89PNG")
+    assert json.loads(stored[f"visualization-{chart.id}.plotly.json"])["data"][0]["type"] == "pie"
+
+
+def test_run_retry_download_and_delete(
+    api_client, analytics_org, monkeypatch, django_capture_on_commit_callbacks
+):
+    organization, owner, viewer, _analyst = analytics_org
+    dataset = make_dataset(organization, owner)
+    result = make_asset(organization, owner, "run-result")
+    completed = AnalysisRun.objects.create(
+        dataset=dataset, owner=owner, status=AnalysisRun.Status.COMPLETED, result_asset=result
+    )
+    failed = AnalysisRun.objects.create(
+        dataset=dataset, owner=owner, status=AnalysisRun.Status.FAILED, transform={"limit": 1}
+    )
+    queued: list[str] = []
+    monkeypatch.setattr(execute_analysis_run, "delay", queued.append)
+    monkeypatch.setattr("apps.assets.imagekit.stream_file", lambda path: iter([b"region\nEast\n"]))
+    api_client.force_authenticate(owner)
+    headers = {"HTTP_X_ORGANIZATION_ID": str(organization.id)}
+
+    with django_capture_on_commit_callbacks(execute=True):
+        retried = api_client.post(f"/api/v1/analysis/runs/{failed.id}/retry/", **headers)
+    assert retried.status_code == 202 and queued == [retried.json()["id"]]
+    assert api_client.post(f"/api/v1/analysis/runs/{completed.id}/retry/", **headers).status_code == 409
+
+    download = api_client.get(f"/api/v1/analysis/runs/{completed.id}/download/", **headers)
+    assert download.status_code == 200 and b"".join(download.streaming_content) == b"region\nEast\n"
+
+    api_client.force_authenticate(viewer)
+    assert api_client.delete(f"/api/v1/analysis/runs/{completed.id}/", **headers).status_code == 404
+    api_client.force_authenticate(owner)
+    assert api_client.delete(f"/api/v1/analysis/runs/{completed.id}/", **headers).status_code == 204
+    result.refresh_from_db()
+    assert result.status == Asset.Status.DELETED
+
+
+def test_visualization_columns_must_exist_in_the_result(api_client, analytics_org):
+    organization, owner, _viewer, _analyst = analytics_org
+    run = AnalysisRun.objects.create(
+        dataset=make_dataset(organization, owner),
+        owner=owner,
+        status=AnalysisRun.Status.COMPLETED,
+        result_schema={"columns": ["region", "revenue"]},
+    )
+    api_client.force_authenticate(owner)
+    response = api_client.post(
+        "/api/v1/visualizations/",
+        {"analysis_run": str(run.id), "kind": "bar", "x_column": "region", "y_column": "missing"},
+        format="json",
+        HTTP_X_ORGANIZATION_ID=str(organization.id),
+    )
+    assert response.status_code == 400 and "y_column" in response.json().get("details", response.json())

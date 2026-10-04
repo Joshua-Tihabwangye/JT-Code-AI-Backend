@@ -223,6 +223,19 @@ def _finish(
     return locked
 
 
+def _cites_recorded_evidence(run: AgentRun) -> bool:
+    """True when the answer cites only evidence the run actually retrieved."""
+    import re
+
+    from apps.knowledge.models import Citation
+
+    cited = {int(value) for value in re.findall(r"\[(\d+)]", run.final_output or "")}
+    if not cited:
+        return False
+    recorded = set(Citation.objects.filter(agent_run=run).values_list("citation_index", flat=True))
+    return cited.issubset(recorded)
+
+
 def _evaluate(run: AgentRun, ctx: ExecutionContext | None) -> None:
     """Heuristic evaluation recorded for every terminal run (regression tracking)."""
     budget = _budget(run)
@@ -234,7 +247,7 @@ def _evaluate(run: AgentRun, ctx: ExecutionContext | None) -> None:
         "withinBudget": run.model_calls <= budget.max_model_calls
         and run.tool_calls <= budget.max_tool_calls
         and run.cost_usd <= budget.max_cost_usd,
-        "groundedWhenRetrieving": ("knowledge.search" not in invoked) or bool(run.final_output.strip()),
+        "groundedWhenRetrieving": ("knowledge.search" not in invoked) or _cites_recorded_evidence(run),
         "safetyFlags": len(flags),
         "errorCode": run.error_code,
         "steps": run.steps,
@@ -308,7 +321,10 @@ def execute_run(run_id: Any, *, task_id: str = "", executor: Any = None) -> Agen
         graph_input: MessagesState | None = (
             None if resuming else {"messages": initial_messages(run.input_text)}
         )
-        graph.invoke(graph_input, config)
+        from apps.knowledge.evidence import agent_run_evidence
+
+        with agent_run_evidence(run):
+            graph.invoke(graph_input, config)
         state = graph.get_state(config)
         if state.next:
             # Paused by an interrupt (e.g. a human approval); persist usage so far.

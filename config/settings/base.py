@@ -225,6 +225,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.knowledge.tasks.sync_sources",
         "schedule": 300.0,
     },
+    "recover-stalled-knowledge-ingestion": {
+        "task": "apps.knowledge.tasks.recover_stalled_ingestion",
+        "schedule": 600.0,
+        "options": {"expires": 600},
+    },
     "purge-deleted-assets": {
         "task": "apps.assets.tasks.purge_deleted_assets",
         "schedule": 3600.0,
@@ -232,6 +237,11 @@ CELERY_BEAT_SCHEDULE = {
     },
     "reconcile-imagekit-assets": {
         "task": "apps.assets.tasks.reconcile_assets",
+        "schedule": 3600.0,
+        "options": {"expires": 3600},
+    },
+    "sweep-imagekit-orphans": {
+        "task": "apps.assets.tasks.sweep_orphans",
         "schedule": 86400.0,
         "options": {"expires": 21600},
     },
@@ -341,6 +351,23 @@ ASSET_ORPHAN_GRACE_HOURS = int(env("ASSET_ORPHAN_GRACE_HOURS", "24"))
 IMAGEKIT_RECONCILE_PAGE_SIZE = int(env("IMAGEKIT_RECONCILE_PAGE_SIZE", "100"))
 IMAGEKIT_RECONCILE_MAX_PAGES = int(env("IMAGEKIT_RECONCILE_MAX_PAGES", "100"))
 ASSET_LOCAL_FALLBACK_ENABLED = env_bool("ASSET_LOCAL_FALLBACK_ENABLED", False)
+# ImageKit API bases (override only for a proxy or a regional endpoint).
+IMAGEKIT_UPLOAD_API_BASE = env("IMAGEKIT_UPLOAD_API_BASE", "https://upload.imagekit.io/api")
+IMAGEKIT_API_BASE = env("IMAGEKIT_API_BASE", "https://api.imagekit.io/v1")
+# Upload content types are verified against the file's magic bytes. SVG is
+# deliberately absent: it can carry script.
+_DEFAULT_ASSET_TYPES = (
+    "image/png,image/jpeg,image/gif,image/webp,application/pdf,application/json,application/zip,"
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+    "text/csv,text/markdown,text/plain"
+)
+ASSET_ALLOWED_CONTENT_TYPES = tuple(env_list("ASSET_ALLOWED_CONTENT_TYPES", _DEFAULT_ASSET_TYPES))
+# Reconcile verifies READY assets in batches, re-checking each at most this often.
+IMAGEKIT_RECONCILE_BATCH_SIZE = int(env("IMAGEKIT_RECONCILE_BATCH_SIZE", "200"))
+IMAGEKIT_RECONCILE_INTERVAL_HOURS = int(env("IMAGEKIT_RECONCILE_INTERVAL_HOURS", "24"))
+IMAGEKIT_RECONCILE_MAX_DEPTH = int(env("IMAGEKIT_RECONCILE_MAX_DEPTH", "6"))
+ASSET_DELETE_MAX_ATTEMPTS = int(env("ASSET_DELETE_MAX_ATTEMPTS", "10"))
 
 # Phase 12 analytics workers run only a bounded declarative transform language.
 # Deploy analysis and visualization queues in separate containers with matching
@@ -359,6 +386,13 @@ ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS = int(env("ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS
 ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS = int(env("ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS", "270"))
 ANALYTICS_TASK_TIME_LIMIT_SECONDS = int(env("ANALYTICS_TASK_TIME_LIMIT_SECONDS", "300"))
 ANALYTICS_STALLED_AFTER_MINUTES = int(env("ANALYTICS_STALLED_AFTER_MINUTES", "15"))
+# Isolated engine process limits (address space, CPU seconds, wall clock).
+ANALYTICS_SANDBOX_MEMORY_MB = int(env("ANALYTICS_SANDBOX_MEMORY_MB", "1536"))
+ANALYTICS_SANDBOX_CPU_SECONDS = int(env("ANALYTICS_SANDBOX_CPU_SECONDS", "240"))
+ANALYTICS_SANDBOX_TIMEOUT_SECONDS = int(env("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250"))
+# Plotly specs up to this size are also kept inline on the visualization row;
+# the full spec is always stored as an ImageKit asset.
+ANALYTICS_INLINE_SPEC_BYTES = int(env("ANALYTICS_INLINE_SPEC_BYTES", "262144"))
 
 KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
 KAFKA_CLIENT_ID = env("KAFKA_CLIENT_ID", "jt-code-api")
@@ -449,28 +483,39 @@ STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
 STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
 
 # Knowledge/RAG
-# Supabase PostgreSQL (pgvector) is the vector store. The `vector` extension is
-# enabled by the knowledge.0003 migration.
-PGVECTOR_ENABLED = env_bool("PGVECTOR_ENABLED", True)
+# Supabase PostgreSQL (pgvector) is the only vector store. The `vector` extension
+# is enabled by the knowledge.0003 migration; there is no disabled mode.
 VECTOR_EMBEDDING_DIMENSIONS = int(env("VECTOR_EMBEDDING_DIMENSIONS", "1536"))
+# Minimum cosine similarity for a semantic candidate (0 keeps every candidate and
+# lets hybrid fusion and reranking decide).
 VECTOR_MIN_SIMILARITY = env_float("VECTOR_MIN_SIMILARITY", 0.0)
-RAG_EMBEDDING_PROVIDER = env("RAG_EMBEDDING_PROVIDER", "openai")
+RAG_EMBEDDING_PROVIDER = env("RAG_EMBEDDING_PROVIDER", "gemini")
 RAG_EMBEDDING_MODEL = env("RAG_EMBEDDING_MODEL", "text-embedding-3-small")
+RAG_EMBEDDING_BATCH_SIZE = int(env("RAG_EMBEDDING_BATCH_SIZE", "64"))
 RAG_CHUNK_SIZE = int(env("RAG_CHUNK_SIZE", "1000"))
 RAG_CHUNK_OVERLAP = int(env("RAG_CHUNK_OVERLAP", "200"))
+# Default result count for search; final evidence count for grounded answers.
 RAG_TOP_K = int(env("RAG_TOP_K", "10"))
 RAG_RERANK_TOP_K = int(env("RAG_RERANK_TOP_K", "5"))
-RAG_SIMILARITY_THRESHOLD = env_float("RAG_SIMILARITY_THRESHOLD", 0.7)
 RAG_HYBRID_CANDIDATES = int(env("RAG_HYBRID_CANDIDATES", "30"))
+# "model" reranks/judges through the AI gateway alias below; "deterministic"
+# uses the offline scorer only. Model failures fall back and are reported.
+RAG_RERANKER = env("RAG_RERANKER", "model")
+RAG_RERANK_MODEL_ALIAS = env("RAG_RERANK_MODEL_ALIAS", "classification")
+RAG_JUDGE = env("RAG_JUDGE", "model")
+RAG_JUDGE_MODEL_ALIAS = env("RAG_JUDGE_MODEL_ALIAS", "classification")
 RAG_MAX_CONTEXT_TOKENS = int(env("RAG_MAX_CONTEXT_TOKENS", "6000"))
 RAG_EVAL_MIN_RECALL = env_float("RAG_EVAL_MIN_RECALL", 0.8)
+RAG_EVAL_MIN_MRR = env_float("RAG_EVAL_MIN_MRR", 0.5)
 RAG_MAX_EXTRACTED_BYTES = int(env("RAG_MAX_EXTRACTED_BYTES", str(5 * 1024 * 1024)))
 RAG_URL_FETCH_TIMEOUT_SECONDS = float(env("RAG_URL_FETCH_TIMEOUT_SECONDS", "30"))
 RAG_EMBEDDING_TIMEOUT_SECONDS = float(env("RAG_EMBEDDING_TIMEOUT_SECONDS", "30"))
 RAG_EMBEDDING_MAX_RETRIES = int(env("RAG_EMBEDDING_MAX_RETRIES", "2"))
+# Sources/documents stuck mid-ingestion longer than this are failed and requeued.
+RAG_INGESTION_STALLED_MINUTES = int(env("RAG_INGESTION_STALLED_MINUTES", "30"))
+RAG_INGESTION_MAX_RETRIES = int(env("RAG_INGESTION_MAX_RETRIES", "3"))
 
-# Embedding provider credentials (server-side only). Only the configured
-# provider is loaded at runtime; the extras are dependency-free placeholders.
+# Embedding provider credentials (server-side only).
 OPENAI_API_KEY = env("OPENAI_API_KEY")
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 GEMINI_EMBEDDING_MODEL = env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
@@ -516,6 +561,9 @@ SPECTACULAR_SETTINGS = {
     "SECURITY": [{"SupabaseBearer": []}],
     "COMPONENT_SPLIT_REQUEST": True,
     "ENUM_NAME_OVERRIDES": {
+        "AssetVisibility": "apps.assets.models.Asset.Visibility",
+        "VisualizationKind": "apps.analytics.models.Visualization.Kind",
+        "KnowledgeDocumentVisibility": "apps.knowledge.models.Document.Visibility",
         "ModelStatus": [
             ("active", "Active"),
             ("deprecated", "Deprecated"),

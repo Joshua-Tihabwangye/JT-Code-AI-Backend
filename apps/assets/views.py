@@ -1,54 +1,176 @@
+"""Asset API (``/api/v1/files/``) over the ImageKit registry.
+
+Reads are filtered by :mod:`apps.assets.access` (private assets: owner and
+organization admins; organization assets: every member). Changing or deleting
+an asset requires its owner or an admin; uploading requires editor access.
+"""
+
 from __future__ import annotations
 
 import secrets
+import uuid
 
 from django.conf import settings
 from django.db import transaction
+from django.http import StreamingHttpResponse
 from django.utils import timezone
-from rest_framework import status
-from rest_framework.generics import ListAPIView
+from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
+from rest_framework import serializers, status
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.assets.access import assets_visible_to, can_manage_asset
 from apps.assets.imagekit import (
+    ImageKitError,
     content_checksum,
+    content_matches_type,
     generate_signed_delivery_url,
-    generate_upload_auth,
+    generate_upload_token,
     imagekit_is_configured,
     provider_identity_fingerprint,
     sanitize_file_name,
+    stream_file,
+    upload_url,
     user_upload_folder,
+    validate_upload_type,
     verify_imagekit_file,
 )
-from apps.assets.models import Asset, UploadIntent
+from apps.assets.models import Asset, ConversationAttachment, UploadIntent
 from apps.assets.serializers import (
     AssetAccessResponseSerializer,
     AssetSerializer,
+    AssetUpdateSerializer,
+    AssetUploadSerializer,
+    AttachSerializer,
+    BulkDeleteSerializer,
     CompleteUploadSerializer,
     SignatureRequestSerializer,
 )
+from apps.assets.services import asset_references, register_uploaded_asset, restore_asset, soft_delete_asset
+from apps.core.throttling import BurstThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
     organization_for_request,
+    require_organization_write_access,
     tenant_scoped_queryset,
 )
 
+_LIST_LIMIT = 500
 
-class AssetListView(ListAPIView):
-    serializer_class = AssetSerializer
 
-    def get_queryset(self):
-        return (
-            tenant_scoped_queryset(Asset.objects.all(), self.request.user)
+def _unavailable() -> Response:
+    return Response({"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+def _serialize(assets: list[Asset]) -> list[dict]:
+    references = asset_references([asset.id for asset in assets])
+    return list(AssetSerializer(assets, many=True, context={"references": references}).data)
+
+
+def _visible_asset(request: Request, asset_id, *, include_deleted: bool = False) -> Asset:
+    queryset = assets_visible_to(request.user).filter(id=asset_id)
+    if not include_deleted:
+        queryset = queryset.exclude(status=Asset.Status.DELETED)
+    asset = queryset.first()
+    if asset is None:
+        raise NotFound("Asset not found.")
+    return asset
+
+
+def _require_manager(request: Request, asset: Asset) -> None:
+    require_organization_write_access(request.user, asset.organization_id)
+    if not can_manage_asset(request.user, asset):
+        raise PermissionDenied("Only the asset owner or an organization admin may change this asset.")
+
+
+def _delete(request: Request, asset: Asset, *, force: bool) -> str | None:
+    """Soft-delete ``asset``; return a refusal reason when it is still referenced."""
+    _require_manager(request, asset)
+    references = asset_references([asset.id]).get(str(asset.id), [])
+    if references and not force:
+        return f"The asset is still used by: {', '.join(references)}. Pass force=true to delete it anyway."
+    soft_delete_asset(asset)
+    return None
+
+
+class AssetListView(APIView):
+    """``GET`` lists visible files (``?page=`` for pagination); ``POST`` uploads one file."""
+
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    throttle_classes = [BurstThrottle]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("q", str, required=False),
+            OpenApiParameter("page", int, required=False),
+        ],
+        responses={200: AssetSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        organization = organization_for_request(request, required=True)
+        queryset = (
+            assets_visible_to(request.user, organization.id)
             .exclude(status=Asset.Status.DELETED)
             .order_by("-created_at")
         )
+        if query := request.query_params.get("q"):
+            queryset = queryset.filter(name__icontains=query) | queryset.filter(
+                original_filename__icontains=query
+            )
+        if "page" in request.query_params:
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(queryset, request, view=self) or []
+            return paginator.get_paginated_response(_serialize(list(page)))
+        return Response(_serialize(list(queryset[:_LIST_LIMIT])))
+
+    @extend_schema(request={"multipart/form-data": AssetUploadSerializer}, responses={201: AssetSerializer})
+    def post(self, request: Request) -> Response:
+        """Proxy a file to ImageKit as a private object after size and byte-signature checks."""
+        serializer = AssetUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        organization = organization_for_request(request, required=True)
+        upload = serializer.validated_data["file"]
+        if upload.size > settings.IMAGEKIT_MAX_UPLOAD_BYTES:
+            return Response(
+                {"detail": "File exceeds the configured upload limit."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        try:
+            content_type = validate_upload_type(upload.content_type or "")
+        except ImageKitError as exc:
+            raise ValidationError({"file": str(exc)}) from exc
+        content = upload.read()
+        if not content or not content_matches_type(content[:512], content_type):
+            raise ValidationError({"file": "The file's contents do not match its declared type."})
+        if not imagekit_is_configured():
+            return _unavailable()
+        try:
+            asset = register_uploaded_asset(
+                content,
+                owner=request.user,
+                organization=organization,
+                file_name=sanitize_file_name(upload.name or "upload"),
+                content_type=content_type,
+            )
+        except (ImageKitError, OSError) as exc:
+            return Response({"detail": f"Upload failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
+        visibility = serializer.validated_data["visibility"]
+        if visibility != asset.visibility:
+            asset.visibility = visibility
+            asset.save(update_fields=["visibility", "updated_at"])
+        return Response(_serialize([asset])[0], status=status.HTTP_201_CREATED)
 
 
 class ImageKitSignatureView(APIView):
+    """Issue a V2 upload JWT that binds folder, file name, privacy and size."""
+
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = SignatureRequestSerializer
 
@@ -61,42 +183,41 @@ class ImageKitSignatureView(APIView):
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
         if not imagekit_is_configured():
-            return Response(
-                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+            return _unavailable()
         organization = organization_for_request(request, required=True)
-        folder = user_upload_folder(request.user)
+        intent_id = uuid.uuid4()
         expires_at = timezone.now() + timezone.timedelta(seconds=settings.IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS)
-        intent = UploadIntent(
+        upload_params = {
+            "fileName": f"{intent_id}-{sanitize_file_name(serializer.validated_data['originalFilename'])}",
+            "folder": user_upload_folder(request.user, organization.id),
+            "useUniqueFileName": "false",
+            "overwriteFile": "false",
+            "isPrivateFile": "true",
+            "checks": f'"file.size" = {serializer.validated_data["bytes"]}',
+        }
+        intent = UploadIntent.objects.create(
+            id=intent_id,
             owner=request.user,
             organization=organization,
-            token="pending",
-            folder=folder,
-            file_name="pending",
+            token=secrets.token_urlsafe(32),
+            folder=upload_params["folder"],
+            file_name=upload_params["fileName"],
             original_filename=serializer.validated_data["originalFilename"],
             content_type=serializer.validated_data["contentType"],
             expected_bytes=serializer.validated_data["bytes"],
             expires_at=expires_at,
         )
-        intent.file_name = f"{intent.id}-{sanitize_file_name(serializer.validated_data['originalFilename'])}"
-        auth = generate_upload_auth(expire=int(expires_at.timestamp()))
-        intent.token = auth["token"]
-        intent.save()
         return Response(
             {
                 "uploadIntentId": str(intent.id),
+                "uploadToken": intent.token,
+                "uploadUrl": upload_url("v2"),
+                "token": generate_upload_token(upload_params, expires_at=int(expires_at.timestamp())),
+                "uploadParams": upload_params,
+                "expire": int(expires_at.timestamp()),
                 "publicKey": settings.IMAGEKIT_PUBLIC_KEY,
-                "endpointUrl": settings.IMAGEKIT_ENDPOINT_URL,
-                "uploadUrl": "https://upload.imagekit.io/api/v1/files/upload",
-                "folder": folder,
-                "fileName": intent.file_name,
-                "useUniqueFileName": False,
-                "overwriteFile": False,
-                "isPrivateFile": True,
-                "checks": f'"file.size" <= {intent.expected_bytes}',
-                "token": auth["token"],
-                "expire": auth["expire"],
-                "signature": auth["signature"],
+                "folder": upload_params["folder"],
+                "fileName": upload_params["fileName"],
             }
         )
 
@@ -121,23 +242,20 @@ class CompleteUploadView(APIView):
         if intent.status == UploadIntent.Status.COMPLETED:
             asset = Asset.objects.filter(imagekit_file_id=intent.imagekit_file_id).first()
             if asset and asset.owner_id == request.user.id:
-                return Response(AssetSerializer(asset).data, status=status.HTTP_200_OK)
+                return Response(_serialize([asset])[0], status=status.HTTP_200_OK)
             return Response({"detail": "Upload intent has already been consumed."}, status=409)
         if intent.status != UploadIntent.Status.PENDING or intent.expires_at <= timezone.now():
             UploadIntent.objects.filter(id=intent.id).update(status=UploadIntent.Status.EXPIRED)
             return Response({"detail": "Upload intent has expired."}, status=status.HTTP_410_GONE)
         file_id = serializer.validated_data["fileId"]
         file_path = serializer.validated_data["filePath"]
-        expected_path = f"{intent.folder.rstrip('/')}/{intent.file_name}"
-        if file_path != expected_path:
+        if file_path != f"{intent.folder.rstrip('/')}/{intent.file_name}":
             return Response(
                 {"detail": "Uploaded asset is outside the authorized folder."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         if not imagekit_is_configured():
-            return Response(
-                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+            return _unavailable()
         try:
             resource = verify_imagekit_file(file_id)
         except Exception:
@@ -148,29 +266,22 @@ class CompleteUploadView(APIView):
             return Response({"detail": "ImageKit asset path mismatch."}, status=status.HTTP_409_CONFLICT)
         if not all(resource.get(field) for field in ("url", "fileType")):
             return Response(
-                {"detail": "ImageKit asset metadata is incomplete."},
-                status=status.HTTP_409_CONFLICT,
+                {"detail": "ImageKit asset metadata is incomplete."}, status=status.HTTP_409_CONFLICT
             )
         if int(resource.get("size", -1)) != intent.expected_bytes:
             return Response({"detail": "ImageKit asset size mismatch."}, status=status.HTTP_409_CONFLICT)
         if resource.get("isPrivateFile") is not True:
             return Response({"detail": "ImageKit asset must be private."}, status=status.HTTP_409_CONFLICT)
         try:
-            checksum, delivered_content_type = content_checksum(
-                file_path, expected_size=intent.expected_bytes
-            )
+            checksum, _delivered_type, head = content_checksum(file_path, expected_size=intent.expected_bytes)
         except Exception:
             return Response(
                 {"detail": "ImageKit asset content could not be verified."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if (
-            delivered_content_type
-            and delivered_content_type != "application/octet-stream"
-            and delivered_content_type != intent.content_type
-        ):
+        if not content_matches_type(head, intent.content_type):
             return Response(
-                {"detail": "ImageKit asset content type mismatch."},
+                {"detail": "The uploaded bytes do not match the declared content type."},
                 status=status.HTTP_409_CONFLICT,
             )
         with transaction.atomic():
@@ -178,12 +289,11 @@ class CompleteUploadView(APIView):
             if locked_intent.status != UploadIntent.Status.PENDING:
                 asset = Asset.objects.filter(imagekit_file_id=locked_intent.imagekit_file_id).first()
                 if asset:
-                    return Response(AssetSerializer(asset).data, status=status.HTTP_200_OK)
+                    return Response(_serialize([asset])[0], status=status.HTTP_200_OK)
                 return Response({"detail": "Upload intent is no longer available."}, status=409)
             if Asset.objects.filter(imagekit_file_id=file_id).exists():
                 return Response(
-                    {"detail": "ImageKit file is already registered."},
-                    status=status.HTTP_409_CONFLICT,
+                    {"detail": "ImageKit file is already registered."}, status=status.HTTP_409_CONFLICT
                 )
             version_name = str((resource.get("versionInfo") or {}).get("name") or "")
             version_suffix = version_name.rsplit(" ", 1)[-1]
@@ -198,21 +308,24 @@ class CompleteUploadView(APIView):
                 bytes=int(resource["size"]),
                 version=int(version_suffix) if version_suffix.isdigit() else 0,
                 original_filename=intent.original_filename,
+                name=intent.original_filename,
                 metadata={
                     "thumbnail_url": resource.get("thumbnailUrl"),
                     "version_info": resource.get("versionInfo"),
                     "content_type": intent.content_type,
-                    "delivered_content_type": delivered_content_type,
                 },
                 checksum_sha256=checksum,
                 provider_fingerprint=provider_identity_fingerprint(resource),
                 provenance={
                     "provider": "imagekit",
+                    "origin": "direct-upload",
                     "provider_file_id": file_id,
                     "upload_intent_id": str(intent.id),
                     "verified_at": timezone.now().isoformat(),
                     "verified_by": str(request.user.id),
+                    "fingerprintVersion": 2,
                 },
+                last_verified_at=timezone.now(),
             )
             locked_intent.status = UploadIntent.Status.COMPLETED
             locked_intent.imagekit_file_id = file_id
@@ -225,31 +338,27 @@ class CompleteUploadView(APIView):
                     "assetId": str(asset.id),
                     "fileId": file_id,
                     "ownerId": str(request.user.id),
+                    "organizationId": str(organization.id),
                     "resourceType": asset.resource_type,
                     "bytes": asset.bytes,
+                    "origin": "direct-upload",
                 },
             )
-        return Response(AssetSerializer(asset).data, status=status.HTTP_201_CREATED)
+        return Response(_serialize([asset])[0], status=status.HTTP_201_CREATED)
 
 
 class AssetAccessView(APIView):
-    """Return a short-lived provider URL only after tenant authorization."""
+    """Return a short-lived provider URL only after asset authorization."""
 
     permission_classes = [IsAuthenticated]
     serializer_class = AssetAccessResponseSerializer
 
     def post(self, request: Request, id) -> Response:
-        asset = (
-            tenant_scoped_queryset(Asset.objects.filter(id=id), request.user)
-            .filter(status=Asset.Status.READY)
-            .first()
-        )
+        asset = assets_visible_to(request.user).filter(id=id, status=Asset.Status.READY).first()
         if asset is None:
             return Response({"detail": "Asset not found."}, status=status.HTTP_404_NOT_FOUND)
         if not imagekit_is_configured():
-            return Response(
-                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
-            )
+            return _unavailable()
         return Response(
             {
                 "assetId": str(asset.id),
@@ -259,35 +368,140 @@ class AssetAccessView(APIView):
         )
 
 
+class AssetDownloadView(APIView):
+    """Stream an asset's bytes through the API (no provider URL leaves the server)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={(200, "application/octet-stream"): bytes})
+    def get(self, request: Request, id) -> StreamingHttpResponse | Response:
+        asset = assets_visible_to(request.user).filter(id=id, status=Asset.Status.READY).first()
+        if asset is None:
+            return Response({"detail": "Asset not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not imagekit_is_configured():
+            return _unavailable()
+        response = StreamingHttpResponse(
+            stream_file(asset.imagekit_file_path), content_type=asset.content_type
+        )
+        response["Content-Length"] = str(asset.bytes)
+        response["Content-Disposition"] = f'attachment; filename="{sanitize_file_name(asset.display_name)}"'
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
 class AssetDetailView(APIView):
-    """Read or soft-delete a tenant-owned asset; provider deletion is delayed."""
+    """Read, rename/re-share, or soft-delete an asset; provider deletion is delayed."""
 
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
-    serializer_class = AssetSerializer
 
+    @extend_schema(responses={200: AssetSerializer})
     def get(self, request: Request, id) -> Response:
-        asset = tenant_scoped_queryset(Asset.objects.filter(id=id), request.user).first()
-        if asset is None:
-            return Response({"detail": "Asset not found."}, status=status.HTTP_404_NOT_FOUND)
-        self.check_object_permissions(request, asset)
-        return Response(AssetSerializer(asset).data)
+        asset = _visible_asset(request, id, include_deleted=True)
+        return Response(_serialize([asset])[0])
 
+    @extend_schema(request=AssetUpdateSerializer, responses={200: AssetSerializer})
+    def patch(self, request: Request, id) -> Response:
+        asset = _visible_asset(request, id)
+        _require_manager(request, asset)
+        serializer = AssetUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fields = []
+        if "name" in serializer.validated_data:
+            asset.name = serializer.validated_data["name"].strip()[:500]
+            fields.append("name")
+        if "visibility" in serializer.validated_data:
+            asset.visibility = serializer.validated_data["visibility"]
+            fields.append("visibility")
+        if fields:
+            asset.save(update_fields=[*fields, "updated_at"])
+        return Response(_serialize([asset])[0])
+
+    @extend_schema(parameters=[OpenApiParameter("force", bool, required=False)], responses={204: None})
     def delete(self, request: Request, id) -> Response:
-        asset = (
-            tenant_scoped_queryset(Asset.objects.filter(id=id), request.user)
-            .exclude(status=Asset.Status.DELETED)
-            .first()
-        )
-        if asset is None:
-            return Response({"detail": "Asset not found."}, status=status.HTTP_404_NOT_FOUND)
-        self.check_object_permissions(request, asset)
-        asset.status = Asset.Status.DELETED
-        asset.deleted_at = timezone.now()
-        asset.deletion_error = ""
-        asset.save(update_fields=["status", "deleted_at", "deletion_error", "updated_at"])
-        add_outbox_event(
-            "asset.deleted",
-            str(asset.id),
-            {"assetId": str(asset.id), "fileId": asset.imagekit_file_id, "ownerId": str(asset.owner_id)},
-        )
+        asset = _visible_asset(request, id)
+        refusal = _delete(request, asset, force=request.query_params.get("force") in {"1", "true"})
+        if refusal:
+            return Response({"detail": refusal}, status=status.HTTP_409_CONFLICT)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AssetRestoreView(APIView):
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+
+    @extend_schema(request=None, responses={200: AssetSerializer})
+    def post(self, request: Request, id) -> Response:
+        asset = _visible_asset(request, id, include_deleted=True)
+        _require_manager(request, asset)
+        if not restore_asset(asset):
+            return Response(
+                {"detail": "Only soft-deleted assets whose provider file still exists can be restored."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(_serialize([asset])[0])
+
+
+class AssetBulkDeleteView(APIView):
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+
+    @extend_schema(
+        request=BulkDeleteSerializer,
+        responses={
+            200: inline_serializer(
+                "AssetBulkDeleteResult",
+                {
+                    "deleted": serializers.ListField(child=serializers.UUIDField()),
+                    "skipped": serializers.ListField(child=serializers.DictField()),
+                },
+            )
+        },
+    )
+    def post(self, request: Request) -> Response:
+        serializer = BulkDeleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        deleted, skipped = [], []
+        assets = {
+            str(asset.id): asset
+            for asset in assets_visible_to(request.user)
+            .filter(id__in=serializer.validated_data["ids"])
+            .exclude(status=Asset.Status.DELETED)
+        }
+        for asset_id in map(str, serializer.validated_data["ids"]):
+            asset = assets.get(asset_id)
+            if asset is None:
+                skipped.append({"id": asset_id, "reason": "not found"})
+                continue
+            try:
+                refusal = _delete(request, asset, force=serializer.validated_data["force"])
+            except PermissionDenied as exc:
+                refusal = str(exc.detail)
+            if refusal:
+                skipped.append({"id": asset_id, "reason": refusal})
+            else:
+                deleted.append(asset_id)
+        return Response({"deleted": deleted, "skipped": skipped})
+
+
+class AssetAttachView(APIView):
+    """Attach a readable file to a conversation the caller can write to."""
+
+    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+
+    @extend_schema(request=AttachSerializer, responses={200: AssetSerializer})
+    def post(self, request: Request, id) -> Response:
+        from apps.conversations.models import Conversation
+
+        asset = _visible_asset(request, id)
+        serializer = AttachSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        conversation = tenant_scoped_queryset(
+            Conversation.objects.filter(id=serializer.validated_data["conversationId"]),
+            request.user,
+            organization_id=asset.organization_id,
+        ).first()
+        if conversation is None:
+            raise NotFound("Conversation not found in the asset's organization.")
+        require_organization_write_access(request.user, asset.organization_id)
+        ConversationAttachment.objects.get_or_create(
+            asset=asset, conversation=conversation, defaults={"attached_by": request.user}
+        )
+        return Response(_serialize([asset])[0])

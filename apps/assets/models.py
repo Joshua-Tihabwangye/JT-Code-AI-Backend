@@ -10,13 +10,23 @@ class Asset(models.Model):
         QUARANTINED = "quarantined", "Quarantined"
         DELETED = "deleted", "Deleted"
 
+    class Visibility(models.TextChoices):
+        # Owner and organization admins only. Consumers (knowledge, analytics,
+        # documents) expose derived content under their own access policies.
+        PRIVATE = "private", "Private"
+        ORGANIZATION = "organization", "Organization"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="assets")
+    # Assets belong to the organization; removing a user must not delete them.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name="assets", null=True, blank=True
+    )
     organization = models.ForeignKey(
         "identity.Organization",
         on_delete=models.CASCADE,
         related_name="assets",
     )
+    name = models.CharField(max_length=500, blank=True)
     imagekit_file_id = models.CharField(max_length=500, unique=True)
     imagekit_file_path = models.CharField(max_length=1000, blank=True)
     secure_url = models.URLField(max_length=1000)
@@ -26,6 +36,9 @@ class Asset(models.Model):
     version = models.PositiveBigIntegerField(default=0)
     original_filename = models.CharField(max_length=500)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.READY)
+    visibility = models.CharField(
+        max_length=20, choices=Visibility.choices, default=Visibility.PRIVATE, db_index=True
+    )
     metadata = models.JSONField(default=dict, blank=True)
     checksum_sha256 = models.CharField(max_length=64, blank=True, db_index=True)
     provider_fingerprint = models.CharField(max_length=64, blank=True, db_index=True)
@@ -34,6 +47,7 @@ class Asset(models.Model):
     provider_deleted_at = models.DateTimeField(null=True, blank=True)
     deletion_error = models.TextField(blank=True)
     deletion_attempts = models.PositiveIntegerField(default=0)
+    last_verified_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -45,6 +59,14 @@ class Asset(models.Model):
 
     def __str__(self):
         return f"{self.original_filename} ({self.resource_type}) - {self.status}"
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.original_filename
+
+    @property
+    def content_type(self) -> str:
+        return str((self.metadata or {}).get("content_type") or "application/octet-stream")
 
 
 class UploadIntent(models.Model):
@@ -80,3 +102,25 @@ class UploadIntent(models.Model):
 
     def __str__(self):
         return f"Upload {self.id} ({self.status})"
+
+
+class ConversationAttachment(models.Model):
+    """A file attached to a conversation by a member who can read both."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="conversation_attachments")
+    conversation = models.ForeignKey(
+        "conversations.Conversation", on_delete=models.CASCADE, related_name="attachments"
+    )
+    attached_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name="+", null=True, blank=True
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("asset", "conversation"), name="uniq_conversation_attachment")
+        ]
+
+    def __str__(self):
+        return f"{self.asset_id} in {self.conversation_id}"

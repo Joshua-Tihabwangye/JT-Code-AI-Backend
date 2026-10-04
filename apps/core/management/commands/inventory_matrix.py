@@ -103,7 +103,7 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         label="Supabase PostgreSQL + pgvector",
         distributions=("pgvector",),
         modules=("pgvector",),
-        settings_keys=("PGVECTOR_ENABLED", "VECTOR_EMBEDDING_DIMENSIONS"),
+        settings_keys=("VECTOR_EMBEDDING_DIMENSIONS", "VECTOR_MIN_SIMILARITY"),
         adr="ADR-003",
         purpose="Active vector store; ADR-003 supersedes Pinecone (apps.knowledge)",
     ),
@@ -186,10 +186,10 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
     IntegrationSpec(
         key="gemini",
         label="Google Gemini",
-        distributions=("google-generativeai",),
-        modules=("google.generativeai", "google"),
-        settings_keys=("GEMINI_API_KEY", "GEMINI_EMBEDDING_MODEL"),
-        purpose="Gemini chat and embeddings adapter (apps.ai_gateway, apps.knowledge)",
+        distributions=(),
+        modules=(),
+        settings_keys=("GEMINI_API_KEY", "GEMINI_API_BASE", "GEMINI_EMBEDDING_MODEL"),
+        purpose="Gemini REST chat and embeddings adapters over httpx (apps.ai_gateway, apps.knowledge)",
     ),
     IntegrationSpec(
         key="langgraph",

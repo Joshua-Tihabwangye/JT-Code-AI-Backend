@@ -4,7 +4,6 @@ import io
 
 import markdown
 
-from apps.assets.imagekit import upload_bytes_to_imagekit
 from apps.documents.models import Document
 
 
@@ -57,12 +56,3 @@ def render_docx(document: Document) -> bytes:
 
 def _split_blocks(content: str) -> list[str]:
     return [b for b in content.split("\n\n") if b.strip()]
-
-
-def upload_rendered_bytes(content: bytes, *, file_name: str, folder: str) -> str | None:
-    return upload_bytes_to_imagekit(
-        content,
-        file_name=file_name,
-        folder=folder,
-        content_type="application/octet-stream",
-    )

@@ -46,6 +46,7 @@ def _strict_env() -> dict[str, str]:
         "AI_PROVIDER": "disabled",
         "TOOL_CREDENTIALS_ENCRYPTION_KEYS": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "GEMINI_API_KEY": "gemini-production-key-9mY7Kq2V",
+        "RAG_EMBEDDING_PROVIDER": "gemini",
         "WEBHOOK_ALLOWED_HOSTS": "callbacks.example.com",
         "WEBHOOK_SIGNING_SECRET": "outbound-callback-signing-secret",
         "DJANGO_DEBUG": "false",

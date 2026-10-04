@@ -21,6 +21,8 @@ class Dataset(models.Model):
     # Larger datasets must use a registered tenant-owned Asset.
     inline_data = models.TextField(blank=True)
     schema = models.JSONField(default=dict, blank=True)
+    # Column profile from the isolated engine (types, completeness, statistics).
+    profile = models.JSONField(default=dict, blank=True)
     row_count = models.PositiveIntegerField(default=0)
     byte_size = models.PositiveBigIntegerField(default=0)
     source_checksum_sha256 = models.CharField(max_length=64, blank=True, db_index=True)
@@ -111,6 +113,9 @@ class Visualization(models.Model):
         LINE = "line", "Line"
         SCATTER = "scatter", "Scatter"
         HISTOGRAM = "histogram", "Histogram"
+        AREA = "area", "Area"
+        BOX = "box", "Box"
+        PIE = "pie", "Pie"
 
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
@@ -123,7 +128,10 @@ class Visualization(models.Model):
     kind = models.CharField(max_length=20, choices=Kind.choices)
     x_column = models.CharField(max_length=255)
     y_column = models.CharField(max_length=255, blank=True)
+    color_column = models.CharField(max_length=255, blank=True)
+    title = models.CharField(max_length=200, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.QUEUED)
+    # Inline copy only when small; the full Plotly spec is always in ``spec_asset``.
     plotly_spec = models.JSONField(default=dict, blank=True)
     artifact_asset = models.ForeignKey(
         "assets.Asset",
@@ -131,6 +139,13 @@ class Visualization(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="analytics_visualizations",
+    )
+    spec_asset = models.ForeignKey(
+        "assets.Asset",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="analytics_specs",
     )
     artifact_checksum_sha256 = models.CharField(max_length=64, blank=True)
     result_schema = models.JSONField(default=dict, blank=True)

@@ -1,8 +1,15 @@
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
+from django.db.models import Q
 from pgvector.django import VectorField
+
+# PostgreSQL text-search configuration for the lexical retrieval leg. It is part
+# of the generated column definition, so changing it requires a migration.
+FTS_CONFIG = "english"
 
 
 class Collection(models.Model):
@@ -72,6 +79,7 @@ class Source(models.Model):
     last_error = models.TextField(blank=True)
     sync_schedule = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)
+    processing_started_at = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, related_name="created_sources", null=True
     )
@@ -121,8 +129,9 @@ class Document(models.Model):
     )
     classification = models.CharField(max_length=20, default="internal")
     chunk_count = models.PositiveIntegerField(default=0)
-    vector_ids = models.JSONField(default=list, blank=True)
     last_error = models.TextField(blank=True)
+    index_attempts = models.PositiveIntegerField(default=0)
+    processing_started_at = models.DateTimeField(null=True, blank=True)
     indexed_at = models.DateTimeField(null=True, blank=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -177,7 +186,6 @@ class Chunk(models.Model):
     page_number = models.PositiveIntegerField(null=True, blank=True)
     offset_start = models.PositiveIntegerField(default=0)
     offset_end = models.PositiveIntegerField(default=0)
-    vector_id = models.CharField(max_length=100, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     acl = models.JSONField(default=dict, blank=True)
     embedding = VectorField(
@@ -191,6 +199,11 @@ class Chunk(models.Model):
     # each vector lets an operator find/re-index stale vectors after a model,
     # dimension, or chunking-policy change.
     embedding_version = models.CharField(max_length=160, blank=True, db_index=True)
+    search_vector = models.GeneratedField(
+        expression=SearchVector("content", config=FTS_CONFIG),
+        output_field=SearchVectorField(),
+        db_persist=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -199,7 +212,7 @@ class Chunk(models.Model):
         indexes = [
             models.Index(fields=("document", "chunk_index")),
             models.Index(fields=("collection",)),
-            models.Index(fields=("vector_id",)),
+            GinIndex(fields=("search_vector",), name="knowledge_chunk_fts_idx"),
         ]
 
     def __str__(self):
@@ -235,8 +248,15 @@ class SyncRun(models.Model):
 
 
 class Citation(models.Model):
+    """Evidence used by a grounded answer from a RAG job or an agent run."""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    job = models.ForeignKey("jobs.Job", on_delete=models.CASCADE, related_name="citations")
+    job = models.ForeignKey(
+        "jobs.Job", on_delete=models.CASCADE, related_name="citations", null=True, blank=True
+    )
+    agent_run = models.ForeignKey(
+        "agents.AgentRun", on_delete=models.CASCADE, related_name="citations", null=True, blank=True
+    )
     chunk = models.ForeignKey(Chunk, on_delete=models.CASCADE, related_name="citations")
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="citations")
     relevance_score = models.FloatField()
@@ -248,10 +268,17 @@ class Citation(models.Model):
         ordering = ("citation_index",)
         indexes = [
             models.Index(fields=("job", "citation_index")),
+            models.Index(fields=("agent_run", "citation_index")),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(job__isnull=False) | Q(agent_run__isnull=False),
+                name="citation_has_owner",
+            )
         ]
 
     def __str__(self):
-        return f"Citation {self.citation_index} for Job {self.job_id}"
+        return f"Citation {self.citation_index} for {self.job_id or self.agent_run_id}"
 
 
 class RAGEvaluation(models.Model):

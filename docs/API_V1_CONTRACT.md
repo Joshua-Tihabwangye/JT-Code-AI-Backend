@@ -55,6 +55,36 @@ archived conversation returns `409 conversation_archived`; unarchive it first.
   Jobs are not client-editable or deletable (`PUT`/`PATCH`/`DELETE` return 405); state changes
   only through cancel/retry, workers and the signed n8n status callback.
 
+## Knowledge (Agentic RAG)
+
+All knowledge endpoints live under `/api/v1/knowledge/` and use camelCase fields. The full
+table is in [AGENTIC_RAG_DESIGN.md](AGENTIC_RAG_DESIGN.md#api-apiv1knowledge). Highlights:
+
+- `GET, POST /api/v1/knowledge/collections/` — unpaginated list of collections, each with the
+  sources the caller may see; create needs editor access. Embedding provider/model are
+  server-configured and read-only; `organizationId` is never writable.
+- `POST /api/v1/knowledge/collections/{id}/sources/` — add a `text`, `url` or `file` source and
+  queue indexing; returns the updated collection.
+- `GET /api/v1/knowledge/search/?query=&collectionId=` — hybrid search returning
+  `KnowledgeSearchResult[]`; `X-Retrieval-Reranker` / `X-Retrieval-Degraded` report how it ran.
+- `POST /api/v1/knowledge/query/` — synchronous grounded answer with citations (reserves and
+  settles credits; `402 insufficient_credits` when the wallet cannot cover it).
+- `POST /api/v1/knowledge/rag/query/` — the same as an asynchronous job.
+
+## Files (ImageKit assets)
+
+- `GET /api/v1/files/` — visible files as `FileItem[]` (newest 500; add `?page=` for a paginated
+  envelope, `?q=` to filter by name). `POST` with multipart `file` uploads a private file.
+- `GET, PATCH, DELETE /api/v1/files/{id}/` — read; rename / change `visibility`
+  (`private` | `organization`, owner or admin only); soft delete (`409` while in use unless
+  `?force=true`).
+- `POST /api/v1/files/{id}/restore/`, `POST /api/v1/files/bulk-delete/` (`{ids, force}`),
+  `GET /api/v1/files/{id}/download/` (streamed bytes), `POST /api/v1/files/{id}/access/`
+  (short-lived signed URL), `POST /api/v1/files/{id}/attach/` (`{conversationId}`).
+- Direct uploads: `POST /api/v1/files/signature/` returns an ImageKit V2 `token` plus the exact
+  `uploadParams` to send to `uploadUrl`; then `POST /api/v1/files/complete/` with
+  `uploadIntentId`, `uploadToken`, `fileId` and `filePath`.
+
 ## Inbound webhooks
 
 `POST /api/v1/inbound-webhooks/{webhookId}/` (public, signature-authenticated). Send

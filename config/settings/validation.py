@@ -71,7 +71,6 @@ _SECRET_ENV = (
 _BOOL_ENV = (
     "DJANGO_DEBUG",
     "AI_GATEWAY_FALLBACK_ENABLED",
-    "PGVECTOR_ENABLED",
     "HEALTHCHECK_EXTERNAL_DEPENDENCIES",
     "SUPABASE_ALLOW_ANONYMOUS_USERS",
     "BROWSER_TOOL_ENABLED",
@@ -87,6 +86,10 @@ _INT_ENV = (
     "ASSET_ORPHAN_GRACE_HOURS",
     "IMAGEKIT_RECONCILE_PAGE_SIZE",
     "IMAGEKIT_RECONCILE_MAX_PAGES",
+    "IMAGEKIT_RECONCILE_BATCH_SIZE",
+    "IMAGEKIT_RECONCILE_INTERVAL_HOURS",
+    "IMAGEKIT_RECONCILE_MAX_DEPTH",
+    "ASSET_DELETE_MAX_ATTEMPTS",
     "DATABASE_CONN_MAX_AGE",
     "DATABASE_CONNECT_TIMEOUT_SECONDS",
     "VECTOR_EMBEDDING_DIMENSIONS",
@@ -96,6 +99,11 @@ _INT_ENV = (
     "RAG_RERANK_TOP_K",
     "RAG_MAX_EXTRACTED_BYTES",
     "RAG_EMBEDDING_MAX_RETRIES",
+    "RAG_EMBEDDING_BATCH_SIZE",
+    "RAG_HYBRID_CANDIDATES",
+    "RAG_MAX_CONTEXT_TOKENS",
+    "RAG_INGESTION_STALLED_MINUTES",
+    "RAG_INGESTION_MAX_RETRIES",
     "EVENT_OUTBOX_MAX_ATTEMPTS",
     "EVENT_OUTBOX_MAX_BACKOFF_SECONDS",
     "EVENT_OUTBOX_LEASE_SECONDS",
@@ -143,6 +151,10 @@ _INT_ENV = (
     "ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS",
     "ANALYTICS_TASK_TIME_LIMIT_SECONDS",
     "ANALYTICS_STALLED_AFTER_MINUTES",
+    "ANALYTICS_SANDBOX_MEMORY_MB",
+    "ANALYTICS_SANDBOX_CPU_SECONDS",
+    "ANALYTICS_SANDBOX_TIMEOUT_SECONDS",
+    "ANALYTICS_INLINE_SPEC_BYTES",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
@@ -150,7 +162,8 @@ _FLOAT_ENV = (
     "BILLING_FX_BUFFER",
     "BILLING_MARGIN_MULTIPLIER",
     "VECTOR_MIN_SIMILARITY",
-    "RAG_SIMILARITY_THRESHOLD",
+    "RAG_EVAL_MIN_RECALL",
+    "RAG_EVAL_MIN_MRR",
     "RAG_URL_FETCH_TIMEOUT_SECONDS",
     "RAG_EMBEDDING_TIMEOUT_SECONDS",
     "IMAGEKIT_API_TIMEOUT_SECONDS",
@@ -166,7 +179,8 @@ _FLOAT_ENV = (
 )
 _FRACTION_ENV = {
     "VECTOR_MIN_SIMILARITY": (0.0, 1.0),
-    "RAG_SIMILARITY_THRESHOLD": (0.0, 1.0),
+    "RAG_EVAL_MIN_RECALL": (0.0, 1.0),
+    "RAG_EVAL_MIN_MRR": (0.0, 1.0),
     "SENTRY_TRACES_SAMPLE_RATE": (0.0, 1.0),
     "SENTRY_PROFILES_SAMPLE_RATE": (0.0, 1.0),
 }
@@ -294,6 +308,9 @@ def _check_analytics(problems: list[str]) -> None:
     stalled = _val("ANALYTICS_STALLED_AFTER_MINUTES", "15")
     if stalled.isdigit() and hard.isdigit() and int(stalled) * 60 <= int(hard):
         problems.append("ANALYTICS_STALLED_AFTER_MINUTES must exceed the hard task time limit.")
+    sandbox = _val("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250")
+    if sandbox.isdigit() and soft.isdigit() and int(sandbox) >= int(soft):
+        problems.append("ANALYTICS_SANDBOX_TIMEOUT_SECONDS must be below the soft task time limit.")
 
 
 def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
@@ -316,10 +333,17 @@ def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
 
 
 def _check_rag(problems: list[str], *, strict: bool) -> None:
-    provider = _val("RAG_EMBEDDING_PROVIDER", "openai").lower()
+    provider = _val("RAG_EMBEDDING_PROVIDER", "gemini").lower()
     if provider not in {"openai", "gemini", "echo"}:
         problems.append("RAG_EMBEDDING_PROVIDER must be openai, gemini, or echo.")
         return
+    for name in ("RAG_RERANKER", "RAG_JUDGE"):
+        if _val(name, "model").lower() not in {"model", "deterministic"}:
+            problems.append(f"{name} must be model or deterministic.")
+    size = _val("RAG_CHUNK_SIZE", "1000")
+    overlap = _val("RAG_CHUNK_OVERLAP", "200")
+    if size.isdigit() and overlap.isdigit() and int(overlap) >= int(size):
+        problems.append("RAG_CHUNK_OVERLAP must be smaller than RAG_CHUNK_SIZE.")
     if not strict:
         return
     if provider == "echo":
@@ -328,8 +352,6 @@ def _check_rag(problems: list[str], *, strict: bool) -> None:
         problems.append("OPENAI_API_KEY is required when RAG_EMBEDDING_PROVIDER=openai.")
     if provider == "gemini" and not _val("GEMINI_API_KEY"):
         problems.append("GEMINI_API_KEY is required when RAG_EMBEDDING_PROVIDER=gemini.")
-    if _val("PGVECTOR_ENABLED", "true").lower() not in {"1", "true", "yes", "on"}:
-        problems.append("PGVECTOR_ENABLED must be enabled in staging/production.")
 
 
 def validate_environment(profile: str) -> list[str]:

@@ -27,7 +27,7 @@ Resolved from `pyproject.toml` / `requirements.txt`.
 | sentry-sdk[django] | Error monitoring + tracing |
 | gunicorn / uvicorn[standard] / whitenoise | ASGI/WSGI serving + static |
 | openai | OpenAI + OpenAI-compatible Llama chat/embedding |
-| google-generativeai | Gemini chat + embeddings |
+| httpx | Gemini chat + embeddings over REST (no Gemini SDK) |
 | langgraph / langchain-core | Agent runtime (`apps.agents`) |
 | pgvector | Supabase PostgreSQL vector store (ADR-003) |
 | stripe | Billing/subscriptions |
@@ -67,11 +67,14 @@ Canonical list (defaults in code, values in `.env.example`). Groups:
 `AI_GATEWAY_MAX_COST_USD`, `AI_GATEWAY_MAX_LATENCY_MS`, `AI_GATEWAY_FALLBACK_ENABLED`,
 `AGENT_MAX_ITERATIONS`, `OPENAI_API_KEY`, `GEMINI_API_KEY`
 
-**RAG/pgvector:** `PGVECTOR_ENABLED`, `VECTOR_EMBEDDING_DIMENSIONS`,
-`VECTOR_MIN_SIMILARITY`, `RAG_EMBEDDING_PROVIDER`, `RAG_EMBEDDING_MODEL`,
-`GEMINI_EMBEDDING_MODEL`, `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_TOP_K`,
-`RAG_RERANK_TOP_K`, `RAG_SIMILARITY_THRESHOLD`, `RAG_MAX_EXTRACTED_BYTES`,
-`RAG_URL_FETCH_TIMEOUT_SECONDS`
+**RAG/pgvector:** `VECTOR_EMBEDDING_DIMENSIONS`, `VECTOR_MIN_SIMILARITY`,
+`RAG_EMBEDDING_PROVIDER`, `RAG_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL`,
+`RAG_EMBEDDING_BATCH_SIZE`, `RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_TOP_K`,
+`RAG_RERANK_TOP_K`, `RAG_HYBRID_CANDIDATES`, `RAG_RERANKER`, `RAG_RERANK_MODEL_ALIAS`,
+`RAG_JUDGE`, `RAG_JUDGE_MODEL_ALIAS`, `RAG_MAX_CONTEXT_TOKENS`, `RAG_EVAL_MIN_RECALL`,
+`RAG_EVAL_MIN_MRR`, `RAG_MAX_EXTRACTED_BYTES`, `RAG_URL_FETCH_TIMEOUT_SECONDS`,
+`RAG_EMBEDDING_TIMEOUT_SECONDS`, `RAG_EMBEDDING_MAX_RETRIES`,
+`RAG_INGESTION_STALLED_MINUTES`, `RAG_INGESTION_MAX_RETRIES`
 
 **Billing (Stripe):** `BILLING_CREDIT_VALUE_USD`, `BILLING_FX_BUFFER`,
 `BILLING_MARGIN_MULTIPLIER`, `BILLING_DEFAULT_PLAN`, `STRIPE_SECRET_KEY`,
