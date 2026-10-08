@@ -29,7 +29,7 @@ opentelemetry-instrumentation-redis>=0.51b0,<1
 opentelemetry-instrumentation-httpx>=0.51b0,<1
 
 # Production Server
-gunicorn>=23,<24
+gunicorn>=23,<27
 uvicorn[standard]>=0.34,<1
 whitenoise>=6.9,<7
 
