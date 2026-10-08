@@ -170,7 +170,7 @@ jobs:
           dockerfile: streamlit_app/Dockerfile
       - uses: docker/setup-buildx-action@v3
       - name: Build runtime image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: runtime
@@ -179,7 +179,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build office image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: office
@@ -187,7 +187,7 @@ jobs:
           tags: jt-code-api-office:ci
           cache-from: type=gha
       - name: Build Streamlit image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: streamlit_app
           load: true
