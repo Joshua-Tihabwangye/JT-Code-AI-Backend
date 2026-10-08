@@ -108,7 +108,7 @@ jobs:
           cosign sign --yes "${{ steps.refs.outputs.office }}"
           cosign sign --yes "${{ steps.refs.outputs.streamlit }}"
       - name: Scan the pushed API image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: ${{ steps.refs.outputs.api }}
