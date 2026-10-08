@@ -65,7 +65,7 @@ dev = [
   "pip-audit>=2.7,<3",
   "detect-secrets>=1.5,<2",
   "mypy>=1.15,<1.20",  # django-stubs 5.2.x supports mypy <1.20
-  "django-stubs>=5.2,<6",
+  "django-stubs>=5.2,<7",
   "djangorestframework-stubs>=3.16,<4"
 ]
 
