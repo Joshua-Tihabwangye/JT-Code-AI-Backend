@@ -200,14 +200,14 @@ jobs:
             jt-code-api:ci manage check
           docker run --rm --read-only --tmpfs /tmp --entrypoint soffice jt-code-api-office:ci --version
       - name: Scan images (fixed HIGH/CRITICAL vulnerabilities fail the build)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: jt-code-api:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: jt-code-streamlit:ci
@@ -215,7 +215,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan Dockerfiles, manifests and Terraform for misconfiguration
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
