@@ -7,7 +7,7 @@ terraform {
   required_providers {
     cloudflare = {
       source  = "cloudflare/cloudflare"
-      version = "~> 4.40"
+      version = "~> 5.27"
     }
     supabase = {
       source  = "supabase/supabase"
