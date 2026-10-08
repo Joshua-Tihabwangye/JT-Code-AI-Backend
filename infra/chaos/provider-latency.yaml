@@ -1,0 +1,19 @@
+# Hypothesis: 3 s added latency to the primary AI provider trips its deadline,
+# the gateway falls back to the next model, and chat p95 stays within CHAT-P95.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: jt-code-provider-latency
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [jt-code-staging]
+    labelSelectors:
+      app.kubernetes.io/component: worker-ai
+  direction: to
+  externalTargets: [generativelanguage.googleapis.com]
+  delay:
+    latency: 3s
+    jitter: 500ms
+  duration: 10m

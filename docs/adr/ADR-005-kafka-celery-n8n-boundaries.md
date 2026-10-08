@@ -51,3 +51,10 @@ over canonical state.
 
 - `apps/events/outbox.py`, `apps/events/tasks.py`, `apps/jobs/executor.py`, and
   the beat schedule in `config/settings/base.py` implement the boundary.
+- Phase 16 (`apps/orchestration`, [N8N_ORCHESTRATION.md](../N8N_ORCHESTRATION.md)):
+  n8n runs in queue mode with its own Supabase schema; Django signs dispatches
+  (`N8N_DISPATCH_SECRET`) and verifies signed, nonce-bound, attempt-bound
+  callbacks (`N8N_WEBHOOK_SECRET`). Attempts, retries, deliveries and
+  automations are Django rows. Workflow events go through the outbox to
+  Kafka, and the n8n error workflow relays to Sentry. Workflow definitions are
+  versioned in `n8n/workflows/` and deployed with `manage.py n8n_workflows push`.

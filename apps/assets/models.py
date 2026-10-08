@@ -27,9 +27,12 @@ class Asset(models.Model):
         related_name="assets",
     )
     name = models.CharField(max_length=500, blank=True)
-    imagekit_file_id = models.CharField(max_length=500, unique=True)
-    imagekit_file_path = models.CharField(max_length=1000, blank=True)
-    secure_url = models.URLField(max_length=1000)
+    # Supabase Storage object identity.  ``storage_key`` is always tenant
+    # prefixed and the bucket is private; public URLs are never persisted.
+    storage_object_id = models.CharField(max_length=1000, unique=True)
+    storage_key = models.CharField(max_length=1000, blank=True)
+    storage_bucket = models.CharField(max_length=100, default="jt-code-assets")
+    storage_url = models.URLField(max_length=1000, blank=True)
     resource_type = models.CharField(max_length=50)
     format = models.CharField(max_length=50, blank=True)
     bytes = models.PositiveBigIntegerField(default=0)
@@ -89,7 +92,7 @@ class UploadIntent(models.Model):
     content_type = models.CharField(max_length=255)
     expected_bytes = models.PositiveBigIntegerField()
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
-    imagekit_file_id = models.CharField(max_length=500, blank=True)
+    storage_object_key = models.CharField(max_length=1000, blank=True)
     expires_at = models.DateTimeField(db_index=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

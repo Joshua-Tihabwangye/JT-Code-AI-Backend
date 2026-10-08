@@ -31,7 +31,7 @@ PERMANENT_GATEWAY_ERRORS = {
 
 def retry_delay_seconds(retry_count: int) -> int:
     """Bound exponential retries so one unhealthy provider cannot flood a queue."""
-    return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)
+    return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)  # nosec B311 - retry jitter
 
 
 def next_dispatch_time(delay_seconds: float = 0):
@@ -82,6 +82,13 @@ def _latest_model_run_id(request_id: str):
     )
 
 
+def _finalize_usage(request_id: str) -> None:
+    """Settle (completed) or release (failed/cancelled) the request's credit hold."""
+    from apps.usage.services import finalize_source
+
+    finalize_source("chat_request", request_id)
+
+
 def _fail_request(request_id: str, *, code: str, message: str) -> dict:
     with transaction.atomic():
         chat_request = ChatRequest.objects.select_for_update().get(id=request_id)
@@ -103,6 +110,7 @@ def _fail_request(request_id: str, *, code: str, message: str) -> dict:
             )
         )
         _emit_status_event(chat_request, "chat.request.failed")
+    _finalize_usage(request_id)
     return {"status": "failed", "error_code": code}
 
 
@@ -132,6 +140,7 @@ def _retry_or_fail(task, request_id: str, exc: Exception, *, code: str) -> dict:
                 )
             )
             _emit_status_event(chat_request, "chat.request.failed")
+            transaction.on_commit(lambda: _finalize_usage(request_id))
             return {"status": "failed", "error_code": code}
         countdown = retry_delay_seconds(chat_request.retry_count)
         chat_request.status = ChatRequest.Status.QUEUED
@@ -226,6 +235,7 @@ def process_chat_request(self, request_id: str) -> dict:
                 },
             )
             _emit_status_event(request, "chat.request.completed")
+        _finalize_usage(request_id)
         return {"status": "completed", "model_run_id": str(outcome.run.id)}
     except Exception as exc:  # noqa: BLE001 - gateway failures must be durably surfaced
         from apps.ai_gateway.adapters import AIGatewayError

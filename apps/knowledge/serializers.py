@@ -126,7 +126,7 @@ class KnowledgeSourceWriteSerializer(serializers.Serializer):
             _visibility, user_ids = normalize_acl(config.get("acl"))
         except ValueError as exc:
             raise serializers.ValidationError({"config": str(exc)}) from exc
-        unknown = set(config) - {"text", "url", "asset_id", "acl", "title", "mime_type"}
+        unknown = set(config) - {"text", "url", "asset_id", "acl", "title", "mime_type", "integrationId"}
         if unknown:
             raise serializers.ValidationError(
                 {"config": f"Unsupported config keys: {', '.join(sorted(unknown))}."}
@@ -145,6 +145,17 @@ class KnowledgeSourceWriteSerializer(serializers.Serializer):
             if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
                 raise serializers.ValidationError(
                     {"config": "URL sources require an HTTPS URL without embedded credentials."}
+                )
+        elif source_type == Source.SourceType.INTEGRATION:
+            from apps.integrations.models import ConnectorAccount
+
+            if not ConnectorAccount.objects.filter(
+                id=config.get("integrationId"),
+                organization_id=collection.organization_id,
+                status=ConnectorAccount.Status.ACTIVE,
+            ).exists():
+                raise serializers.ValidationError(
+                    {"config": "Integration sources require config.integrationId of a connected integration."}
                 )
         elif source_type == Source.SourceType.FILE:
             from apps.assets.access import assets_visible_to

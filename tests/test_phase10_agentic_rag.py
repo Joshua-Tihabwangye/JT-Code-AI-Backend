@@ -513,19 +513,23 @@ def test_only_source_creator_or_admin_can_change_a_source(tenant, django_user_mo
     assert allowed.status_code == 200
 
 
-def test_restricted_file_document_bytes_are_not_exposed_through_the_asset_api(tenant, settings):
+def test_restricted_file_document_bytes_are_not_exposed_through_the_asset_api(tenant, settings, monkeypatch):
     from apps.assets.models import Asset
 
-    settings.IMAGEKIT_PUBLIC_KEY = "public"
-    settings.IMAGEKIT_PRIVATE_KEY = "private"
-    settings.IMAGEKIT_ENDPOINT_URL = "https://ik.example.test/rag"
+    settings.SUPABASE_URL = "https://project.supabase.co"
+    settings.SUPABASE_SECRET_KEY = "sb_secret_test"  # pragma: allowlist secret
+    settings.SUPABASE_STORAGE_BUCKET = "jt-code-assets"
+    monkeypatch.setattr(
+        "apps.assets.views.generate_signed_delivery_url", lambda key: f"https://signed.example.test/{key}"
+    )
     organization, admin, editor, viewer = tenant
     asset = Asset.objects.create(
         owner=editor,
         organization=organization,
-        imagekit_file_id="restricted-kb",
-        imagekit_file_path="/jt-code/restricted.pdf",
-        secure_url="https://ik.example.test/rag/restricted.pdf",
+        storage_object_id="jt-code/restricted.pdf",
+        storage_key="jt-code/restricted.pdf",
+        storage_bucket="jt-code-assets",
+        storage_url="",
         resource_type="non-image",
         format="pdf",
         original_filename="restricted.pdf",

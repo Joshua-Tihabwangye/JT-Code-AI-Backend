@@ -2,8 +2,11 @@ from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
+from apps.core.metrics import metrics_view
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("metrics", metrics_view, name="prometheus-metrics"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/v1/", include("apps.core.urls")),
@@ -18,9 +21,11 @@ urlpatterns = [
     path("api/v1/", include("apps.jobs.urls")),
     path("api/v1/knowledge/", include("apps.knowledge.urls")),
     path("api/v1/", include("apps.billing.urls")),
+    path("api/v1/", include("apps.usage.urls")),
     path("api/v1/", include("apps.governance.urls")),
     path("api/v1/", include("apps.integrations.urls")),
     path("api/v1/", include("apps.ai_gateway.urls")),
     path("api/v1/", include("apps.agents.urls")),
     path("api/v1/", include("apps.tools.urls")),
+    path("api/v1/", include("apps.orchestration.urls")),
 ]

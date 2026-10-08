@@ -10,14 +10,13 @@ from typing import Any
 from django.db import transaction
 from django.utils import timezone
 
-from apps.assets.imagekit import (
+from apps.assets.models import Asset
+from apps.assets.supabase_storage import (
     FINGERPRINT_VERSION,
     organization_folder,
     provider_identity_fingerprint,
-    unique_file_name,
-    upload_bytes_to_imagekit_details,
+    upload_bytes,
 )
-from apps.assets.models import Asset
 from apps.events.outbox import add_outbox_event
 
 
@@ -32,30 +31,29 @@ def _register(
     origin: str,
     provenance: dict[str, Any] | None,
 ) -> Asset:
-    resource = upload_bytes_to_imagekit_details(
-        content, file_name=unique_file_name(file_name), folder=folder, content_type=content_type
-    )
+    resource = upload_bytes(content, file_name=file_name, folder=folder, content_type=content_type)
     with transaction.atomic():
         asset = Asset.objects.create(
             owner=owner,
             organization=organization,
-            imagekit_file_id=resource["fileId"],
-            imagekit_file_path=resource["filePath"],
-            secure_url=resource["url"],
-            resource_type=resource["fileType"],
-            format=str(resource.get("format") or file_name.rsplit(".", 1)[-1])[:50],
+            storage_object_id=resource["key"],
+            storage_key=resource["key"],
+            storage_bucket=resource["bucket"],
+            storage_url="",
+            resource_type="file",
+            format=file_name.rsplit(".", 1)[-1][:50] if "." in file_name else "",
             bytes=len(content),
             original_filename=file_name[:500],
             name=file_name[:500],
             metadata={
-                "thumbnail_url": resource.get("thumbnailUrl"),
-                "version_info": resource.get("versionInfo"),
                 "content_type": content_type,
             },
             checksum_sha256=hashlib.sha256(content).hexdigest(),
             provider_fingerprint=provider_identity_fingerprint(resource),
             provenance={
-                "provider": "imagekit",
+                "provider": "supabase-storage",
+                "bucket": resource["bucket"],
+                "key": resource["key"],
                 "origin": origin,
                 "registered_at": timezone.now().isoformat(),
                 "fingerprintVersion": FINGERPRINT_VERSION,
@@ -68,7 +66,7 @@ def _register(
             str(asset.id),
             {
                 "assetId": str(asset.id),
-                "fileId": asset.imagekit_file_id,
+                "storageKey": asset.storage_key,
                 "ownerId": str(asset.owner_id) if asset.owner_id else None,
                 "organizationId": str(asset.organization_id),
                 "resourceType": asset.resource_type,
@@ -165,7 +163,7 @@ def soft_delete_asset(asset: Asset | None) -> None:
             str(asset.id),
             {
                 "assetId": str(asset.id),
-                "fileId": asset.imagekit_file_id,
+                "storageKey": asset.storage_key,
                 "ownerId": str(asset.owner_id) if asset.owner_id else None,
                 "organizationId": str(asset.organization_id),
             },

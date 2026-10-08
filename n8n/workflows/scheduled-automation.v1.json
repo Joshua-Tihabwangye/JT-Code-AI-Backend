@@ -1,0 +1,664 @@
+{
+  "name": "jt-code.scheduled-automation.v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jt-code/scheduled-automation/v1",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "4f1aa963-1825-5e6b-a93e-52f6a517623c",
+      "name": "JT-Code request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "a1697553-2669-51b9-b5fd-c54c76251315"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the JT-Code dispatch signature (see apps/core/signing.py).\nconst crypto = require('crypto');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst secret = $env.JT_CODE_DISPATCH_SECRET;\nconst tolerance = Number($env.JT_CODE_SIGNATURE_TOLERANCE_SECONDS || 300);\nconst timestamp = String(headers['x-jt-code-timestamp'] || '');\nconst nonce = String(headers['x-jt-code-nonce'] || '');\nconst supplied = String(headers['x-jt-code-signature'] || '')\n  .split(',').map((part) => part.trim()).filter((part) => part.startsWith('v1=')).map((part) => part.slice(3));\nlet reason = '';\nlet raw = Buffer.from('');\ntry {\n  raw = await this.helpers.getBinaryDataBuffer(0, 'data');\n} catch (error) {\n  reason = 'missing raw body';\n}\nif (!secret) reason = 'JT_CODE_DISPATCH_SECRET is not configured';\nif (!reason && (!/^\\d+$/.test(timestamp) || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce) || supplied.length === 0)) {\n  reason = 'missing signature headers';\n}\nif (!reason && Math.abs(Date.now() / 1000 - Number(timestamp)) > tolerance) reason = 'stale timestamp';\nif (!reason) {\n  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.`).update(raw).digest('hex');\n  const match = supplied.some((value) => value.length === expected.length\n    && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)));\n  if (!match) reason = 'invalid signature';\n}\nif (!reason) {\n  // Best-effort replay guard; Django's run attempt and delivery ids are the durable one.\n  const store = $getWorkflowStaticData('global');\n  const now = Date.now();\n  store.nonces = (store.nonces || []).filter((entry) => entry.t > now - tolerance * 2000);\n  if (store.nonces.some((entry) => entry.v === nonce)) reason = 'replayed request';\n  else store.nonces.push({ v: nonce, t: now });\n}\nif (reason) return [{ json: { verified: false, reason } }];\nreturn [{ json: { verified: true, payload: JSON.parse(raw.toString('utf8')) } }];\n"
+      },
+      "id": "1d2cbf29-48ee-5e2e-9b82-1fd0ceb43316",
+      "name": "Verify JT-Code signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "a8f034e8-990d-5d0f-abae-9496f97183c8",
+              "leftValue": "={{ $json.verified }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "817fe251-8a36-50c2-87d1-33a6790b5f39",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": true, \"executionId\": $execution.id } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "f14570b6-4f66-5b93-a36a-8f05e3a9c2f9",
+      "name": "Accept (202)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": false, \"reason\": $json.reason } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "656412f7-244d-52f3-bab1-847590713b06",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Verify JT-Code signature').all().map((item) => ({ json: {\n  callbackUrl: item.json.payload.callbacks.status,\n  traceparent: $('Verify JT-Code signature').first().json.payload.traceparent || '',\n  callbackBody: { attempt: item.json.payload.attempt, status: 'running', progress: 10, executionId: $execution.id },\n} }));\n"
+      },
+      "id": "2ee74b01-659e-54a1-8df9-cfbf5ca38e28",
+      "name": "Report running",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign callbacks to JT-Code: v1=HMAC-SHA256(secret, \"<ts>.<nonce>.\" + body).\nconst crypto = require('crypto');\nconst secret = $env.JT_CODE_CALLBACK_SECRET;\nif (!secret) throw new Error('JT_CODE_CALLBACK_SECRET is not configured');\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.callbackBody);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const nonce = crypto.randomBytes(18).toString('base64url');\n  const digest = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex');\n  return { json: {\n    url: item.json.callbackUrl,\n    body,\n    timestamp,\n    nonce,\n    signature: `v1=${digest}`,\n    traceparent: item.json.traceparent || '',\n  } };\n});\n"
+      },
+      "id": "d92e8402-908e-51d1-bce4-e9de8d5af2ae",
+      "name": "Sign running",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-JT-Code-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-JT-Code-Nonce",
+              "value": "={{ $json.nonce }}"
+            },
+            {
+              "name": "X-JT-Code-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "traceparent",
+              "value": "={{ $json.traceparent }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "912bc531-8a98-5d2b-a23f-9539ac23b3b4",
+      "name": "Post running",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Verify JT-Code signature').first().json.payload;\nreturn [{ json: { ...payload.input, runId: payload.runId } }];\n"
+      },
+      "id": "98c68598-6498-5176-a6be-a839ff8d245b",
+      "name": "Select action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "b68d717d-ecd2-547f-964f-8d4fbd656b41",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "webhook",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "webhook"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "81904aa5-e279-54f0-a762-0b2c3f51ec8c",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "slack_message",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "slack_message"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "6c80ba7f-3f92-526b-a0f5-1b160c65f7f6",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "email",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "email"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "362beb35-e270-5e72-8b91-952da05d2eb1",
+      "name": "Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        2080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 20000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.runId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload || {}) }}"
+      },
+      "id": "fef37c01-ce01-5c67-9d66-1bc26ab8f8e6",
+      "name": "Call webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        -200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "ca159a8d-bbbd-515d-a8e8-c83908833373",
+      "name": "Post Slack message",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        2340,
+        0
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "${N8N_CREDENTIAL_SLACK}",
+          "name": "JT-Code Slack"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.JT_CODE_NOTIFICATIONS_FROM }}",
+        "toEmail": "={{ ($json.to || []).join(',') }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {}
+      },
+      "id": "9d5a4288-8b99-5e7c-a8f5-55ec00215024",
+      "name": "Send email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2340,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "${N8N_CREDENTIAL_SMTP}",
+          "name": "JT-Code SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "throw new Error(`Unsupported automation action: ${$json.action}`);\n"
+      },
+      "id": "989f29ee-503e-5de2-9a1d-761446731bd3",
+      "name": "Unsupported action",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Verify JT-Code signature').first().json.payload;\nreturn [{ json: {\n  callbackUrl: payload.callbacks.status,\n  traceparent: payload.traceparent || '',\n  callbackBody: { attempt: payload.attempt, status: 'completed', progress: 100, executionId: $execution.id,\n    result: { action: payload.input.action, output: $input.first().json } },\n} }];\n"
+      },
+      "id": "3728cf1f-8203-50a8-8044-92ae3c7e63f2",
+      "name": "Report completed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign callbacks to JT-Code: v1=HMAC-SHA256(secret, \"<ts>.<nonce>.\" + body).\nconst crypto = require('crypto');\nconst secret = $env.JT_CODE_CALLBACK_SECRET;\nif (!secret) throw new Error('JT_CODE_CALLBACK_SECRET is not configured');\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.callbackBody);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const nonce = crypto.randomBytes(18).toString('base64url');\n  const digest = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex');\n  return { json: {\n    url: item.json.callbackUrl,\n    body,\n    timestamp,\n    nonce,\n    signature: `v1=${digest}`,\n    traceparent: item.json.traceparent || '',\n  } };\n});\n"
+      },
+      "id": "8463a6a8-405f-59a8-8ba5-cb9d95ecc6f9",
+      "name": "Sign completed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-JT-Code-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-JT-Code-Nonce",
+              "value": "={{ $json.nonce }}"
+            },
+            {
+              "name": "X-JT-Code-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "traceparent",
+              "value": "={{ $json.traceparent }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "4e51faf3-ab15-577a-8034-bb47bdf847af",
+      "name": "Post completed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3120,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "JT-Code request": {
+      "main": [
+        [
+          {
+            "node": "Verify JT-Code signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify JT-Code signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Accept (202)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accept (202)": {
+      "main": [
+        [
+          {
+            "node": "Report running",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report running": {
+      "main": [
+        [
+          {
+            "node": "Sign running",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign running": {
+      "main": [
+        [
+          {
+            "node": "Post running",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post running": {
+      "main": [
+        [
+          {
+            "node": "Select action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select action": {
+      "main": [
+        [
+          {
+            "node": "Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action": {
+      "main": [
+        [
+          {
+            "node": "Call webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post Slack message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unsupported action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call webhook": {
+      "main": [
+        [
+          {
+            "node": "Report completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Slack message": {
+      "main": [
+        [
+          {
+            "node": "Report completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email": {
+      "main": [
+        [
+          {
+            "node": "Report completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report completed": {
+      "main": [
+        [
+          {
+            "node": "Sign completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign completed": {
+      "main": [
+        [
+          {
+            "node": "Post completed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 900,
+    "timezone": "UTC",
+    "errorWorkflow": "${JT_CODE_ERROR_WORKFLOW_ID}"
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "jtCode": {
+      "key": "scheduled-automation",
+      "version": 1,
+      "kind": "job",
+      "description": "Runs a tenant automation (signed webhook, Slack message or e-mail) for a Django job.",
+      "webhookPath": "jt-code/scheduled-automation/v1",
+      "taskTypes": [
+        "SCHEDULED_AUTOMATION"
+      ],
+      "eventTypes": [],
+      "timeoutSeconds": 900,
+      "maxAttempts": 5,
+      "requiredCredentials": [
+        "N8N_CREDENTIAL_SLACK",
+        "N8N_CREDENTIAL_SMTP"
+      ]
+    }
+  }
+}

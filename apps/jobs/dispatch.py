@@ -22,6 +22,14 @@ NATIVE_TASK_TYPES = frozenset(
 )
 
 
+def supported_task_types() -> set[str]:
+    """Native task types plus those claimed by a deployed n8n workflow (when n8n is configured)."""
+    from apps.orchestration import client
+    from apps.orchestration.registry import n8n_task_types
+
+    return set(NATIVE_TASK_TYPES) | (n8n_task_types() if client.configured() else set())
+
+
 def queue_for_task_type(task_type: str) -> str:
     if task_type == Job.TaskType.KNOWLEDGE_INGESTION:
         return INGESTION_QUEUE
@@ -45,17 +53,25 @@ def is_native_job(job: Job) -> bool:
 @transaction.atomic
 def enqueue_job(job: Job) -> None:
     """Persist dispatch intent before making work visible to a worker or integration."""
-    queue_name = queue_for_task_type(job.task_type)
+    from apps.orchestration.registry import n8n_task_types
+
+    orchestrated = job.task_type in n8n_task_types()
+    queue_name = "orchestration" if orchestrated else queue_for_task_type(job.task_type)
     if job.queue_name != queue_name:
         job.queue_name = queue_name
         job.save(update_fields=["queue_name", "updated_at"])
-    WorkflowRun.objects.get_or_create(
-        job=job,
-        defaults={
-            "n8n_workflow_id": job.task_type.lower(),
-            "input_payload": job.input_payload,
-        },
-    )
+    if orchestrated:
+        from apps.orchestration.runs import start_job_workflow
+
+        start_job_workflow(job)
+    else:
+        WorkflowRun.objects.get_or_create(
+            job=job,
+            defaults={
+                "n8n_workflow_id": job.task_type.lower(),
+                "input_payload": job.input_payload,
+            },
+        )
     enqueue_outbox_event(
         topic="jobs.job.created",
         event_key=str(job.request_id),
@@ -80,7 +96,8 @@ def enqueue_job(job: Job) -> None:
     def dispatch() -> None:
         _dispatch_job(str(job.id), queue_name)
 
-    transaction.on_commit(dispatch)
+    if not orchestrated:  # n8n jobs are dispatched by apps.orchestration.runs
+        transaction.on_commit(dispatch)
 
 
 def _dispatch_job(job_id: str, queue_name: str) -> bool:

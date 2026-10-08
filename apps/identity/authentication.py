@@ -26,8 +26,9 @@ def _fetch_jwks(*, force_refresh: bool = False) -> dict[str, Any]:
     if fresh and (not force_refresh or recently_fetched):
         return _JWKS_CACHE  # type: ignore[return-value]
 
+    auth_base_url = settings.SUPABASE_INTERNAL_URL or settings.SUPABASE_URL
     jwks_url = settings.SUPABASE_JWKS_URL or (
-        settings.SUPABASE_URL.rstrip("/") + "/auth/v1/.well-known/jwks.json"
+        auth_base_url.rstrip("/") + "/auth/v1/.well-known/jwks.json"
     )
     with httpx.Client(timeout=10.0) as client:
         response = client.get(jwks_url)
@@ -98,7 +99,8 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
 
         claims: dict[str, Any] | None = None
         last_error: Exception | None = None
-        if settings.SUPABASE_URL:
+        verification_mode = settings.SUPABASE_JWT_VERIFICATION
+        if verification_mode == "jwks" and settings.SUPABASE_URL:
             try:
                 claims = _verify_with_jwks(token)
             except jwt.ExpiredSignatureError:
@@ -109,7 +111,7 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
                 raise exceptions.AuthenticationFailed(
                     "Invalid or expired Supabase session token."
                 ) from last_error
-        elif settings.SUPABASE_JWT_SECRET:
+        elif verification_mode in {"jwks", "hs256"} and settings.SUPABASE_JWT_SECRET:
             try:
                 claims = _verify_with_secret(token)
             except jwt.ExpiredSignatureError:

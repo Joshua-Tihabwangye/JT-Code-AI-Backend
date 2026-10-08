@@ -8,8 +8,8 @@ from pathlib import Path
 import markdown
 from django.conf import settings
 
-from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
 from apps.assets.services import register_generated_asset, soft_delete_asset
+from apps.assets.supabase_storage import generate_signed_delivery_url, supabase_storage_is_configured
 from apps.conversions.models import ConversionJob
 from apps.conversions.serializers import ALLOWED_MATRIX
 
@@ -145,9 +145,11 @@ def finalize_conversion(job: ConversionJob, output: bytes) -> str | None:
     local_path.write_bytes(output)
     job.output_path = str(local_path)
     job.output_bytes = len(output)
-    if not imagekit_is_configured():
+    if not supabase_storage_is_configured():
         if not settings.ASSET_LOCAL_FALLBACK_ENABLED:
-            raise RuntimeError("ImageKit is required for conversion outputs in deployable environments.")
+            raise RuntimeError(
+                "Supabase Storage is required for conversion outputs in deployable environments."
+            )
         return None
     content_types = {
         "pdf": "application/pdf",
@@ -171,4 +173,4 @@ def finalize_conversion(job: ConversionJob, output: bytes) -> str | None:
     soft_delete_asset(job.output_asset)
     job.output_asset = asset
     job.output_url = ""
-    return generate_signed_delivery_url(asset.imagekit_file_path)
+    return generate_signed_delivery_url(asset.storage_key)

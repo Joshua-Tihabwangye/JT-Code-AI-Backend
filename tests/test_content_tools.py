@@ -67,7 +67,7 @@ def test_render_document_pdf(authenticated_client, user, org):
         title="Render Me",
         content="# Heading\n\nSome body text.",
     )
-    with override_settings(IMAGEKIT_PRIVATE_KEY="replace_me"):
+    with override_settings(SUPABASE_SECRET_KEY="replace_me"):
         response = authenticated_client.post(f"/api/v1/documents/{document.id}/render/", {"format": "pdf"})
     assert response.status_code == 200
     document.refresh_from_db()
@@ -84,7 +84,7 @@ def test_render_document_docx(authenticated_client, user, org):
         title="Render Me Docx",
         content="# Heading\n\nBody.",
     )
-    with override_settings(IMAGEKIT_PRIVATE_KEY="replace_me"):
+    with override_settings(SUPABASE_SECRET_KEY="replace_me"):
         response = authenticated_client.post(f"/api/v1/documents/{document.id}/render/", {"format": "docx"})
     assert response.status_code == 200
     document.refresh_from_db()
@@ -116,7 +116,7 @@ def test_download_local_render(authenticated_client, user, org):
         title="Download Me",
         content="# Heading\n\nBody.",
     )
-    with override_settings(IMAGEKIT_PRIVATE_KEY="replace_me"):
+    with override_settings(SUPABASE_SECRET_KEY="replace_me"):
         render_response = authenticated_client.post(
             f"/api/v1/documents/{document.id}/render/", {"format": "pdf"}
         )
@@ -128,12 +128,17 @@ def test_download_local_render(authenticated_client, user, org):
 
 
 @pytest.mark.django_db
-def test_update_document_increments_version(authenticated_client, user, org):
+def test_edits_keep_the_version_and_snapshots_add_one(authenticated_client, user, org):
     document = Document.objects.create(owner=user, organization=org, title="V1", content="a")
     response = authenticated_client.patch(f"/api/v1/documents/{document.id}/", {"content": "b"})
     assert response.status_code == 200
     document.refresh_from_db()
-    assert document.version == 2
+    assert document.version == 1 and document.content == "b"  # autosave does not mint versions
+    snapshot = authenticated_client.post(f"/api/v1/documents/{document.id}/versions/")
+    assert snapshot.status_code == 201
+    assert snapshot.json()["version"] == 2
+    assert [v["version"] for v in snapshot.json()["versions"]] == [2]
+    assert snapshot.json()["versions"][0]["content"] == "b"
 
 
 # --- Settings ---

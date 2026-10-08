@@ -78,7 +78,7 @@ class IntegrationSpec:
 # These are detection rules, not an inventory table: the report rows and every
 # status/evidence field are derived by ``_classify_integrations`` from the
 # runtime AST scan and dependency manifests. A small rule set is necessary
-# for config-only services (for example ImageKit and n8n use ``httpx`` rather
+# for config-only services (for example Supabase Storage and n8n use ``httpx`` rather
 # than a vendor SDK) and to make ADR retirement guarantees executable.
 INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
     IntegrationSpec(
@@ -108,13 +108,13 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         purpose="Active vector store; ADR-003 supersedes Pinecone (apps.knowledge)",
     ),
     IntegrationSpec(
-        key="imagekit",
-        label="ImageKit",
+        key="supabase_storage",
+        label="Supabase Storage",
         distributions=(),
         modules=(),
-        settings_keys=("IMAGEKIT_PUBLIC_KEY", "IMAGEKIT_PRIVATE_KEY", "IMAGEKIT_ENDPOINT_URL"),
+        settings_keys=("SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_STORAGE_BUCKET"),
         adr="ADR-002",
-        purpose="Asset bytes and CDN via the ImageKit REST API (apps.assets)",
+        purpose="Private asset bytes and signed delivery via Supabase Storage (apps.assets)",
     ),
     IntegrationSpec(
         key="redis",
@@ -145,9 +145,16 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         label="n8n",
         distributions=(),
         modules=(),
-        settings_keys=("N8N_BASE_URL", "N8N_API_KEY", "N8N_WEBHOOK_SECRET"),
+        settings_keys=(
+            "N8N_BASE_URL",
+            "N8N_WEBHOOK_BASE_URL",
+            "N8N_API_KEY",
+            "N8N_DISPATCH_SECRET",
+            "N8N_WEBHOOK_SECRET",
+            "N8N_CALLBACK_BASE_URL",
+        ),
         adr="ADR-005",
-        purpose="Workflow orchestration and signed callbacks (apps.integrations, apps.core)",
+        purpose="Signed workflow orchestration, event deliveries and callbacks (apps.orchestration)",
     ),
     IntegrationSpec(
         key="stripe",
@@ -164,6 +171,39 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         modules=("sentry_sdk",),
         settings_keys=("SENTRY_DSN", "SENTRY_ENVIRONMENT"),
         purpose="Error monitoring, tracing and the n8n relay (config.settings, apps.core)",
+    ),
+    IntegrationSpec(
+        key="pyyaml",
+        label="PyYAML",
+        distributions=("PyYAML",),
+        modules=("yaml",),
+        settings_keys=(),
+        purpose="Reads Kubernetes manifests and alert rules for capacity planning (apps.operations)",
+    ),
+    IntegrationSpec(
+        key="prometheus",
+        label="Prometheus",
+        distributions=("prometheus-client",),
+        modules=("prometheus_client",),
+        settings_keys=("METRICS_AUTH_TOKEN",),
+        purpose="RED, worker and business-state metrics at /metrics (apps.core.metrics)",
+    ),
+    IntegrationSpec(
+        key="opentelemetry",
+        label="OpenTelemetry",
+        distributions=(
+            "opentelemetry-api",
+            "opentelemetry-sdk",
+            "opentelemetry-exporter-otlp-proto-http",
+            "opentelemetry-instrumentation-django",
+            "opentelemetry-instrumentation-celery",
+            "opentelemetry-instrumentation-psycopg",
+            "opentelemetry-instrumentation-redis",
+            "opentelemetry-instrumentation-httpx",
+        ),
+        modules=("opentelemetry",),
+        settings_keys=("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME"),
+        purpose="Distributed tracing across API, workers, Kafka and n8n (apps.core.tracing)",
     ),
     IntegrationSpec(
         key="openai",

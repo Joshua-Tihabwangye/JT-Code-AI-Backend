@@ -31,6 +31,7 @@ dependencies = [
   "Pillow>=12.3,<13",
   "python-multipart>=0.0.9,<1",
   "httpx>=0.27,<1",
+  "PyYAML>=6.0,<7",
   "cryptography>=44,<51",
   "jsonschema>=4.23,<5",
   "tenacity>=8.2,<9",
@@ -38,6 +39,15 @@ dependencies = [
   "pandas>=2.2,<3",
   "plotly>=6.0,<7",
   "matplotlib>=3.9,<4",
+  "prometheus-client>=0.21,<1",
+  "opentelemetry-api>=1.30,<2",
+  "opentelemetry-sdk>=1.30,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2",
+  "opentelemetry-instrumentation-django>=0.51b0,<1",
+  "opentelemetry-instrumentation-celery>=0.51b0,<1",
+  "opentelemetry-instrumentation-psycopg>=0.51b0,<1",
+  "opentelemetry-instrumentation-redis>=0.51b0,<1",
+  "opentelemetry-instrumentation-httpx>=0.51b0,<1",
 ]
 
 [tool.setuptools.packages.find]
@@ -63,6 +73,9 @@ dev = [
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 python_files = ["tests.py", "test_*.py", "*_tests.py"]
 addopts = "-q --disable-warnings --strict-markers"
+markers = [
+    "unfunded: do not auto-fund new organization wallets (tests of 402 insufficient credits)",
+]
 
 [tool.ruff]
 target-version = "py314"
@@ -77,7 +90,7 @@ ignore = ["DJ001"]
 python_version = "3.14"
 plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
 explicit_package_bases = true
-files = ["config", "apps/core", "apps/ai_gateway/providers", "apps/ai_gateway/resilience.py", "apps/ai_gateway/registry.py", "apps/agents/context.py", "apps/agents/safety.py", "apps/agents/router.py", "apps/agents/checkpoint.py", "apps/agents/graphs.py", "apps/agents/engine.py", "apps/agents/runtime.py", "apps/tools/gateway.py", "apps/tools/registry.py", "apps/tools/egress.py", "apps/tools/crypto.py", "apps/tools/credentials.py", "apps/tools/approvals.py", "apps/tools/adapters", "apps/knowledge/chunking.py", "apps/knowledge/embeddings.py", "apps/knowledge/extraction.py", "apps/knowledge/evaluation.py", "apps/knowledge/vectorstore.py", "apps/knowledge/retrieval.py", "apps/knowledge/access.py", "apps/knowledge/evidence.py", "apps/knowledge/answering.py", "apps/assets/imagekit.py", "apps/assets/access.py", "apps/assets/services.py", "apps/analytics/engine.py", "apps/analytics/sandbox.py", "apps/analytics/services.py"]
+files = ["config", "apps/core", "apps/ai_gateway/providers", "apps/ai_gateway/resilience.py", "apps/ai_gateway/registry.py", "apps/agents/context.py", "apps/agents/safety.py", "apps/agents/router.py", "apps/agents/checkpoint.py", "apps/agents/graphs.py", "apps/agents/engine.py", "apps/agents/runtime.py", "apps/tools/gateway.py", "apps/tools/registry.py", "apps/tools/egress.py", "apps/tools/crypto.py", "apps/tools/credentials.py", "apps/tools/approvals.py", "apps/tools/adapters", "apps/knowledge/chunking.py", "apps/knowledge/embeddings.py", "apps/knowledge/extraction.py", "apps/knowledge/evaluation.py", "apps/knowledge/vectorstore.py", "apps/knowledge/retrieval.py", "apps/knowledge/access.py", "apps/knowledge/evidence.py", "apps/knowledge/answering.py", "apps/assets/supabase_storage.py", "apps/assets/access.py", "apps/assets/services.py", "apps/analytics/engine.py", "apps/analytics/sandbox.py", "apps/analytics/services.py", "apps/usage/services.py", "apps/usage/pricing.py", "apps/usage/sources.py", "apps/usage/concurrency.py", "apps/usage/exceptions.py", "apps/billing/stripe_client.py", "apps/billing/webhooks.py", "apps/billing/services.py", "apps/governance/audit.py", "apps/orchestration/client.py", "apps/orchestration/registry.py", "apps/orchestration/runs.py", "apps/orchestration/deliveries.py", "apps/orchestration/knowledge.py", "apps/orchestration/automations.py", "apps/orchestration/context.py", "apps/integrations/facade.py", "apps/operations", "apps/ai_gateway/images.py"]
 follow_imports = "silent"  # "skip" hides AUTH_USER_MODEL from django-stubs and crashes mypy
 strict = true
 ignore_missing_imports = true

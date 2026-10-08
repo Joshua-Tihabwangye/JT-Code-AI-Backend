@@ -10,7 +10,7 @@ CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")
 DATABASES, CACHES, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND = runtime_connection_settings(
     development=True
 )  # noqa: F405
-IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code/development")  # noqa: F405
+SUPABASE_STORAGE_PREFIX = env("SUPABASE_STORAGE_PREFIX", "jt-code/development")  # noqa: F405
 KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")  # noqa: F405
 KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")  # noqa: F405
 KAFKA_TOPIC_PREFIX = env("KAFKA_TOPIC_PREFIX", "jt-code.dev")  # noqa: F405

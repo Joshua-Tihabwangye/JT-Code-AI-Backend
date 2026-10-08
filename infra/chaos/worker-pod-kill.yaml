@@ -1,0 +1,19 @@
+# Hypothesis: killing AI workers mid-task loses no job and charges no credit
+# twice (acks_late + stalled-job recovery + exactly-once settlement).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: jt-code-worker-pod-kill
+spec:
+  schedule: "*/5 * * * *"
+  historyLimit: 3
+  concurrencyPolicy: Forbid
+  type: PodChaos
+  podChaos:
+    action: pod-kill
+    mode: fixed-percent
+    value: "50"
+    selector:
+      namespaces: [jt-code-staging]
+      labelSelectors:
+        app.kubernetes.io/component: worker-ai

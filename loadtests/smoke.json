@@ -1,0 +1,70 @@
+{
+  "name": "smoke",
+  "kind": "load_test",
+  "stages": [
+    {
+      "duration": 30,
+      "users": 5
+    }
+  ],
+  "requests": [
+    {
+      "name": "me",
+      "weight": 20,
+      "method": "GET",
+      "path": "/api/v1/me/"
+    },
+    {
+      "name": "conversations",
+      "weight": 15,
+      "method": "GET",
+      "path": "/api/v1/conversations/"
+    },
+    {
+      "name": "files",
+      "weight": 10,
+      "method": "GET",
+      "path": "/api/v1/files/"
+    },
+    {
+      "name": "jobs",
+      "weight": 8,
+      "method": "GET",
+      "path": "/api/v1/jobs/"
+    },
+    {
+      "name": "usage",
+      "weight": 6,
+      "method": "GET",
+      "path": "/api/v1/usage/"
+    },
+    {
+      "name": "wallet",
+      "weight": 5,
+      "method": "GET",
+      "path": "/api/v1/wallets/me/"
+    },
+    {
+      "name": "plans",
+      "weight": 4,
+      "method": "GET",
+      "path": "/api/v1/plans/"
+    },
+    {
+      "name": "collections",
+      "weight": 6,
+      "method": "GET",
+      "path": "/api/v1/knowledge/collections/"
+    }
+  ],
+  "thinkTimeSeconds": [
+    0.5,
+    1
+  ],
+  "thresholds": {
+    "errorRate": 0.01,
+    "p95Ms": 800,
+    "p99Ms": 2000,
+    "streamFirstEventP95Ms": 5000
+  }
+}

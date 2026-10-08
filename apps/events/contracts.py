@@ -50,6 +50,7 @@ KNOWN_EVENT_TYPES: tuple[str, ...] = (
     "document.render.completed",
     "document.render.failed",
     "events.dead_lettered",
+    "governance.audit.recorded",
     "governance.consent.expiring",
     "images.edited",
     "images.generated",
@@ -63,7 +64,16 @@ KNOWN_EVENT_TYPES: tuple[str, ...] = (
     "knowledge.document.indexed",
     "knowledge.source.deleted",
     "knowledge.source.sync",
+    "knowledge.integration.sync_requested",
+    "operations.drill.ping",
+    "operations.drill.poison",
+    *(
+        f"orchestration.workflow.{name}"
+        for name in ("dispatched", "progress", "step", "retry_scheduled", "completed", "failed", "error")
+    ),
+    *(f"orchestration.delivery.{name}" for name in ("accepted", "retry_scheduled", "completed", "failed")),
     "safety.image_prompt_blocked",
+    "usage.cost.anomaly",
 )
 
 
@@ -111,8 +121,11 @@ def event_type_for_topic(topic: str, topic_prefix: str) -> str:
 
 
 def current_correlation_headers() -> dict[str, str]:
-    """Return the active request/trace IDs, ignoring the unset ``-`` sentinel."""
-    headers = {}
+    """Return the active request/trace IDs (ignoring the unset ``-`` sentinel) and,
+    when a span is active, the W3C ``traceparent`` that lets consumers continue it."""
+    from apps.core.tracing import inject_headers
+
+    headers = inject_headers({})
     if (request_id := request_id_var.get()) and request_id != "-":
         headers["request_id"] = request_id
     if (trace_id := trace_id_var.get()) and trace_id != "-":

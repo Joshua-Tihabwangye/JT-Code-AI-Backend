@@ -1,0 +1,9 @@
+# Dockerfile lint policy (CI: hadolint). Decisions, not oversights:
+ignored:
+  # Base images are passed as digest-pinned build ARGs, which hadolint cannot see.
+  - DL3006
+  # Debian package versions are not pinned: exact pins break on every security
+  # update. Images run `apt-get upgrade` and are rebuilt whenever the pinned base
+  # digest changes (Dependabot) and weekly by the image-scan job.
+  - DL3008
+failure-threshold: warning

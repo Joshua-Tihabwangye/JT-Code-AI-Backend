@@ -7,7 +7,6 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
-from apps.billing.services import CreditService
 from apps.events.outbox import enqueue_outbox_event
 from apps.jobs.models import Job, WorkflowRun
 
@@ -45,27 +44,16 @@ class InvalidJobTransition(ValueError):
 
 
 def settle_terminal_credits(job: Job, *, actual_credits: Decimal | None = None) -> None:
-    """Settle a completed job or release every other terminal reservation once."""
-    if job.status == Job.Status.COMPLETED:
-        amount = actual_credits if actual_credits is not None else job.reserved_credits
-        if job.reserved_credits <= 0:
-            return
-        if amount > job.reserved_credits:
-            raise InvalidJobTransition("actual_credits cannot exceed reserved_credits.")
-        job.actual_credits = amount
-        job.save(update_fields=["actual_credits", "updated_at"])
-        CreditService.settle_reservation(
-            user=job.owner,
-            request_id=job.request_id,
-            actual_amount=amount,
-            organization=job.organization,
-        )
-    elif job.status in TERMINAL_STATUSES:
-        CreditService.release_reservation(
-            user=job.owner,
-            request_id=job.request_id,
-            organization=job.organization,
-        )
+    """Settle a completed job's usage or release its hold, exactly once.
+
+    The charge is derived from recorded model-run cost (or the feature's flat
+    price); ``actual_credits`` reported by the signed integration callback is
+    used for externally executed work. A charge never exceeds the reservation.
+    """
+    from apps.jobs.services import settle_job_usage
+
+    if job.status in TERMINAL_STATUSES:
+        settle_job_usage(job, reported_credits=actual_credits)
 
 
 def _update_workflow(job: Job, data: dict, *, terminal: bool) -> None:

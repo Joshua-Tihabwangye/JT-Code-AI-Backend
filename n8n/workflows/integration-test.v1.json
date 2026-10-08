@@ -1,0 +1,559 @@
+{
+  "name": "jt-code.integration-test.v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jt-code/integration-test/v1",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "d0ef2b02-cf83-575d-9fdb-195227c464f7",
+      "name": "JT-Code request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "b6019a75-e508-534c-9e1c-2ce5605a5dcf"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the JT-Code dispatch signature (see apps/core/signing.py).\nconst crypto = require('crypto');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst secret = $env.JT_CODE_DISPATCH_SECRET;\nconst tolerance = Number($env.JT_CODE_SIGNATURE_TOLERANCE_SECONDS || 300);\nconst timestamp = String(headers['x-jt-code-timestamp'] || '');\nconst nonce = String(headers['x-jt-code-nonce'] || '');\nconst supplied = String(headers['x-jt-code-signature'] || '')\n  .split(',').map((part) => part.trim()).filter((part) => part.startsWith('v1=')).map((part) => part.slice(3));\nlet reason = '';\nlet raw = Buffer.from('');\ntry {\n  raw = await this.helpers.getBinaryDataBuffer(0, 'data');\n} catch (error) {\n  reason = 'missing raw body';\n}\nif (!secret) reason = 'JT_CODE_DISPATCH_SECRET is not configured';\nif (!reason && (!/^\\d+$/.test(timestamp) || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce) || supplied.length === 0)) {\n  reason = 'missing signature headers';\n}\nif (!reason && Math.abs(Date.now() / 1000 - Number(timestamp)) > tolerance) reason = 'stale timestamp';\nif (!reason) {\n  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.`).update(raw).digest('hex');\n  const match = supplied.some((value) => value.length === expected.length\n    && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)));\n  if (!match) reason = 'invalid signature';\n}\nif (!reason) {\n  // Best-effort replay guard; Django's run attempt and delivery ids are the durable one.\n  const store = $getWorkflowStaticData('global');\n  const now = Date.now();\n  store.nonces = (store.nonces || []).filter((entry) => entry.t > now - tolerance * 2000);\n  if (store.nonces.some((entry) => entry.v === nonce)) reason = 'replayed request';\n  else store.nonces.push({ v: nonce, t: now });\n}\nif (reason) return [{ json: { verified: false, reason } }];\nreturn [{ json: { verified: true, payload: JSON.parse(raw.toString('utf8')) } }];\n"
+      },
+      "id": "ea285837-acc9-5a6a-9419-17accfe96499",
+      "name": "Verify JT-Code signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "46067760-8762-52fe-84e8-ba41a04d386b",
+              "leftValue": "={{ $json.verified }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3cbe14c3-e950-5f19-87db-28e060fe444b",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"message\": $json.reason } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "ef238bef-ba8a-56b4-9a27-45914e09400e",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Verify JT-Code signature').first().json.payload.integration }];\n"
+      },
+      "id": "fed6a006-7774-5447-96cd-b2fd5e5c6586",
+      "name": "Integration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "33428240-b27e-5c08-a043-d1b0d075ae5f",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "google_drive",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "google_drive"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "29b1573c-7cb3-56d4-8937-0b6d44805fbc",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "notion",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "notion"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "0686d077-b7b1-5619-a1b0-0a6b6ec91a63",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "github",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "github"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "7693e798-133c-5ffb-ad09-1d25e3b37760",
+                    "leftValue": "={{ $json.key }}",
+                    "rightValue": "slack",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "slack"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "50a64e5d-fa58-5289-88a5-d04767b9a338",
+      "name": "Provider",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.googleapis.com/drive/v3/about",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "user(emailAddress)"
+            }
+          ]
+        }
+      },
+      "id": "e5a3d6a6-6bb7-5775-afbe-098a985188f2",
+      "name": "Drive: about",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        -300
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "${N8N_CREDENTIAL_GOOGLE_DRIVE}",
+          "name": "JT-Code Google Drive"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.notion.com/v1/users/me",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        }
+      },
+      "id": "73535cc4-dc9b-5341-9ef7-6e8b0e60e12a",
+      "name": "Notion: bot user",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        -100
+      ],
+      "credentials": {
+        "notionApi": {
+          "id": "${N8N_CREDENTIAL_NOTION}",
+          "name": "JT-Code Notion"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ `https://api.github.com/repos/${$json.config.owner}/${$json.config.repo}` }}",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi"
+      },
+      "id": "674c0a39-241a-5898-ba84-dff101aefd1e",
+      "name": "GitHub: repository",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        100
+      ],
+      "credentials": {
+        "githubApi": {
+          "id": "${N8N_CREDENTIAL_GITHUB}",
+          "name": "JT-Code GitHub"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/auth.test",
+        "options": {
+          "timeout": 20000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi"
+      },
+      "id": "2551f865-c3e9-5195-bb0f-292a89b5d91e",
+      "name": "Slack: auth test",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        300
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "${N8N_CREDENTIAL_SLACK}",
+          "name": "JT-Code Slack"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const json = $input.first().json || {};\nconst failed = json.error || json.ok === false;\nconst name = $('Integration').first().json.key;\nreturn [{ json: { ok: !failed, message: failed\n  ? `${name} check failed: ${(json.error && (json.error.message || json.error)) || 'unknown error'}`\n  : `${name} connection is healthy.` } }];\n"
+      },
+      "id": "1b5f9511-210e-5771-82db-814b99075a23",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"message\": \"Unsupported provider\" } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "301fd0c1-581c-5016-a7c3-c91e8428aaef",
+      "name": "Unsupported provider",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "9ebc6f3d-bb3a-5b2e-951e-604a808c3f73",
+      "name": "Reply",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1820,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "JT-Code request": {
+      "main": [
+        [
+          {
+            "node": "Verify JT-Code signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify JT-Code signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Integration": {
+      "main": [
+        [
+          {
+            "node": "Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provider": {
+      "main": [
+        [
+          {
+            "node": "Drive: about",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notion: bot user",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GitHub: repository",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack: auth test",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unsupported provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: about": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: bot user": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: repository": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: auth test": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Result": {
+      "main": [
+        [
+          {
+            "node": "Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 60,
+    "timezone": "UTC",
+    "errorWorkflow": "${JT_CODE_ERROR_WORKFLOW_ID}"
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "jtCode": {
+      "key": "integration-test",
+      "version": 1,
+      "kind": "request",
+      "description": "Synchronously verifies that n8n can reach a tenant's connected integration.",
+      "webhookPath": "jt-code/integration-test/v1",
+      "taskTypes": [],
+      "eventTypes": [],
+      "timeoutSeconds": 60,
+      "maxAttempts": 1,
+      "requiredCredentials": [
+        "N8N_CREDENTIAL_GOOGLE_DRIVE",
+        "N8N_CREDENTIAL_NOTION",
+        "N8N_CREDENTIAL_GITHUB",
+        "N8N_CREDENTIAL_SLACK"
+      ]
+    }
+  }
+}

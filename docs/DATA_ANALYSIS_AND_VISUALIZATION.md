@@ -11,7 +11,7 @@ evaluate user code.
 ```mermaid
 flowchart LR
     A[Authenticated API client] --> B[Dataset ACL]
-    B --> C[Inline CSV or ready ImageKit Asset]
+    B --> C[Inline CSV or ready Supabase Storage Asset]
     C --> D[analytics.analysis worker]
     D --> E[Isolated engine process:<br/>bounded Pandas transform + profile]
     E --> F[Registered CSV result Asset]
@@ -61,7 +61,7 @@ organization editor/admin write role.
 `POST /api/v1/analysis/datasets/` accepts exactly one source:
 
 - `inline_data`: UTF-8 CSV up to `ANALYTICS_MAX_INLINE_BYTES`; or
-- `asset`: a tenant-owned, ready, integrity-verified ImageKit `Asset` up to
+- `asset`: a tenant-owned, ready, integrity-verified Supabase Storage `Asset` up to
   `ANALYTICS_MAX_DATASET_BYTES`.
 
 Only configured CSV MIME types are accepted. CSV validation rejects empty or
@@ -106,7 +106,7 @@ The dedicated `analytics.analysis` worker atomically claims a queued run
 once. It reads and verifies the source, refreshes dataset
 schema metadata, applies the transform, and enforces the result byte limit.
 The exact transformed frame is serialized to CSV and registered through the
-central asset service with tenant ownership, SHA-256, ImageKit identity, and
+central asset service with tenant ownership, SHA-256, Supabase Storage identity, and
 provenance linking the dataset and run.
 
 Only after artifact registration succeeds does the run become `completed`.
@@ -134,7 +134,7 @@ user reviewed.
 
 Charts are capped by `ANALYTICS_MAX_CHART_POINTS`; numeric axes are validated.
 The Plotly specification (JSON) and Matplotlib PNG are both registered as
-private ImageKit assets before the visualization becomes `ready`; the spec is
+private Supabase Storage assets before the visualization becomes `ready`; the spec is
 also kept inline when it is at most `ANALYTICS_INLINE_SPEC_BYTES`. The
 versioned visualization result schema records kind, formats, byte sizes,
 point count and both SHA-256 checksums.
@@ -170,7 +170,7 @@ SUPABASE_PUBLISHABLE_KEY=... streamlit run streamlit_app/app.py
 
 All pandas, Plotly and Matplotlib work runs in a separate `python -I
 apps/analytics/engine.py` process per operation. The child has an empty
-environment (no database, ImageKit, Supabase or model-provider credentials),
+environment (no database, Supabase or model-provider credentials),
 a private temporary working directory, and kernel limits applied before it
 reads any data: address space `ANALYTICS_SANDBOX_MEMORY_MB`, CPU
 `ANALYTICS_SANDBOX_CPU_SECONDS`, 64 MB file writes, 256 open files and no core
@@ -187,7 +187,7 @@ celery -A config beat
 Celery wall-clock limits complement, but do not replace, container resource
 limits. The API process should not consume either analytics queue. Network
 policy should allow workers to reach PostgreSQL, Redis, and the configured
-ImageKit delivery/API hosts only; the Streamlit process needs only the Django
+Supabase Storage delivery/API hosts only; the Streamlit process needs only the Django
 API.
 
 ## Failure and deletion semantics

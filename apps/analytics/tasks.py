@@ -3,7 +3,7 @@
 Each task claims its record under a row lock (``FOR UPDATE OF`` the record only,
 so optional related rows can be joined), fetches and verifies source bytes,
 runs all pandas/Plotly/Matplotlib work in the isolated engine process, stores
-artifacts privately in ImageKit, and validates the result against the
+artifacts privately in Supabase Storage, and validates the result against the
 versioned result schema before saving it.
 """
 
@@ -141,6 +141,10 @@ def execute_analysis_run(run_id: str) -> None:
     except Exception:
         logger.exception("Unexpected analysis worker failure", extra={"analysis_run_id": run_id})
         _fail(run, "The analysis worker failed. Retry the analysis run.", [result_asset])
+    finally:
+        from apps.usage.services import finalize_source
+
+        finalize_source("analysis_run", run.id)
 
 
 def _claim_visualization(visualization_id: str):

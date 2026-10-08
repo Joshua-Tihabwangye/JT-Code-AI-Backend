@@ -394,8 +394,8 @@ class DocumentViewSet(
     @action(detail=True, methods=["post"])
     def download(self, request: Request, id=None):
         """Short-lived link to a FILE document's original bytes, under the document ACL."""
-        from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
         from apps.assets.models import Asset
+        from apps.assets.supabase_storage import generate_signed_delivery_url, supabase_storage_is_configured
 
         document = self.get_object()
         source = document.source
@@ -407,14 +407,14 @@ class DocumentViewSet(
         ).first()
         if asset is None:
             raise NotFound("The original file is no longer available.")
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return Response(
-                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+                {"detail": "Supabase Storage is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
         return Response(
             {
-                "url": generate_signed_delivery_url(asset.imagekit_file_path),
-                "expiresIn": settings.IMAGEKIT_SIGNED_URL_TTL_SECONDS,
+                "url": generate_signed_delivery_url(asset.storage_key),
+                "expiresIn": settings.ASSET_SIGNED_URL_TTL_SECONDS,
             }
         )
 
@@ -501,15 +501,32 @@ def _authorized_collection_ids(request: Request, requested: list) -> tuple[objec
 
 
 def _search(request: Request, *, query: str, requested: list, top_k: int | None, min_similarity=None):
-    from apps.knowledge.retrieval import embed_query_or_none, hybrid_retrieve
+    import uuid
+
+    from apps.usage.models import Feature
+    from apps.usage.services import metered
 
     organization, allowed_ids = _authorized_collection_ids(request, requested)
     if requested and len(allowed_ids) != len(set(requested)):
         raise NotFound("One or more collections were not found in the selected organization.")
     if not allowed_ids:
         return organization, allowed_ids, None
+    with metered(
+        organization=organization,
+        user=request.user,
+        feature=Feature.SEARCH_QUERIES,
+        source_type="knowledge_search",
+        source_id=uuid.uuid4(),
+    ):
+        retrieval = _run_search(request, query, allowed_ids, organization, top_k, min_similarity)
+    return organization, allowed_ids, retrieval
+
+
+def _run_search(request, query, allowed_ids, organization, top_k, min_similarity):
+    from apps.knowledge.retrieval import embed_query_or_none, hybrid_retrieve
+
     query_vector, _reason = embed_query_or_none(query)
-    retrieval = hybrid_retrieve(
+    return hybrid_retrieve(
         query,
         query_vector,
         collection_ids=allowed_ids,
@@ -519,7 +536,6 @@ def _search(request: Request, *, query: str, requested: list, top_k: int | None,
         min_similarity=min_similarity,
         trace_id=getattr(request, "trace_id", "") or "",
     )
-    return organization, allowed_ids, retrieval
 
 
 def _search_result(item: dict) -> dict:

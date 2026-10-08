@@ -2,7 +2,7 @@
 
 ## Source-of-truth boundary
 
-Django and Supabase-hosted PostgreSQL own users' local application profile mappings, conversations, job state, asset metadata, usage and audit references. Supabase Auth owns authentication sessions and primary identity. ImageKit owns asset bytes and transformations. Redis provides caching and Celery transport; it is not durable business state. Kafka carries integration/domain events; events are emitted through the PostgreSQL transactional outbox.
+Django and Supabase-hosted PostgreSQL own users' local application profile mappings, conversations, job state, asset metadata, usage and audit references. Supabase Auth owns authentication sessions and primary identity. Private Supabase Storage owns asset bytes. Redis provides caching and Celery transport; it is not durable business state. Kafka carries integration/domain events; events are emitted through the PostgreSQL transactional outbox.
 
 ## Request path
 
@@ -14,13 +14,13 @@ Django and Supabase-hosted PostgreSQL own users' local application profile mappi
 6. The outbox publisher sends committed events to Kafka.
 7. Sentry receives sanitized errors and traces from Django, Celery, Kafka consumers and the n8n error relay.
 
-## ImageKit boundary
+## Supabase Storage boundary
 
-The browser never receives the ImageKit private key. Django creates a single-use, tenant-bound upload intent and signs short-lived authentication parameters scoped to its unique private-file path. Completion verifies ImageKit metadata, downloads the object through a signed URL, and records a SHA-256 content checksum before registration. Django owns asset metadata and authorization; scheduled workers purge soft-deleted files, reconcile provider identity, and delete aged unregistered objects under the application upload root. Regulated deployments can add a malware-scanning approval state before changing an asset from quarantined to ready.
+The browser never receives the Supabase service-role key. Django creates a single-use, tenant-bound upload intent and returns a short-lived upload capability scoped to one unique private object key. Completion downloads the object through a signed URL and records a SHA-256 content checksum before registration. Django owns asset metadata and authorization; scheduled workers purge soft-deleted files, reconcile object integrity, and delete aged unregistered objects under the application prefix. Regulated deployments can add a malware-scanning approval state before changing an asset from quarantined to ready.
 
 ## Supabase PostgreSQL
 
-Use a direct or session-pooler connection for long-running Django services. Require TLS in hosted environments. Supabase Auth owns user identity and session management; ImageKit owns asset bytes and transformations.
+Use a direct or session-pooler connection for long-running Django services. Require TLS in hosted environments. Supabase Auth owns user identity and session management; private Supabase Storage owns asset bytes.
 
 ## AI gateway and job execution
 

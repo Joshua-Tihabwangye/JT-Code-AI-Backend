@@ -39,6 +39,7 @@ export DJANGO_SETTINGS_MODULE=config.settings.staging
 export DATABASE_URL='source-isolated-supabase-url'
 export RESTORE_DATABASE_URL='different-disposable-restore-url'
 python manage.py migrate --noinput
+python manage.py configure_asset_storage
 python manage.py verify_supabase --format=json
 python manage.py seed_restore_drill_fixture
 python manage.py restore_drill_check \
@@ -70,3 +71,54 @@ python manage.py run_kafka_consumer integrations.webhook.received \
 ```
 
 The registered `integrations.webhook.received` consumer verifies the delivery and webhook IDs, transitions the persisted verified inbound delivery from `pending` to `delivered`, and writes its `ConsumedEvent` idempotency record in the same transaction. Run the duplicate, invalid-envelope, and broker-outage scenarios in `EVENT_PLATFORM.md`; retain consumer-group, topic/partition/offset, dead-letter, and outbox evidence in the release record.
+
+
+## Phase 18: verification gates
+
+Every drill, load test and evaluation is stored as a `VerificationRun` in the
+environment's own database. `python manage.py release_gate` passes only when:
+
+* every required kind has a passing run in the last 30 days;
+* no run of that kind has failed since its last pass;
+* the SLOs in [SLOs.md](SLOs.md) hold in Prometheus.
+
+The required kinds are the restore, DLQ, saturation and chaos drills; the load,
+spike, soak and streaming tests; the RAG quality and security evaluations; and
+the capacity audit.
+
+| Evidence | How to produce it | Where |
+| --- | --- | --- |
+| DLQ recovery | `manage.py dlq_drill`: poison event → DLQ → fix → replay → consumed exactly once | in-cluster |
+| RAG security | `manage.py rag_security_evaluate`: tenant isolation, ACLs, deletion, injection containment | in-cluster |
+| RAG quality | `manage.py rag_evaluate --organization … --user …` (recall@k, MRR) | in-cluster |
+| Saturation | `manage.py saturation_drill --tasks-per-queue N --kafka-events N`: drain throughput and latency per queue | in-cluster |
+| Load / spike / soak / streaming / 100K mix | `scripts/perf/loadtest.py --scenario loadtests/<name>.json`, then `record_evidence <kind> -` | runner → staging |
+| Restore | `restore_drill_check … --confirm-restore-target`, then `record_evidence restore_drill -` | runner |
+| Chaos | `infra/chaos/*.yaml` (Chaos Mesh), observed, then `record_evidence chaos_experiment -` | staging |
+| Capacity | `manage.py capacity_audit` (Phase 19) | in-cluster |
+
+`.github/workflows/verification.yml` runs each suite on demand, plus the drills
+and a load smoke test weekly on staging. It records the results and finally runs
+the release gate against Prometheus.
+
+The same failure modes run on every CI build in
+`tests/test_phase18_verification.py`:
+
+* Redis down: rate limits fail open, readiness reports 503, liveness stays up.
+* Kafka down: the outbox keeps events and publishes them after recovery.
+* An image provider outage returns 503 and releases the credit hold.
+* The DLQ drill.
+* The RAG security evaluation, on real pgvector and full-text search.
+* The release gate.
+* The load harness against a live server.
+
+**Contract verification:** `tests/fixtures/frontend_api_contract.json` snapshots
+every API call the frontend makes (`scripts/contracts/extract_frontend_contract.py`).
+CI fails if one of them no longer resolves to a backend operation.
+
+* `/auth/*` is delegated to Supabase Auth.
+* Known response-shape deviations are listed with an owner. Currently there is
+  one: chat send is asynchronous and streams over SSE.
+
+Runbooks for every alert are in [RUNBOOKS.md](RUNBOOKS.md); the incident process
+is in [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md).

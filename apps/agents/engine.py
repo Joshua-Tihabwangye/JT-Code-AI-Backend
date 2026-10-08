@@ -220,6 +220,11 @@ def _finish(
         _evaluate(locked, ctx)
         _event(locked, f"agents.run.{status}")
     DjangoCheckpointSaver().delete_thread(str(run.id))
+    if locked.job_id is None:
+        # Standalone runs are billed per run; runs inside a job bill through the job.
+        from apps.usage.services import finalize_source
+
+        finalize_source("agent_run", locked.id)
     return locked
 
 

@@ -164,11 +164,11 @@ class JobCreateSerializer(serializers.ModelSerializer):
         }
 
     def validate_task_type(self, value):
-        from apps.jobs.dispatch import NATIVE_TASK_TYPES
+        from apps.jobs.dispatch import supported_task_types
 
-        # Only accept work a worker can execute; unsupported types would reserve
-        # credits and then fail with UNSUPPORTED_TASK_TYPE.
-        supported = sorted(NATIVE_TASK_TYPES)
+        # Only accept work a worker or a deployed n8n workflow can execute;
+        # unsupported types would reserve credits and then fail.
+        supported = sorted(supported_task_types())
         if value not in supported:
             raise serializers.ValidationError(f"Unsupported task_type. Must be one of: {supported}")
         return value
@@ -178,6 +178,13 @@ class JobCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        if attrs.get("task_type") == Job.TaskType.SCHEDULED_AUTOMATION:
+            from apps.identity.authorization import organization_for_request
+            from apps.orchestration.automations import validate_input
+
+            organization = organization_for_request(self.context["request"], required=True)
+            attrs["input_payload"] = validate_input(attrs.get("input_payload"), organization)
+            return attrs
         if attrs.get("task_type") != Job.TaskType.RAG_QUERY:
             return attrs
         payload = attrs.get("input_payload")

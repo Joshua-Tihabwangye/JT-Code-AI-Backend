@@ -9,9 +9,11 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -121,15 +123,21 @@ class ConnectorAccountViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def test(self, request: Request, id=None):
-        self.get_object()  # permission/lookup check for the target account
-        # Test the connection
-        # This would make a test API call
-        return Response({"status": "success", "message": "Connection test passed"})
+        from apps.integrations.facade import PROVIDERS, apply_check
+
+        account = self.get_object()
+        if account.connector.slug not in PROVIDERS:
+            return Response(
+                {"status": "unsupported", "message": "This connector has no connection check."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ok, message = apply_check(account)
+        return Response({"status": "success" if ok else "failed", "message": message})
 
     @action(detail=True, methods=["post"])
     def sync(self, request: Request, id=None):
         account = self.get_object()
-        # Trigger sync
+        queued = sync_integration_sources(account)
         enqueue_outbox_event(
             topic="integrations.connector.sync",
             event_key=str(account.id),
@@ -137,10 +145,10 @@ class ConnectorAccountViewSet(viewsets.ModelViewSet):
                 "account_id": str(account.id),
                 "connector_id": str(account.connector_id),
                 "organization_id": str(account.organization_id),
+                "queued_sources": queued,
             },
-            headers={"trace_id": f"connector-sync-{account.id}"},
         )
-        return Response({"detail": "Sync triggered"})
+        return Response({"detail": "Sync triggered", "queued_sources": queued})
 
 
 class WebhookViewSet(viewsets.ModelViewSet):
@@ -359,3 +367,132 @@ class KafkaConsumerViewSet(viewsets.ModelViewSet):
         consumer.status = KafkaConsumer.Status.STOPPED
         consumer.save(update_fields=["status", "updated_at"])
         return Response({"detail": "Consumer stopped"})
+
+
+class IntegrationViewSet(viewsets.ViewSet):
+    """The frontend's ``/integrations/`` contract (GitHub, Google Drive, Notion, Slack).
+
+    Connections are verified by the n8n ``integration-test`` workflow; syncing
+    runs the ``knowledge-integration-sync`` workflow for the integration's
+    knowledge sources. See ``apps.integrations.facade``.
+    """
+
+    lookup_field = "id"
+    lookup_value_regex = "[0-9a-f-]{36}"
+    queryset = ConnectorAccount.objects.none()  # schema generation only
+
+    def get_permissions(self):
+        if self.action in {"list", "retrieve", "test"}:
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), HasOrganizationWriteAccess()]
+
+    def _accounts(self):
+        from apps.integrations.facade import PROVIDERS
+
+        return (
+            _tenant_queryset(ConnectorAccount.objects.all(), self.request)
+            .filter(connector__slug__in=list(PROVIDERS))
+            .select_related("connector")
+        )
+
+    def _get(self, id):
+        from django.shortcuts import get_object_or_404
+
+        return get_object_or_404(self._accounts(), id=id)
+
+    @extend_schema(operation_id="v1_integrations_list", responses={200: OpenApiTypes.OBJECT})
+    def list(self, request: Request):
+        from apps.integrations.facade import serialize
+
+        return Response([serialize(account) for account in self._accounts().order_by("created_at")])
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    def retrieve(self, request: Request, id=None):
+        from apps.integrations.facade import serialize
+
+        return Response(serialize(self._get(id)))
+
+    @extend_schema(request=OpenApiTypes.OBJECT, responses={201: OpenApiTypes.OBJECT})
+    @action(detail=False, methods=["post"])
+    def connect(self, request: Request):
+        from apps.integrations.facade import PROVIDERS, apply_check, connector_for, serialize, validate_config
+
+        key = str(request.data.get("key") or "")
+        config = validate_config(key, request.data.get("config") or {})
+        display_name = str(request.data.get("displayName") or PROVIDERS[key]["name"])[:255]
+        organization = organization_for_request(request, required=True)
+        connector = connector_for(key)
+        account = ConnectorAccount.objects.filter(organization=organization, connector=connector).first()
+        if account is None:
+            account = ConnectorAccount(organization=organization, connector=connector, user=request.user)
+        account.name = display_name
+        account.metadata = {**(account.metadata or {}), "config": config}
+        account.status = ConnectorAccount.Status.PENDING
+        account.save()
+        apply_check(account)
+        return Response(serialize(account), status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=OpenApiTypes.OBJECT, responses={200: OpenApiTypes.OBJECT})
+    def partial_update(self, request: Request, id=None):
+        from apps.integrations.facade import serialize, validate_config
+
+        account = self._get(id)
+        if "config" in request.data:
+            account.metadata = {
+                **(account.metadata or {}),
+                "config": validate_config(account.connector.slug, request.data.get("config") or {}),
+            }
+        if "displayName" in request.data:
+            account.name = str(request.data.get("displayName") or account.name)[:255]
+        account.save(update_fields=["metadata", "name", "updated_at"])
+        return Response(serialize(account))
+
+    @extend_schema(responses={204: None})
+    def destroy(self, request: Request, id=None):
+        account = self._get(id)
+        account.status = ConnectorAccount.Status.REVOKED
+        account.last_sync_at = None
+        account.save(update_fields=["status", "last_sync_at", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["post"])
+    def test(self, request: Request, id=None):
+        from apps.integrations.facade import apply_check
+
+        ok, message = apply_check(self._get(id))
+        return Response({"ok": ok, "message": message})
+
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["post"])
+    def reconnect(self, request: Request, id=None):
+        from apps.integrations.facade import apply_check, serialize
+
+        account = self._get(id)
+        apply_check(account)
+        return Response(serialize(account))
+
+    @extend_schema(request=None, responses={202: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["post"])
+    def sync(self, request: Request, id=None):
+        account = self._get(id)
+        queued = sync_integration_sources(account)
+        return Response({"queuedSources": queued}, status=status.HTTP_202_ACCEPTED)
+
+
+def sync_integration_sources(account: ConnectorAccount) -> int:
+    """Queue a sync of every active knowledge source that reads from ``account``."""
+    from apps.knowledge.models import Source
+    from apps.knowledge.tasks import sync_source
+
+    if account.status != ConnectorAccount.Status.ACTIVE:
+        raise ValidationError({"detail": "Connect the integration before syncing it."})
+    sources = Source.objects.filter(
+        source_type=Source.SourceType.INTEGRATION,
+        is_active=True,
+        collection__organization_id=account.organization_id,
+        config__integrationId=str(account.id),
+    ).values_list("id", flat=True)
+    for source_id in sources:
+        transaction.on_commit(lambda source_id=source_id: sync_source.delay(str(source_id)))
+    return len(sources)

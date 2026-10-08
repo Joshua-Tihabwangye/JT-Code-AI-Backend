@@ -25,7 +25,7 @@ DOCS_DIR = PROJECT_ROOT / "docs"
 
 MANDATORY_ADRS = {
     "ADR-001": "ADR-001-supabase-auth-and-django-authorization.md",
-    "ADR-002": "ADR-002-imagekit-asset-architecture.md",
+    "ADR-002": "ADR-002-supabase-storage-architecture.md",
     "ADR-003": "ADR-003-agentic-rag-vector-store.md",
     "ADR-004": "ADR-004-ai-gateway.md",
     "ADR-005": "ADR-005-kafka-celery-n8n-boundaries.md",
@@ -194,7 +194,7 @@ def test_matrix_models_match_the_django_registry(capsys):
 
 
 def test_matrix_endpoints_are_resolvable(capsys):
-    from django.urls import resolve
+    from django.urls import Resolver404, resolve
 
     report = _matrix(capsys)
     assert len(report["endpoints"]) > 50
@@ -203,8 +203,15 @@ def test_matrix_endpoints_are_resolvable(capsys):
         assert entry["path"].startswith("/"), entry["path"]
         assert "(?P" not in entry["path"], f"unresolved regex left in {entry['path']}"
         concrete_path = re.sub(r"\{[^}]+\}", "00000000-0000-4000-8000-000000000000", entry["path"])
-        # Every enumerated path template must resolve once a placeholder value is supplied.
-        assert resolve(concrete_path + "/").url_name or resolve(concrete_path).url_name
+        # Every enumerated path template must resolve once a placeholder value is supplied
+        # (with or without the trailing slash, e.g. Prometheus' conventional /metrics).
+        names = []
+        for candidate in (concrete_path, concrete_path + "/"):
+            try:
+                names.append(resolve(candidate).url_name)
+            except Resolver404:
+                continue
+        assert any(names), f"{entry['path']} does not resolve"
 
 
 def test_matrix_migration_counts_are_per_app(capsys):

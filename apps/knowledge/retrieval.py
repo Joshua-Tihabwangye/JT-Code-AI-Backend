@@ -21,6 +21,8 @@ from typing import Any
 from django.conf import settings
 from django.db import transaction
 
+from apps.agents import safety
+
 logger = logging.getLogger(__name__)
 
 _TERM_RE = re.compile(r"[a-z0-9]{2,}", re.IGNORECASE)
@@ -336,9 +338,15 @@ def build_context(sources: Iterable[dict[str, Any]], *, max_tokens: int | None =
             location.append(f"page {item['page_number']}")
         if item.get("heading_path"):
             location.append(" / ".join(item["heading_path"]))
+        # Document text is untrusted: delimit it (nested delimiters neutralized) so a
+        # document cannot forge citation headers or escape into instructions, and
+        # record injection indicators for the answer's safety metadata.
+        findings = safety.scan(content)
+        if findings:
+            item["injection_rules"] = [finding.rule for finding in findings]
         parts.append(
             f"[{item['citation_index']}] {item.get('document_title', 'Document')} ({', '.join(location)})\n"
-            f"{content}"
+            + safety.wrap_untrusted(f"document:{item.get('document_id', '')}", content)
         )
         used += tokens
     return Context(text="\n\n".join(parts), sources=selected, token_count=used)

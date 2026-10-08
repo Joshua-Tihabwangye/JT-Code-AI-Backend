@@ -20,13 +20,20 @@ def _headers_with_correlation(headers: dict | None) -> dict:
 def add_outbox_event(
     event_name: str, event_key: str, payload: dict, headers: dict | None = None
 ) -> OutboxEvent:
-    """Record an event in the caller's transaction on ``<prefix>.<event_name>``."""
-    return OutboxEvent.objects.create(
+    """Record an event in the caller's transaction on ``<prefix>.<event_name>``.
+
+    Subscribed n8n workflows get their delivery rows in the same transaction.
+    """
+    event = OutboxEvent.objects.create(
         topic=topic_name(validate_event_type(event_name)),
         event_key=event_key,
         payload=payload,
         headers=_headers_with_correlation(headers),
     )
+    from apps.orchestration.deliveries import fan_out
+
+    fan_out(event, event_name)
+    return event
 
 
 def enqueue_outbox_event(

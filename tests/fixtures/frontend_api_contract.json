@@ -1,0 +1,324 @@
+{
+  "source": "jt-code-frontend/src/lib/data/api",
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/accounts/me/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/accounts/me/"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/me/password/"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me/"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/oauth/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/reset/"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/reset/confirm/"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/signin/"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/signout/"
+    },
+    {
+      "method": "POST",
+      "path": "/auth/signup/"
+    },
+    {
+      "method": "GET",
+      "path": "/conversations/"
+    },
+    {
+      "method": "POST",
+      "path": "/conversations/"
+    },
+    {
+      "method": "POST",
+      "path": "/conversations/bulk-delete/"
+    },
+    {
+      "method": "POST",
+      "path": "/conversations/clear/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/conversations/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/conversations/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/conversations/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/conversations/{param}/cancel/"
+    },
+    {
+      "method": "GET",
+      "path": "/conversations/{param}/export/"
+    },
+    {
+      "method": "GET",
+      "path": "/conversations/{param}/messages/"
+    },
+    {
+      "method": "POST",
+      "path": "/conversations/{param}/messages/"
+    },
+    {
+      "method": "GET",
+      "path": "/documents/"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/documents/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/documents/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/documents/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/{param}/duplicate/"
+    },
+    {
+      "method": "GET",
+      "path": "/documents/{param}/export/"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/{param}/save-to-files/"
+    },
+    {
+      "method": "POST",
+      "path": "/documents/{param}/versions/"
+    },
+    {
+      "method": "GET",
+      "path": "/files/"
+    },
+    {
+      "method": "POST",
+      "path": "/files/"
+    },
+    {
+      "method": "POST",
+      "path": "/files/bulk-delete/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/files/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/files/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/files/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/files/{param}/attach/"
+    },
+    {
+      "method": "GET",
+      "path": "/files/{param}/download/"
+    },
+    {
+      "method": "GET",
+      "path": "/images/"
+    },
+    {
+      "method": "POST",
+      "path": "/images/edit/"
+    },
+    {
+      "method": "POST",
+      "path": "/images/generate/"
+    },
+    {
+      "method": "GET",
+      "path": "/images/models/"
+    },
+    {
+      "method": "POST",
+      "path": "/images/understand/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/images/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/images/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/images/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/images/{param}/save-to-files/"
+    },
+    {
+      "method": "GET",
+      "path": "/integrations/"
+    },
+    {
+      "method": "POST",
+      "path": "/integrations/connect/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/integrations/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/integrations/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/integrations/{param}/reconnect/"
+    },
+    {
+      "method": "POST",
+      "path": "/integrations/{param}/test/"
+    },
+    {
+      "method": "GET",
+      "path": "/invoices/"
+    },
+    {
+      "method": "GET",
+      "path": "/invoices/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/invoices/{param}/download/"
+    },
+    {
+      "method": "GET",
+      "path": "/knowledge/collections/"
+    },
+    {
+      "method": "POST",
+      "path": "/knowledge/collections/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/knowledge/collections/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/knowledge/collections/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/knowledge/collections/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/knowledge/collections/{param}/sources/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/knowledge/collections/{param}/sources/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/knowledge/query/"
+    },
+    {
+      "method": "GET",
+      "path": "/knowledge/search/"
+    },
+    {
+      "method": "POST",
+      "path": "/knowledge/sources/{param}/sync/"
+    },
+    {
+      "method": "POST",
+      "path": "/payment-methods/"
+    },
+    {
+      "method": "GET",
+      "path": "/payment-methods/me/"
+    },
+    {
+      "method": "GET",
+      "path": "/plans/"
+    },
+    {
+      "method": "POST",
+      "path": "/plans/{param}/subscribe/"
+    },
+    {
+      "method": "GET",
+      "path": "/subscriptions/"
+    },
+    {
+      "method": "POST",
+      "path": "/subscriptions/cancel/"
+    },
+    {
+      "method": "POST",
+      "path": "/subscriptions/reactivate/"
+    },
+    {
+      "method": "GET",
+      "path": "/usage/"
+    },
+    {
+      "method": "GET",
+      "path": "/wallets/me/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/wallets/me/"
+    },
+    {
+      "method": "POST",
+      "path": "/wallets/me/topup/"
+    }
+  ],
+  "delegated": {
+    "/auth/": "Supabase Auth owns sign-up, sign-in, OAuth, sign-out and password reset (ADR-001); the frontend calls supabase-js directly. ApiAuthRepository is only exercised by the frontend's unit tests."
+  },
+  "deviations": [
+    {
+      "call": "POST /conversations/{param}/messages/",
+      "frontendExpects": "ChatMessage (synchronous assistant reply)",
+      "backendReturns": "202 ChatRequest; the reply streams from GET /chat/requests/{id}/stream/ (SSE) and is listed by GET /conversations/{id}/messages/",
+      "owner": "frontend: switch sendMessage to the streaming flow"
+    }
+  ]
+}

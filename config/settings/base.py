@@ -5,13 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import dj_database_url
-import sentry_sdk
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 from kombu import Queue
-from sentry_sdk.integrations.celery import CeleryIntegration
-from sentry_sdk.integrations.django import DjangoIntegration
-from sentry_sdk.integrations.redis import RedisIntegration
 
 from config.logging import LOGGING  # noqa: F401
 
@@ -68,17 +64,25 @@ INSTALLED_APPS = [
     "apps.documents",
     "apps.conversions",
     "apps.analytics",
+    "apps.usage",
+    "apps.orchestration",
+    "apps.operations",
 ]
 
 MIDDLEWARE = [
     "apps.core.middleware.RequestContextMiddleware",
+    "apps.core.metrics.MetricsMiddleware",
+    "apps.core.edge.EdgeProtectionMiddleware",
+    "apps.core.edge.ReadOnlyModeMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "apps.core.edge.SecurityHeadersMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.governance.audit.AuditTrailMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -201,6 +205,26 @@ CELERY_TASK_TIME_LIMIT = 600
 CELERY_TASK_SOFT_TIME_LIMIT = 540
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BEAT_SCHEDULE = {
+    "detect-cost-anomalies": {
+        "task": "apps.usage.tasks.detect_cost_anomalies",
+        "schedule": 3600.0,
+    },
+    "sweep-n8n-workflows": {
+        "task": "apps.orchestration.tasks.sweep_workflows",
+        "schedule": 60.0,
+    },
+    "run-due-automations": {
+        "task": "apps.orchestration.tasks.run_due_automations",
+        "schedule": 60.0,
+    },
+    "reconcile-n8n-executions": {
+        "task": "apps.orchestration.tasks.reconcile_n8n_executions",
+        "schedule": 600.0,
+    },
+    "prune-n8n-callbacks": {
+        "task": "apps.orchestration.tasks.prune_workflow_callbacks",
+        "schedule": 86400.0,
+    },
     "publish-kafka-outbox": {
         "task": "apps.events.tasks.publish_outbox_batch",
         "schedule": 2.0,
@@ -225,6 +249,31 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.knowledge.tasks.sync_sources",
         "schedule": 300.0,
     },
+    "settle-finished-usage-reservations": {
+        "task": "apps.usage.tasks.settle_finished_reservations",
+        "schedule": 60.0,
+        "options": {"expires": 60},
+    },
+    "reconcile-stripe-billing": {
+        "task": "apps.billing.tasks.reconcile_stripe_billing",
+        "schedule": 3600.0,
+        "options": {"expires": 3600},
+    },
+    "retry-failed-stripe-events": {
+        "task": "apps.billing.tasks.retry_failed_stripe_events",
+        "schedule": 300.0,
+        "options": {"expires": 300},
+    },
+    "run-auto-topups": {
+        "task": "apps.billing.tasks.run_auto_topups",
+        "schedule": 600.0,
+        "options": {"expires": 600},
+    },
+    "reconcile-provider-usage": {
+        "task": "apps.usage.tasks.reconcile_provider_usage",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
+    },
     "recover-stalled-knowledge-ingestion": {
         "task": "apps.knowledge.tasks.recover_stalled_ingestion",
         "schedule": 600.0,
@@ -235,12 +284,12 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 3600.0,
         "options": {"expires": 3600},
     },
-    "reconcile-imagekit-assets": {
+    "reconcile-supabase-storage-assets": {
         "task": "apps.assets.tasks.reconcile_assets",
         "schedule": 3600.0,
         "options": {"expires": 3600},
     },
-    "sweep-imagekit-orphans": {
+    "sweep-supabase-storage-orphans": {
         "task": "apps.assets.tasks.sweep_orphans",
         "schedule": 86400.0,
         "options": {"expires": 21600},
@@ -250,9 +299,15 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 300.0,
         "options": {"expires": 300},
     },
-    "process-billing-webhooks": {
-        "task": "apps.billing.tasks.process_webhooks",
-        "schedule": 60.0,
+    "grant-free-plan-credits": {
+        "task": "apps.billing.tasks.grant_free_plan_credits",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
+    },
+    "billing-renewal-notices": {
+        "task": "apps.billing.tasks.check_subscription_renewals",
+        "schedule": 86400.0,
+        "options": {"expires": 21600},
     },
     "recover-stalled-jobs": {
         "task": "apps.jobs.tasks.recover_stalled_jobs",
@@ -309,6 +364,7 @@ CELERY_TASK_QUEUES = (
     Queue("jobs.visualization"),
     Queue("analytics.analysis"),
     Queue("analytics.visualization"),
+    Queue("orchestration"),
 )
 CELERY_TASK_ROUTES = {
     "apps.analytics.tasks.execute_analysis_run": {"queue": "analytics.analysis"},
@@ -323,14 +379,18 @@ CELERY_TASK_ROUTES = {
     "apps.conversations.tasks.*": {"queue": "jobs.analysis"},
     "apps.agents.tasks.*": {"queue": "jobs.analysis"},
     "apps.tools.tasks.*": {"queue": "jobs.default"},
+    "apps.usage.tasks.*": {"queue": "jobs.default"},
+    "apps.orchestration.tasks.*": {"queue": "orchestration"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
 CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 SUPABASE_URL = env("SUPABASE_URL")
+SUPABASE_INTERNAL_URL = env("SUPABASE_INTERNAL_URL", SUPABASE_URL)
 SUPABASE_JWKS_URL = env("SUPABASE_JWKS_URL")
 SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET")
+SUPABASE_JWT_VERIFICATION = env("SUPABASE_JWT_VERIFICATION", "jwks").lower()
 SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE")
 SUPABASE_JWT_ISSUER = env("SUPABASE_JWT_ISSUER")
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
@@ -338,22 +398,22 @@ SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
 SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY")
 SUPABASE_ALLOW_ANONYMOUS_USERS = env_bool("SUPABASE_ALLOW_ANONYMOUS_USERS", False)
 
-IMAGEKIT_PUBLIC_KEY = env("IMAGEKIT_PUBLIC_KEY")
-IMAGEKIT_PRIVATE_KEY = env("IMAGEKIT_PRIVATE_KEY")
-IMAGEKIT_ENDPOINT_URL = env("IMAGEKIT_ENDPOINT_URL")
-IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code")
-IMAGEKIT_MAX_UPLOAD_BYTES = int(env("IMAGEKIT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
-IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS = int(env("IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "300"))
-IMAGEKIT_SIGNED_URL_TTL_SECONDS = int(env("IMAGEKIT_SIGNED_URL_TTL_SECONDS", "900"))
-IMAGEKIT_API_TIMEOUT_SECONDS = float(env("IMAGEKIT_API_TIMEOUT_SECONDS", "30"))
+# Asset bytes live in a private Supabase Storage bucket.  The service-role key
+# is already represented by SUPABASE_SECRET_KEY and must remain server-only.
+SUPABASE_STORAGE_BUCKET = env("SUPABASE_STORAGE_BUCKET", "jt-code-assets")
+SUPABASE_STORAGE_PREFIX = env("SUPABASE_STORAGE_PREFIX", "jt-code")
+# Empty means ``${SUPABASE_URL}/storage/v1``; override only for a trusted proxy.
+SUPABASE_STORAGE_API_URL = env("SUPABASE_STORAGE_API_URL")
+SUPABASE_STORAGE_PUBLIC_API_URL = env("SUPABASE_STORAGE_PUBLIC_API_URL")
+ASSET_MAX_UPLOAD_BYTES = int(env("ASSET_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+ASSET_UPLOAD_AUTH_TTL_SECONDS = int(env("ASSET_UPLOAD_AUTH_TTL_SECONDS", "300"))
+ASSET_SIGNED_URL_TTL_SECONDS = int(env("ASSET_SIGNED_URL_TTL_SECONDS", "900"))
+SUPABASE_STORAGE_TIMEOUT_SECONDS = float(env("SUPABASE_STORAGE_TIMEOUT_SECONDS", "30"))
 ASSET_DELETE_GRACE_DAYS = int(env("ASSET_DELETE_GRACE_DAYS", "7"))
 ASSET_ORPHAN_GRACE_HOURS = int(env("ASSET_ORPHAN_GRACE_HOURS", "24"))
-IMAGEKIT_RECONCILE_PAGE_SIZE = int(env("IMAGEKIT_RECONCILE_PAGE_SIZE", "100"))
-IMAGEKIT_RECONCILE_MAX_PAGES = int(env("IMAGEKIT_RECONCILE_MAX_PAGES", "100"))
+ASSET_RECONCILE_PAGE_SIZE = int(env("ASSET_RECONCILE_PAGE_SIZE", "100"))
+ASSET_RECONCILE_MAX_PAGES = int(env("ASSET_RECONCILE_MAX_PAGES", "100"))
 ASSET_LOCAL_FALLBACK_ENABLED = env_bool("ASSET_LOCAL_FALLBACK_ENABLED", False)
-# ImageKit API bases (override only for a proxy or a regional endpoint).
-IMAGEKIT_UPLOAD_API_BASE = env("IMAGEKIT_UPLOAD_API_BASE", "https://upload.imagekit.io/api")
-IMAGEKIT_API_BASE = env("IMAGEKIT_API_BASE", "https://api.imagekit.io/v1")
 # Upload content types are verified against the file's magic bytes. SVG is
 # deliberately absent: it can carry script.
 _DEFAULT_ASSET_TYPES = (
@@ -364,9 +424,9 @@ _DEFAULT_ASSET_TYPES = (
 )
 ASSET_ALLOWED_CONTENT_TYPES = tuple(env_list("ASSET_ALLOWED_CONTENT_TYPES", _DEFAULT_ASSET_TYPES))
 # Reconcile verifies READY assets in batches, re-checking each at most this often.
-IMAGEKIT_RECONCILE_BATCH_SIZE = int(env("IMAGEKIT_RECONCILE_BATCH_SIZE", "200"))
-IMAGEKIT_RECONCILE_INTERVAL_HOURS = int(env("IMAGEKIT_RECONCILE_INTERVAL_HOURS", "24"))
-IMAGEKIT_RECONCILE_MAX_DEPTH = int(env("IMAGEKIT_RECONCILE_MAX_DEPTH", "6"))
+ASSET_RECONCILE_BATCH_SIZE = int(env("ASSET_RECONCILE_BATCH_SIZE", "200"))
+ASSET_RECONCILE_INTERVAL_HOURS = int(env("ASSET_RECONCILE_INTERVAL_HOURS", "24"))
+ASSET_RECONCILE_MAX_DEPTH = int(env("ASSET_RECONCILE_MAX_DEPTH", "6"))
 ASSET_DELETE_MAX_ATTEMPTS = int(env("ASSET_DELETE_MAX_ATTEMPTS", "10"))
 
 # Phase 12 analytics workers run only a bounded declarative transform language.
@@ -391,7 +451,7 @@ ANALYTICS_SANDBOX_MEMORY_MB = int(env("ANALYTICS_SANDBOX_MEMORY_MB", "1536"))
 ANALYTICS_SANDBOX_CPU_SECONDS = int(env("ANALYTICS_SANDBOX_CPU_SECONDS", "240"))
 ANALYTICS_SANDBOX_TIMEOUT_SECONDS = int(env("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250"))
 # Plotly specs up to this size are also kept inline on the visualization row;
-# the full spec is always stored as an ImageKit asset.
+# the full spec is always stored as a private Supabase Storage asset.
 ANALYTICS_INLINE_SPEC_BYTES = int(env("ANALYTICS_INLINE_SPEC_BYTES", "262144"))
 
 KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
@@ -414,12 +474,33 @@ KAFKA_TOPIC_RETENTION_MS = int(env("KAFKA_TOPIC_RETENTION_MS", str(7 * 24 * 3600
 AI_PROVIDER = env("AI_PROVIDER", "disabled")
 N8N_SENTRY_RELAY_SECRET = env("N8N_SENTRY_RELAY_SECRET")
 
-# n8n Integration
+# n8n orchestration (Phase 16; docs/N8N_ORCHESTRATION.md, infra/n8n).
+# N8N_BASE_URL serves the editor and public API (workflow sync); webhooks are
+# dispatched to N8N_WEBHOOK_BASE_URL (the queue-mode webhook processors).
 N8N_BASE_URL = env("N8N_BASE_URL")
+N8N_WEBHOOK_BASE_URL = env("N8N_WEBHOOK_BASE_URL")
 N8N_API_KEY = env("N8N_API_KEY")
+# Django -> n8n requests are signed with N8N_DISPATCH_SECRET; n8n -> Django
+# callbacks with N8N_WEBHOOK_SECRET (previous value accepted during rotation).
+N8N_DISPATCH_SECRET = env("N8N_DISPATCH_SECRET")
 N8N_WEBHOOK_SECRET = env("N8N_WEBHOOK_SECRET")
+N8N_WEBHOOK_SECRET_PREVIOUS = env("N8N_WEBHOOK_SECRET_PREVIOUS")
+# Public base URL of this API as n8n reaches it, e.g. https://api.example.com/api/v1.
 N8N_CALLBACK_BASE_URL = env("N8N_CALLBACK_BASE_URL")
 N8N_WORKFLOW_PREFIX = env("N8N_WORKFLOW_PREFIX", "jt-code")
+N8N_WORKFLOWS_DIR = env("N8N_WORKFLOWS_DIR", str(BASE_DIR / "n8n" / "workflows"))
+N8N_REQUEST_TIMEOUT_SECONDS = int(env("N8N_REQUEST_TIMEOUT_SECONDS", "15"))
+N8N_RETRY_BASE_SECONDS = int(env("N8N_RETRY_BASE_SECONDS", "30"))
+N8N_RETRY_MAX_SECONDS = int(env("N8N_RETRY_MAX_SECONDS", "900"))
+# Ids of the n8n credentials the workflows use (substituted on `n8n_workflows push`).
+_N8N_CREDENTIALS = {
+    "N8N_CREDENTIAL_SLACK": env("N8N_CREDENTIAL_SLACK"),
+    "N8N_CREDENTIAL_SMTP": env("N8N_CREDENTIAL_SMTP"),
+    "N8N_CREDENTIAL_GOOGLE_DRIVE": env("N8N_CREDENTIAL_GOOGLE_DRIVE"),
+    "N8N_CREDENTIAL_NOTION": env("N8N_CREDENTIAL_NOTION"),
+    "N8N_CREDENTIAL_GITHUB": env("N8N_CREDENTIAL_GITHUB"),
+}
+N8N_CREDENTIAL_IDS = {name: value for name, value in _N8N_CREDENTIALS.items() if value}
 
 # AI Gateway
 AI_GATEWAY_DEFAULT_POLICY = env("AI_GATEWAY_DEFAULT_POLICY", "balanced")
@@ -436,6 +517,10 @@ AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(env("AI_CIRCUIT_BREAKER_COOLDOWN_SECON
 # Gemini (Generative Language REST API).
 GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
 GEMINI_DEFAULT_MODEL = env("GEMINI_DEFAULT_MODEL", "gemini-2.5-flash")
+# Images: Imagen generates, a Gemini image model edits, the chat model describes.
+IMAGE_PROVIDER = env("IMAGE_PROVIDER")  # "gemini" (default) or "echo" (development/tests only)
+GEMINI_IMAGE_MODEL = env("GEMINI_IMAGE_MODEL", "imagen-3.0-generate-002")
+GEMINI_IMAGE_EDIT_MODEL = env("GEMINI_IMAGE_EDIT_MODEL", "gemini-2.5-flash-image")
 GEMINI_SAFETY_THRESHOLD = env("GEMINI_SAFETY_THRESHOLD", "BLOCK_MEDIUM_AND_ABOVE")
 # Llama via any hosted or self-hosted OpenAI-compatible endpoint.
 LLAMA_API_BASE = env("LLAMA_API_BASE")
@@ -478,9 +563,44 @@ BILLING_CREDIT_VALUE_USD = env_float("BILLING_CREDIT_VALUE_USD", 0.01)
 BILLING_FX_BUFFER = env_float("BILLING_FX_BUFFER", 1.05)
 BILLING_MARGIN_MULTIPLIER = env_float("BILLING_MARGIN_MULTIPLIER", 1.25)
 BILLING_DEFAULT_PLAN = env("BILLING_DEFAULT_PLAN", "free")
+
+# Usage metering (Phase 13). Credits are reserved before work starts and settled
+# afterwards from recorded provider cost (cost_usd x FX buffer x margin / credit
+# value) or the feature's flat price; a settlement never exceeds its reservation.
+_DEFAULT_USAGE_RESERVATIONS = (
+    "chat_messages=10,rag_queries=25,search_queries=40,knowledge_documents=100,image_generations=100,"
+    "document_renders=20,file_conversions=15,workflow_executions=10,agent_runs=50,analysis_runs=10,api_calls=1"
+)
+USAGE_RESERVATION_CREDITS = env("USAGE_RESERVATION_CREDITS", _DEFAULT_USAGE_RESERVATIONS)
+# Flat prices for features without metered provider cost (and the minimum for AI features).
+_DEFAULT_USAGE_FLAT = (
+    "chat_messages=1,rag_queries=2,search_queries=5,knowledge_documents=10,image_generations=100,"
+    "document_renders=20,file_conversions=15,workflow_executions=10,agent_runs=2,analysis_runs=10,api_calls=1"
+)
+USAGE_FLAT_CREDITS = env("USAGE_FLAT_CREDITS", _DEFAULT_USAGE_FLAT)
+USAGE_RESERVATION_TTL_MINUTES = int(env("USAGE_RESERVATION_TTL_MINUTES", "120"))
+USAGE_RECONCILIATION_DRIFT_RATIO = env_float("USAGE_RECONCILIATION_DRIFT_RATIO", 0.01)
+# Per-tenant concurrency ceilings (a plan's ``limits`` may override each key).
+MAX_CONCURRENT_JOBS_PER_TENANT = int(env("MAX_CONCURRENT_JOBS_PER_TENANT", "20"))
+MAX_CONCURRENT_CHAT_REQUESTS_PER_TENANT = int(env("MAX_CONCURRENT_CHAT_REQUESTS_PER_TENANT", "20"))
+MAX_CONCURRENT_ANALYSIS_RUNS_PER_TENANT = int(env("MAX_CONCURRENT_ANALYSIS_RUNS_PER_TENANT", "5"))
+# Tenant-wide request ceiling = per-user scope rate x this multiplier (plan-overridable).
+THROTTLE_TENANT_MULTIPLIER = int(env("THROTTLE_TENANT_MULTIPLIER", "10"))
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
 STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY")
+# Pinned so a change to the Stripe account's default API version cannot change
+# the payload shapes this code parses.
+STRIPE_API_VERSION = env("STRIPE_API_VERSION", "2023-10-16")
+STRIPE_WEBHOOK_TOLERANCE_SECONDS = int(env("STRIPE_WEBHOOK_TOLERANCE_SECONDS", "300"))
+STRIPE_EVENT_MAX_ATTEMPTS = int(env("STRIPE_EVENT_MAX_ATTEMPTS", "8"))
+# Frontend origin for Checkout/Portal return URLs; client-supplied return URLs
+# must share an allowed origin (this plus CORS_ALLOWED_ORIGINS).
+FRONTEND_URL = env("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+BILLING_TOPUP_MIN_CENTS = int(env("BILLING_TOPUP_MIN_CENTS", "500"))
+BILLING_TOPUP_MAX_CENTS = int(env("BILLING_TOPUP_MAX_CENTS", "100000"))
+# Auto top-up charges the saved default payment method at most once per window.
+BILLING_AUTO_TOPUP_COOLDOWN_MINUTES = int(env("BILLING_AUTO_TOPUP_COOLDOWN_MINUTES", "60"))
 
 # Knowledge/RAG
 # Supabase PostgreSQL (pgvector) is the only vector store. The `vector` extension
@@ -542,7 +662,9 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 50,
     "EXCEPTION_HANDLER": "apps.core.exceptions.api_exception_handler",
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
+    "DEFAULT_THROTTLE_CLASSES": ["apps.core.throttling.IPRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {
+        "ip": env("THROTTLE_IP", "300/minute"),
         "chat": env("THROTTLE_CHAT", "60/hour"),
         "images": env("THROTTLE_IMAGES", "30/hour"),
         "embeddings": env("THROTTLE_EMBEDDINGS", "120/hour"),
@@ -562,6 +684,8 @@ SPECTACULAR_SETTINGS = {
     "COMPONENT_SPLIT_REQUEST": True,
     "ENUM_NAME_OVERRIDES": {
         "AssetVisibility": "apps.assets.models.Asset.Visibility",
+        "UsageFeature": "apps.usage.models.Feature",
+        "EntitlementFeature": "apps.billing.models.Entitlement.FeatureType",
         "VisualizationKind": "apps.analytics.models.Visualization.Kind",
         "KnowledgeDocumentVisibility": "apps.knowledge.models.Document.Visibility",
         "ModelStatus": [
@@ -634,17 +758,88 @@ SPECTACULAR_SETTINGS = {
 HEALTHCHECK_EXTERNAL_DEPENDENCIES = env_bool("HEALTHCHECK_EXTERNAL_DEPENDENCIES", False)
 
 SENTRY_DSN = env("SENTRY_DSN")
+SENTRY_ENVIRONMENT = env("SENTRY_ENVIRONMENT")
+SENTRY_RELEASE = env("SENTRY_RELEASE", "jt-code-api@0.1.0")
+SENTRY_TRACES_SAMPLE_RATE = env_float("SENTRY_TRACES_SAMPLE_RATE", 0.1)
+SENTRY_PROFILES_SAMPLE_RATE = env_float("SENTRY_PROFILES_SAMPLE_RATE", 0.0)
 if SENTRY_DSN:
-    sentry_sdk.init(
+    from apps.core.sentry import init_sentry
+
+    init_sentry(
         dsn=SENTRY_DSN,
-        environment=env("SENTRY_ENVIRONMENT"),
-        release=env("SENTRY_RELEASE", "jt-code-api@0.1.0"),
-        integrations=[DjangoIntegration(), CeleryIntegration(), RedisIntegration()],
-        traces_sample_rate=env_float("SENTRY_TRACES_SAMPLE_RATE", 0.1),
-        profiles_sample_rate=env_float("SENTRY_PROFILES_SAMPLE_RATE", 0.0),
-        send_default_pii=False,
-        max_request_body_size="never",
+        environment=SENTRY_ENVIRONMENT,
+        release=SENTRY_RELEASE,
+        traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+        profiles_sample_rate=SENTRY_PROFILES_SAMPLE_RATE,
     )
+
+# Observability (Phase 15): Prometheus metrics and OpenTelemetry tracing.
+# ``/metrics`` requires ``Authorization: Bearer <METRICS_AUTH_TOKEN>``.
+METRICS_AUTH_TOKEN = env("METRICS_AUTH_TOKEN")
+METRICS_DATABASE_STATE = env_bool("METRICS_DATABASE_STATE", True)
+METRICS_STATE_CACHE_SECONDS = int(env("METRICS_STATE_CACHE_SECONDS", "15"))
+# Celery workers serve their own exposition on this port (0 disables).
+CELERY_METRICS_PORT = int(env("CELERY_METRICS_PORT", "0"))
+OTEL_EXPORTER_OTLP_ENDPOINT = env("OTEL_EXPORTER_OTLP_ENDPOINT")
+OTEL_EXPORTER_OTLP_HEADERS = env("OTEL_EXPORTER_OTLP_HEADERS")
+OTEL_SERVICE_NAME = env("OTEL_SERVICE_NAME", "jt-code-api")
+OTEL_SERVICE_VERSION = SENTRY_RELEASE
+OTEL_ENVIRONMENT = env("OTEL_ENVIRONMENT", SENTRY_ENVIRONMENT or "development")
+OTEL_TRACES_SAMPLE_RATIO = env_float("OTEL_TRACES_SAMPLE_RATIO", 0.1)
+
+# Cost anomaly detection (Phase 19): last hour's provider cost against the trailing baseline.
+USAGE_ANOMALY_BASELINE_DAYS = int(env("USAGE_ANOMALY_BASELINE_DAYS", "14"))
+USAGE_ANOMALY_Z = env_float("USAGE_ANOMALY_Z", 4.0)
+USAGE_ANOMALY_MIN_USD = env_float("USAGE_ANOMALY_MIN_USD", 5.0)
+# Planned database failover/restore: reject writes with 503 + Retry-After, keep serving reads.
+READ_ONLY_MODE = env_bool("READ_ONLY_MODE", False)
+# Kafka partitions per topic for hot topics, e.g. "chat.request.accepted=12,jobs.job.created=12".
+KAFKA_TOPIC_PARTITIONS_OVERRIDES = {
+    name.strip(): int(count)
+    for item in env_list("KAFKA_TOPIC_PARTITIONS_OVERRIDES")
+    for name, _, count in [item.partition("=")]
+    if name.strip() and count.strip().isdigit()
+}
+
+# Edge security (Phase 15). See apps/core/edge.py and infra/terraform/modules/cloudflare_edge.
+TRUSTED_PROXY_HOPS = int(env("TRUSTED_PROXY_HOPS", "0"))
+CLOUDFLARE_ORIGIN_SECRET = env("CLOUDFLARE_ORIGIN_SECRET")
+CLOUDFLARE_ENFORCE_ORIGIN = env_bool("CLOUDFLARE_ENFORCE_ORIGIN", False)
+CSP_API_POLICY = env(
+    "CSP_API_POLICY", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+)
+CSP_HTML_POLICY = env(
+    "CSP_HTML_POLICY",
+    "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://cdn.jsdelivr.net; "
+    "connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+)
+PERMISSIONS_POLICY = env(
+    "PERMISSIONS_POLICY",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), "
+    "payment=(), usb=(), browsing-topics=()",
+)
+CROSS_ORIGIN_RESOURCE_POLICY = env("CROSS_ORIGIN_RESOURCE_POLICY", "same-site")
+# Signed machine-to-machine webhooks (n8n, relays): timestamp window and nonce TTL.
+WEBHOOK_REPLAY_TOLERANCE_SECONDS = int(env("WEBHOOK_REPLAY_TOLERANCE_SECONDS", "300"))
+
+# Audit pipeline (Phase 15): mutating requests to these route templates are
+# audited, successful or denied - (route regex, category, severity, methods).
+AUDIT_ROUTE_RULES: tuple[tuple[str, str, str, str], ...] = (
+    (r"^api/v1/(api-keys|webhooks|connector-accounts|kafka-consumers)/", "configuration", "medium", "*"),
+    (r"^api/v1/integrations/", "configuration", "medium", "*"),
+    (r"^api/v1/(tool-policies|tool-credentials|mcp/servers)/", "security", "high", "*"),
+    (r"^api/v1/tool-approvals/", "authorization", "medium", "*"),
+    (r"^api/v1/(plans/.+/subscribe|subscriptions|wallets|payment-methods)/", "billing", "medium", "*"),
+    (r"^api/v1/billing/", "billing", "medium", "*"),
+    (r"^api/v1/(organizations|settings/organization|settings/account|settings/export)", "admin", "high", "*"),
+    (r"^api/v1/accounts/me/password/", "security", "high", "*"),
+    (r"^api/v1/(settings/consents|consents|retention-rules)/", "configuration", "medium", "*"),
+    (r"^api/v1/(files|knowledge)/", "file_operation", "low", "DELETE"),
+    (r"^api/v1/files/.+/(restore|access)/", "file_operation", "low", "*"),
+    (r"^api/v1/(n8n/workflows|automations)", "configuration", "medium", "*"),
+)
 
 if os.getenv("DJANGO_SETTINGS_MODULE") == "config.settings.base":
     raise ImproperlyConfigured("config.settings.base is shared settings, not a deployable profile.")

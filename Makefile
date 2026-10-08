@@ -1,4 +1,4 @@
-.PHONY: help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: images compose-up compose-up-no-browser compose-down k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -30,6 +30,15 @@ help:
 	@echo "  check         Run all checks (lint + format + typecheck + test)"
 	@echo "  ci-local      Run the same gates as GitHub Actions where possible"
 	@echo "  restore-drill Run local Phase 3 restore verification"
+	@echo "Infrastructure (Phase 17):"
+	@echo "  images        Build the API, office and Streamlit images"
+	@echo "  compose-up    Local full stack; lists and opens browser-facing endpoints"
+	@echo "  compose-up-no-browser  Same stack, without opening browser tabs"
+	@echo "  k8s-generate  Regenerate infra/k8s/base and components"
+	@echo "  k8s-render    Render the staging and production overlays"
+	@echo "  k8s-validate  Render + kubeconform-validate every overlay"
+	@echo "  tf-validate   terraform fmt/validate every environment root"
+	@echo "  deploy-staging / bootstrap-staging  See docs/DEPLOYMENT.md"
 	@echo "Maintenance:"
 	@echo "  collectstatic Collect static files"
 	@echo "  clean         Remove cache and build artifacts"
@@ -72,7 +81,7 @@ run-0:
 	uvicorn config.asgi:application --env-file .env --host 0.0.0.0 --port 8000
 
 worker:
-	celery -A config worker -l INFO -Q jobs.default,jobs.analysis,jobs.ingestion,jobs.visualization
+	celery -A config worker -l INFO -Q jobs.default,jobs.analysis,jobs.ingestion,jobs.visualization,analytics.analysis,analytics.visualization,orchestration
 
 consumer:
 	python manage.py run_kafka_consumer integrations.webhook.received --consumer-name integration-webhooks
@@ -117,9 +126,9 @@ ci-local:
 	python manage.py makemigrations --check --dry-run --settings=config.settings.ci
 	python manage.py migrate --noinput --settings=config.settings.ci
 	pytest --cov=apps --cov=config
-	detect-secrets-hook --baseline .secrets.baseline $$(git ls-files)
+	git ls-files -co --exclude-standard -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
 	bandit -q -r apps config manage.py --exclude tests
-	pip-audit --strict
+	pip-audit --strict -r requirements.txt
 
 restore-drill:
 	python manage.py restore_drill_check --prepare-test-db --settings=config.settings.test
@@ -136,3 +145,47 @@ clean:
 	find . -type d -name '.ruff_cache' -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name 'htmlcov' -exec rm -rf {} + 2>/dev/null || true
 	rm -f coverage.xml .coverage
+
+# Infrastructure (Phase 17) ------------------------------------------------------
+KUSTOMIZE ?= kustomize
+KUBECONFORM ?= kubeconform
+TERRAFORM ?= terraform
+
+images:
+	docker build --target runtime -t jt-code-api:local .
+	docker build --target office -t jt-code-api-office:local .
+	docker build -t jt-code-streamlit:local streamlit_app
+
+compose-up:
+	@bash scripts/compose_up.sh
+
+compose-up-no-browser:
+	@AUTO_OPEN_BROWSER=0 bash scripts/compose_up.sh
+
+compose-down:
+	docker compose down
+
+k8s-generate:
+	python scripts/k8s/gen_base.py
+
+k8s-render:
+	@for overlay in infra/k8s/overlays/*/; do echo "--- $$overlay"; $(KUSTOMIZE) build $$overlay; done
+
+k8s-validate:
+	@for overlay in infra/k8s/overlays/*/; do \
+	  $(KUSTOMIZE) build $$overlay | $(KUBECONFORM) -strict -summary -kubernetes-version 1.30.0 \
+	    -schema-location default \
+	    -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' || exit 1; \
+	done
+
+tf-validate:
+	$(TERRAFORM) fmt -check -recursive infra/terraform
+	@for root in infra/terraform/envs/*/; do \
+	  $(TERRAFORM) -chdir=$$root init -backend=false -input=false >/dev/null && $(TERRAFORM) -chdir=$$root validate || exit 1; \
+	done
+
+deploy-staging:
+	scripts/deploy/deploy.sh staging
+
+bootstrap-staging:
+	scripts/deploy/bootstrap_environment.sh staging $(API_IMAGE) $(OFFICE_IMAGE) $(STREAMLIT_IMAGE)

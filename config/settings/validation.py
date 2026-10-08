@@ -37,19 +37,20 @@ _REQUIRED_STRICT = (
     "KAFKA_SASL_MECHANISM",
     "KAFKA_SASL_USERNAME",
     "KAFKA_SASL_PASSWORD",
-    "IMAGEKIT_PUBLIC_KEY",
-    "IMAGEKIT_PRIVATE_KEY",
-    "IMAGEKIT_ENDPOINT_URL",
+    "SUPABASE_STORAGE_BUCKET",
     "N8N_BASE_URL",
     "N8N_API_KEY",
     "N8N_WEBHOOK_SECRET",
     "N8N_SENTRY_RELAY_SECRET",
+    "N8N_DISPATCH_SECRET",
+    "N8N_CALLBACK_BASE_URL",
     "STRIPE_SECRET_KEY",
     "WEBHOOK_ALLOWED_HOSTS",
     "WEBHOOK_SIGNING_SECRET",
     "STRIPE_WEBHOOK_SECRET",
     "SENTRY_DSN",
     "SENTRY_ENVIRONMENT",
+    "METRICS_AUTH_TOKEN",
 )
 _SECRET_ENV = (
     "DJANGO_SECRET_KEY",
@@ -58,15 +59,17 @@ _SECRET_ENV = (
     "N8N_SENTRY_RELAY_SECRET",
     "N8N_API_KEY",
     "N8N_WEBHOOK_SECRET",
+    "N8N_DISPATCH_SECRET",
     "KAFKA_SASL_PASSWORD",
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "WEBHOOK_SIGNING_SECRET",
-    "IMAGEKIT_PRIVATE_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "LLAMA_API_KEY",
     "SENTRY_DSN",
+    "METRICS_AUTH_TOKEN",
+    "CLOUDFLARE_ORIGIN_SECRET",
 )
 _BOOL_ENV = (
     "DJANGO_DEBUG",
@@ -76,19 +79,22 @@ _BOOL_ENV = (
     "BROWSER_TOOL_ENABLED",
     "ENABLE_MCP",
     "ASSET_LOCAL_FALLBACK_ENABLED",
+    "METRICS_DATABASE_STATE",
+    "READ_ONLY_MODE",
+    "CLOUDFLARE_ENFORCE_ORIGIN",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
     "AI_GATEWAY_MAX_LATENCY_MS",
-    "IMAGEKIT_MAX_UPLOAD_BYTES",
-    "IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS",
+    "ASSET_MAX_UPLOAD_BYTES",
+    "ASSET_UPLOAD_AUTH_TTL_SECONDS",
     "ASSET_DELETE_GRACE_DAYS",
     "ASSET_ORPHAN_GRACE_HOURS",
-    "IMAGEKIT_RECONCILE_PAGE_SIZE",
-    "IMAGEKIT_RECONCILE_MAX_PAGES",
-    "IMAGEKIT_RECONCILE_BATCH_SIZE",
-    "IMAGEKIT_RECONCILE_INTERVAL_HOURS",
-    "IMAGEKIT_RECONCILE_MAX_DEPTH",
+    "ASSET_RECONCILE_PAGE_SIZE",
+    "ASSET_RECONCILE_MAX_PAGES",
+    "ASSET_RECONCILE_BATCH_SIZE",
+    "ASSET_RECONCILE_INTERVAL_HOURS",
+    "ASSET_RECONCILE_MAX_DEPTH",
     "ASSET_DELETE_MAX_ATTEMPTS",
     "DATABASE_CONN_MAX_AGE",
     "DATABASE_CONNECT_TIMEOUT_SECONDS",
@@ -127,6 +133,16 @@ _INT_ENV = (
     "AGENT_RUN_STALLED_TIMEOUT_SECONDS",
     "AGENT_RUN_MAX_ATTEMPTS",
     "MAX_CONCURRENT_AGENT_RUNS_PER_TENANT",
+    "MAX_CONCURRENT_JOBS_PER_TENANT",
+    "MAX_CONCURRENT_CHAT_REQUESTS_PER_TENANT",
+    "MAX_CONCURRENT_ANALYSIS_RUNS_PER_TENANT",
+    "USAGE_RESERVATION_TTL_MINUTES",
+    "THROTTLE_TENANT_MULTIPLIER",
+    "STRIPE_WEBHOOK_TOLERANCE_SECONDS",
+    "STRIPE_EVENT_MAX_ATTEMPTS",
+    "BILLING_TOPUP_MIN_CENTS",
+    "BILLING_TOPUP_MAX_CENTS",
+    "BILLING_AUTO_TOPUP_COOLDOWN_MINUTES",
     "AI_MAX_RETRIES",
     "AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS",
     "CHAT_REQUEST_STALLED_TIMEOUT_SECONDS",
@@ -155,18 +171,27 @@ _INT_ENV = (
     "ANALYTICS_SANDBOX_CPU_SECONDS",
     "ANALYTICS_SANDBOX_TIMEOUT_SECONDS",
     "ANALYTICS_INLINE_SPEC_BYTES",
+    "METRICS_STATE_CACHE_SECONDS",
+    "CELERY_METRICS_PORT",
+    "TRUSTED_PROXY_HOPS",
+    "WEBHOOK_REPLAY_TOLERANCE_SECONDS",
+    "N8N_REQUEST_TIMEOUT_SECONDS",
+    "N8N_RETRY_BASE_SECONDS",
+    "N8N_RETRY_MAX_SECONDS",
+    "USAGE_ANOMALY_BASELINE_DAYS",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
     "BILLING_CREDIT_VALUE_USD",
     "BILLING_FX_BUFFER",
     "BILLING_MARGIN_MULTIPLIER",
+    "USAGE_RECONCILIATION_DRIFT_RATIO",
     "VECTOR_MIN_SIMILARITY",
     "RAG_EVAL_MIN_RECALL",
     "RAG_EVAL_MIN_MRR",
     "RAG_URL_FETCH_TIMEOUT_SECONDS",
     "RAG_EMBEDDING_TIMEOUT_SECONDS",
-    "IMAGEKIT_API_TIMEOUT_SECONDS",
+    "SUPABASE_STORAGE_TIMEOUT_SECONDS",
     "SENTRY_TRACES_SAMPLE_RATE",
     "SENTRY_PROFILES_SAMPLE_RATE",
     "CHAT_SSE_HEARTBEAT_SECONDS",
@@ -176,6 +201,9 @@ _FLOAT_ENV = (
     "CHAT_SSE_POLL_SECONDS",
     "CHAT_SSE_RECONCILIATION_SECONDS",
     "WEBHOOK_DELIVERY_TIMEOUT_SECONDS",
+    "OTEL_TRACES_SAMPLE_RATIO",
+    "USAGE_ANOMALY_Z",
+    "USAGE_ANOMALY_MIN_USD",
 )
 _FRACTION_ENV = {
     "VECTOR_MIN_SIMILARITY": (0.0, 1.0),
@@ -183,6 +211,7 @@ _FRACTION_ENV = {
     "RAG_EVAL_MIN_MRR": (0.0, 1.0),
     "SENTRY_TRACES_SAMPLE_RATE": (0.0, 1.0),
     "SENTRY_PROFILES_SAMPLE_RATE": (0.0, 1.0),
+    "OTEL_TRACES_SAMPLE_RATIO": (0.0, 1.0),
 }
 _THROTTLE_ENV = (
     "THROTTLE_CHAT",
@@ -193,6 +222,7 @@ _THROTTLE_ENV = (
     "THROTTLE_BURST",
     "THROTTLE_AGENT_RUNS",
     "THROTTLE_ANALYTICS",
+    "THROTTLE_IP",
 )
 _URL_LIST_ENV = ("CORS_ALLOWED_ORIGINS", "CSRF_TRUSTED_ORIGINS")
 
@@ -332,6 +362,56 @@ def _check_ai_gateway(problems: list[str], *, strict: bool) -> None:
         problems.append("GEMINI_SAFETY_THRESHOLD must not disable Gemini safety filtering in production.")
 
 
+def _check_billing(problems: list[str], *, strict: bool) -> None:
+    low, high = _val("BILLING_TOPUP_MIN_CENTS", "500"), _val("BILLING_TOPUP_MAX_CENTS", "100000")
+    if low.isdigit() and high.isdigit() and int(low) >= int(high):
+        problems.append("BILLING_TOPUP_MIN_CENTS must be below BILLING_TOPUP_MAX_CENTS.")
+    if not strict:
+        return
+    frontend = _val("FRONTEND_URL")
+    if not frontend.startswith("https://"):
+        problems.append("FRONTEND_URL must be an https:// origin in staging/production.")
+    if not _val("STRIPE_SECRET_KEY").startswith(("sk_", "rk_")):
+        problems.append("STRIPE_SECRET_KEY must be a Stripe secret (sk_) or restricted (rk_) key.")
+    if not _val("STRIPE_WEBHOOK_SECRET").startswith("whsec_"):
+        problems.append("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret (whsec_).")
+
+
+def _check_observability(problems: list[str], *, strict: bool) -> None:
+    tolerance = _val("WEBHOOK_REPLAY_TOLERANCE_SECONDS", "300")
+    if tolerance.isdigit() and not 30 <= int(tolerance) <= 900:
+        problems.append("WEBHOOK_REPLAY_TOLERANCE_SECONDS must be between 30 and 900.")
+    hops = _val("TRUSTED_PROXY_HOPS", "0")
+    if hops.isdigit() and int(hops) > 5:
+        problems.append("TRUSTED_PROXY_HOPS must be the number of proxies you operate (0-5).")
+    enforce = _val("CLOUDFLARE_ENFORCE_ORIGIN", "false").lower() in {"1", "true", "yes", "on"}
+    if enforce and len(_val("CLOUDFLARE_ORIGIN_SECRET")) < 32:
+        problems.append("CLOUDFLARE_ENFORCE_ORIGIN requires CLOUDFLARE_ORIGIN_SECRET (32+ characters).")
+    if not strict:
+        return
+    if (token := _val("METRICS_AUTH_TOKEN")) and len(token) < 32:
+        problems.append("METRICS_AUTH_TOKEN must be at least 32 characters.")
+    if (endpoint := _val("OTEL_EXPORTER_OTLP_ENDPOINT")) and urlparse(endpoint).scheme != "https":
+        problems.append("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS in deployable environments.")
+
+
+def _check_n8n(problems: list[str], *, strict: bool) -> None:
+    base, ceiling = _val("N8N_RETRY_BASE_SECONDS", "30"), _val("N8N_RETRY_MAX_SECONDS", "900")
+    if base.isdigit() and ceiling.isdigit() and not 0 < int(base) <= int(ceiling):
+        problems.append("N8N_RETRY_BASE_SECONDS must be positive and at most N8N_RETRY_MAX_SECONDS.")
+    dispatch, callback = _val("N8N_DISPATCH_SECRET"), _val("N8N_WEBHOOK_SECRET")
+    if dispatch and dispatch == callback:
+        problems.append("N8N_DISPATCH_SECRET and N8N_WEBHOOK_SECRET must differ (one per direction).")
+    if not strict:
+        return
+    for name in ("N8N_DISPATCH_SECRET", "N8N_WEBHOOK_SECRET"):
+        if (value := _val(name)) and len(value) < 32:
+            problems.append(f"{name} must be at least 32 characters.")
+    for name in ("N8N_WEBHOOK_BASE_URL", "N8N_CALLBACK_BASE_URL"):
+        if (value := _val(name)) and urlparse(value).scheme != "https":
+            problems.append(f"{name} must use HTTPS in deployable environments.")
+
+
 def _check_rag(problems: list[str], *, strict: bool) -> None:
     provider = _val("RAG_EMBEDDING_PROVIDER", "gemini").lower()
     if provider not in {"openai", "gemini", "echo"}:
@@ -383,7 +463,10 @@ def validate_environment(profile: str) -> list[str]:
     _check_rag(problems, strict=strict)
     _check_agents(problems)
     _check_analytics(problems)
+    _check_billing(problems, strict=strict)
     _check_tools(problems, strict=strict)
+    _check_observability(problems, strict=strict)
+    _check_n8n(problems, strict=strict)
     if not strict:
         return problems
 
@@ -430,6 +513,11 @@ def validate_environment(profile: str) -> list[str]:
     protocol = _val("KAFKA_SECURITY_PROTOCOL").upper()
     if protocol != "SASL_SSL":
         problems.append("KAFKA_SECURITY_PROTOCOL must be SASL_SSL in deployable environments.")
+    verification_mode = _val("SUPABASE_JWT_VERIFICATION", "jwks").lower()
+    if verification_mode not in {"jwks", "hs256"}:
+        problems.append("SUPABASE_JWT_VERIFICATION must be jwks or hs256.")
+    elif verification_mode != "jwks":
+        problems.append("SUPABASE_JWT_VERIFICATION must be jwks in deployable environments.")
     supabase_url, issuer = _val("SUPABASE_URL"), _val("SUPABASE_JWT_ISSUER")
     if supabase_url and issuer and not issuer.startswith(supabase_url.rstrip("/") + "/"):
         problems.append("SUPABASE_JWT_ISSUER must start with SUPABASE_URL.")
@@ -437,7 +525,7 @@ def validate_environment(profile: str) -> list[str]:
     expected_jwks_url = supabase_url.rstrip("/") + "/auth/v1/.well-known/jwks.json"
     if supabase_url and jwks_url != expected_jwks_url:
         problems.append("SUPABASE_JWKS_URL must be the JWKS endpoint for SUPABASE_URL.")
-    for name in ("SUPABASE_URL", "SUPABASE_JWKS_URL", "IMAGEKIT_ENDPOINT_URL", "N8N_BASE_URL"):
+    for name in ("SUPABASE_URL", "SUPABASE_JWKS_URL", "SUPABASE_STORAGE_API_URL", "N8N_BASE_URL"):
         value = _val(name)
         if value and urlparse(value).scheme != "https":
             problems.append(f"{name} must use HTTPS in deployable environments.")

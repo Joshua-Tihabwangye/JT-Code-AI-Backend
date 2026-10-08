@@ -1,0 +1,180 @@
+name: Deploy
+# main -> build, sign, scan -> staging (automatic).
+# Production: run this workflow manually with the digests that passed staging;
+# the "production" GitHub environment requires a reviewer's approval.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [production, staging]
+        default: production
+      api_image:
+        description: ghcr.io/<owner>/jt-code-api@sha256:... (from a staging deployment)
+        required: true
+      office_image:
+        description: ghcr.io/<owner>/jt-code-api-office@sha256:...
+        required: true
+      streamlit_image:
+        description: ghcr.io/<owner>/jt-code-streamlit@sha256:...
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false
+env:
+  REGISTRY: ghcr.io
+  KUSTOMIZE_VERSION: "5.4.3"
+
+jobs:
+  build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # keyless cosign signing
+    outputs:
+      api_image: ${{ steps.refs.outputs.api }}
+      office_image: ${{ steps.refs.outputs.office }}
+      streamlit_image: ${{ steps.refs.outputs.streamlit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image names
+        id: names
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "base=${REGISTRY}/${owner}" >> "$GITHUB_OUTPUT"
+      - name: Build and push API image
+        id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VERSION=${{ github.sha }}
+            GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.names.outputs.base }}/jt-code-api:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build and push office image
+        id: office
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: office
+          push: true
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            VERSION=${{ github.sha }}
+            GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.names.outputs.base }}/jt-code-api-office:${{ github.sha }}
+          cache-from: type=gha
+      - name: Build and push Streamlit image
+        id: streamlit
+        uses: docker/build-push-action@v6
+        with:
+          context: streamlit_app
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.names.outputs.base }}/jt-code-streamlit:${{ github.sha }}
+      - name: Digest references
+        id: refs
+        run: |
+          {
+            echo "api=${{ steps.names.outputs.base }}/jt-code-api@${{ steps.api.outputs.digest }}"
+            echo "office=${{ steps.names.outputs.base }}/jt-code-api-office@${{ steps.office.outputs.digest }}"
+            echo "streamlit=${{ steps.names.outputs.base }}/jt-code-streamlit@${{ steps.streamlit.outputs.digest }}"
+          } >> "$GITHUB_OUTPUT"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign images (keyless, GitHub OIDC)
+        run: |
+          cosign sign --yes "${{ steps.refs.outputs.api }}"
+          cosign sign --yes "${{ steps.refs.outputs.office }}"
+          cosign sign --yes "${{ steps.refs.outputs.streamlit }}"
+      - name: Scan the pushed API image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ steps.refs.outputs.api }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/k8s-tools
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+      - name: Deploy to staging
+        run: scripts/deploy/deploy.sh staging
+        env:
+          API_IMAGE: ${{ needs.build.outputs.api_image }}
+          OFFICE_IMAGE: ${{ needs.build.outputs.office_image }}
+          STREAMLIT_IMAGE: ${{ needs.build.outputs.streamlit_image }}
+          SMOKE_URL: ${{ vars.STAGING_URL }}
+      - name: Record the deployed digests (promote these to production)
+        run: |
+          {
+            echo "### Staging deployment"
+            echo "- api: \`${{ needs.build.outputs.api_image }}\`"
+            echo "- office: \`${{ needs.build.outputs.office_image }}\`"
+            echo "- streamlit: \`${{ needs.build.outputs.streamlit_image }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: ${{ vars.PUBLIC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sigstore/cosign-installer@v3
+      - name: Only images signed by this repository's deploy workflow
+        run: |
+          for image in "$API_IMAGE" "$OFFICE_IMAGE" "$STREAMLIT_IMAGE"; do
+            case "$image" in ghcr.io/*@sha256:*) ;; *) echo "not a GHCR digest: $image" >&2; exit 1 ;; esac
+            cosign verify "$image" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/deploy.yml@refs/heads/main$" \
+              > /dev/null
+          done
+        env:
+          API_IMAGE: ${{ github.event.inputs.api_image }}
+          OFFICE_IMAGE: ${{ github.event.inputs.office_image }}
+          STREAMLIT_IMAGE: ${{ github.event.inputs.streamlit_image }}
+      - uses: ./.github/actions/k8s-tools
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+      - name: Deploy
+        run: scripts/deploy/deploy.sh "${TARGET}"
+        env:
+          TARGET: ${{ github.event.inputs.environment }}
+          API_IMAGE: ${{ github.event.inputs.api_image }}
+          OFFICE_IMAGE: ${{ github.event.inputs.office_image }}
+          STREAMLIT_IMAGE: ${{ github.event.inputs.streamlit_image }}
+          SMOKE_URL: ${{ vars.PUBLIC_URL }}

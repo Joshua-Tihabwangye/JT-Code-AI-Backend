@@ -1,0 +1,473 @@
+{
+  "name": "jt-code.event-notifications.v2",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jt-code/event-notifications/v2",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "377b552e-22bc-50e9-968d-3e15c2b4e40b",
+      "name": "JT-Code request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "2ea5533e-4e76-53f5-a7d6-4d0612cd423c"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the JT-Code dispatch signature (see apps/core/signing.py).\nconst crypto = require('crypto');\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst secret = $env.JT_CODE_DISPATCH_SECRET;\nconst tolerance = Number($env.JT_CODE_SIGNATURE_TOLERANCE_SECONDS || 300);\nconst timestamp = String(headers['x-jt-code-timestamp'] || '');\nconst nonce = String(headers['x-jt-code-nonce'] || '');\nconst supplied = String(headers['x-jt-code-signature'] || '')\n  .split(',').map((part) => part.trim()).filter((part) => part.startsWith('v1=')).map((part) => part.slice(3));\nlet reason = '';\nlet raw = Buffer.from('');\ntry {\n  raw = await this.helpers.getBinaryDataBuffer(0, 'data');\n} catch (error) {\n  reason = 'missing raw body';\n}\nif (!secret) reason = 'JT_CODE_DISPATCH_SECRET is not configured';\nif (!reason && (!/^\\d+$/.test(timestamp) || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce) || supplied.length === 0)) {\n  reason = 'missing signature headers';\n}\nif (!reason && Math.abs(Date.now() / 1000 - Number(timestamp)) > tolerance) reason = 'stale timestamp';\nif (!reason) {\n  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.`).update(raw).digest('hex');\n  const match = supplied.some((value) => value.length === expected.length\n    && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected)));\n  if (!match) reason = 'invalid signature';\n}\nif (!reason) {\n  // Best-effort replay guard; Django's run attempt and delivery ids are the durable one.\n  const store = $getWorkflowStaticData('global');\n  const now = Date.now();\n  store.nonces = (store.nonces || []).filter((entry) => entry.t > now - tolerance * 2000);\n  if (store.nonces.some((entry) => entry.v === nonce)) reason = 'replayed request';\n  else store.nonces.push({ v: nonce, t: now });\n}\nif (reason) return [{ json: { verified: false, reason } }];\nreturn [{ json: { verified: true, payload: JSON.parse(raw.toString('utf8')) } }];\n"
+      },
+      "id": "a848891e-5ddc-5ceb-9d7b-fbf834a5e549",
+      "name": "Verify JT-Code signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "a7806adc-0e67-5971-b06f-50cbbf7c7b09",
+              "leftValue": "={{ $json.verified }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3c3fbdd7-903f-5f27-8f75-e93a4cba16d8",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": true, \"executionId\": $execution.id } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "c04e3053-2298-5888-b32b-bdd3f9a1dfab",
+      "name": "Accept (202)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"accepted\": false, \"reason\": $json.reason } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "2da7d8f8-3713-544e-b635-d264f65b05fb",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        780,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Verify JT-Code signature').first().json.payload;\nreturn [{ json: payload }];\n"
+      },
+      "id": "f877ae0f-ae3d-5cd4-b755-c175692532cf",
+      "name": "Event payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "1c4177bc-dc1f-5b88-b4f5-0f64ddadc89c",
+                    "leftValue": "={{ ['billing.subscription.renewing_soon','governance.consent.expiring','jobs.job.failed'].includes($json.eventType) ? 'customer' : 'operations' }}",
+                    "rightValue": "customer",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "customer"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "3b7584d3-0af1-5b55-b392-fcb06de53f31",
+                    "leftValue": "={{ ['billing.subscription.renewing_soon','governance.consent.expiring','jobs.job.failed'].includes($json.eventType) ? 'customer' : 'operations' }}",
+                    "rightValue": "operations",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "operations"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "id": "fd2347bc-df9b-5b6c-a696-486fbfa6807b",
+      "name": "Audience",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.JT_CODE_NOTIFICATIONS_FROM }}",
+        "toEmail": "={{ ($json.context.recipients || []).join(',') }}",
+        "subject": "={{ $json.context.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.context.summary }}",
+        "options": {}
+      },
+      "id": "b99cf1a0-264c-532c-9117-50abf985073b",
+      "name": "E-mail organization owner",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1300,
+        -120
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "${N8N_CREDENTIAL_SMTP}",
+          "name": "JT-Code SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $env.JT_CODE_OPS_SLACK_CHANNEL }}",
+          "mode": "id"
+        },
+        "text": "={{ `[${$json.eventType}] ${$json.context.summary}` }}",
+        "otherOptions": {}
+      },
+      "id": "ebdaf0e3-7137-56ad-9919-5481e2b92e64",
+      "name": "Alert operations (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        120
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "${N8N_CREDENTIAL_SLACK}",
+          "name": "JT-Code Slack"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $('Verify JT-Code signature').first().json.payload;\nreturn [{ json: { callbackUrl: payload.callbacks.status, traceparent: payload.traceparent || '',\n  callbackBody: { status: 'completed', executionId: $execution.id, summary: { notified: true } } } }];\n"
+      },
+      "id": "ffa632f4-4bd8-5c34-81b0-15ba2c2dd798",
+      "name": "Report delivered",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign callbacks to JT-Code: v1=HMAC-SHA256(secret, \"<ts>.<nonce>.\" + body).\nconst crypto = require('crypto');\nconst secret = $env.JT_CODE_CALLBACK_SECRET;\nif (!secret) throw new Error('JT_CODE_CALLBACK_SECRET is not configured');\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.callbackBody);\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const nonce = crypto.randomBytes(18).toString('base64url');\n  const digest = crypto.createHmac('sha256', secret).update(`${timestamp}.${nonce}.${body}`).digest('hex');\n  return { json: {\n    url: item.json.callbackUrl,\n    body,\n    timestamp,\n    nonce,\n    signature: `v1=${digest}`,\n    traceparent: item.json.traceparent || '',\n  } };\n});\n"
+      },
+      "id": "4243a4fa-0364-5a0d-8aa6-886434717715",
+      "name": "Sign delivery status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-JT-Code-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-JT-Code-Nonce",
+              "value": "={{ $json.nonce }}"
+            },
+            {
+              "name": "X-JT-Code-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "traceparent",
+              "value": "={{ $json.traceparent }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "7b8ec381-73ee-5aa7-8094-55612d0d04c1",
+      "name": "Post delivery status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2080,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "JT-Code request": {
+      "main": [
+        [
+          {
+            "node": "Verify JT-Code signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify JT-Code signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Accept (202)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accept (202)": {
+      "main": [
+        [
+          {
+            "node": "Event payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event payload": {
+      "main": [
+        [
+          {
+            "node": "Audience",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audience": {
+      "main": [
+        [
+          {
+            "node": "E-mail organization owner",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert operations (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "E-mail organization owner": {
+      "main": [
+        [
+          {
+            "node": "Report delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert operations (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Report delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report delivered": {
+      "main": [
+        [
+          {
+            "node": "Sign delivery status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign delivery status": {
+      "main": [
+        [
+          {
+            "node": "Post delivery status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": 300,
+    "timezone": "UTC",
+    "errorWorkflow": "${JT_CODE_ERROR_WORKFLOW_ID}"
+  },
+  "staticData": null,
+  "pinData": {},
+  "meta": {
+    "jtCode": {
+      "key": "event-notifications",
+      "version": 2,
+      "kind": "event",
+      "description": "Customer e-mails and operations alerts for selected domain events.",
+      "webhookPath": "jt-code/event-notifications/v2",
+      "taskTypes": [],
+      "eventTypes": [
+        "billing.subscription.renewing_soon",
+        "governance.consent.expiring",
+        "jobs.job.failed",
+        "knowledge.document.index_failed",
+        "events.dead_lettered",
+        "safety.image_prompt_blocked",
+        "usage.cost.anomaly"
+      ],
+      "timeoutSeconds": 300,
+      "maxAttempts": 8,
+      "requiredCredentials": [
+        "N8N_CREDENTIAL_SLACK",
+        "N8N_CREDENTIAL_SMTP"
+      ]
+    }
+  }
+}

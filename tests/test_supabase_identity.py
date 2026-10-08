@@ -114,19 +114,30 @@ def test_supabase_database_webhook_bearer_secret_syncs_user(client, webhook_secr
 
 
 @pytest.mark.django_db
-def test_supabase_webhook_hmac_signature_is_still_accepted(client, webhook_secret):
-    body = json.dumps({"type": "INSERT", "record": {"id": "sb-user-2", "email": "h@example.com"}})
-    signature = hmac.new(webhook_secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+def test_supabase_webhook_signed_request_is_accepted_once(client, webhook_secret):
+    from apps.core.signing import sign_request
 
-    response = client.post(
+    body = json.dumps({"type": "INSERT", "record": {"id": "sb-user-2", "email": "h@example.com"}})
+    headers = {
+        f"HTTP_{k.upper().replace('-', '_')}": v
+        for k, v in sign_request(body.encode(), webhook_secret).items()
+    }
+
+    response = client.post(reverse("supabase-webhook"), data=body, content_type="application/json", **headers)
+    replay = client.post(reverse("supabase-webhook"), data=body, content_type="application/json", **headers)
+    legacy = client.post(
         reverse("supabase-webhook"),
         data=body,
         content_type="application/json",
-        HTTP_X_SUPABASE_SIGNATURE=signature,
+        HTTP_X_SUPABASE_SIGNATURE=hmac.new(
+            webhook_secret.encode(), body.encode(), hashlib.sha256
+        ).hexdigest(),
     )
 
     assert response.status_code == 200
     assert User.objects.filter(supabase_user_id="sb-user-2").exists()
+    assert replay.status_code == 401  # the nonce was already consumed
+    assert legacy.status_code == 401  # untimed HMACs are replayable and no longer accepted
 
 
 @pytest.mark.django_db

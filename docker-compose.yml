@@ -1,0 +1,415 @@
+# Docker-first local runtime. Supabase (Postgres, Auth, Storage) runs here;
+# Sentry intentionally remains an external integration.
+#
+#   docker compose up --build
+#
+# The stack has safe-for-localhost defaults, so it starts even when no .env
+# file exists. To change a Docker-local default, set the corresponding
+# JT_CODE_LOCAL_* variable listed in docker/.env.docker.example.
+
+x-app-base: &app-base
+  build:
+    context: .
+    target: runtime
+  image: jt-code-api:local
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    DJANGO_SETTINGS_MODULE: config.settings.development
+    DATABASE_URL: postgresql://postgres:${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}@supabase-db:5432/postgres
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+    N8N_BASE_URL: http://n8n:5678
+    N8N_WEBHOOK_BASE_URL: http://n8n:5678
+    N8N_CALLBACK_BASE_URL: http://api:8000/api/v1
+    SUPABASE_URL: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}
+    SUPABASE_INTERNAL_URL: http://supabase-gateway:8000
+    SUPABASE_JWT_VERIFICATION: ${JT_CODE_LOCAL_SUPABASE_JWT_VERIFICATION:-hs256}
+    SUPABASE_JWKS_URL: http://supabase-gateway:8000/auth/v1/.well-known/jwks.json
+    SUPABASE_JWT_ISSUER: ${JT_CODE_LOCAL_SUPABASE_JWT_ISSUER:-http://localhost:54321/auth/v1}
+    SUPABASE_JWT_AUDIENCE: authenticated
+    SUPABASE_JWT_SECRET: ${JT_CODE_LOCAL_SUPABASE_JWT_SECRET:-local-supabase-jwt-secret-change-before-production-1234567890}
+    SUPABASE_WEBHOOK_SIGNING_SECRET: ${JT_CODE_LOCAL_SUPABASE_WEBHOOK_SIGNING_SECRET:-local-supabase-webhook-secret-change-before-production-1234567890}
+    SUPABASE_SECRET_KEY: ${JT_CODE_LOCAL_SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MjA1MTIyMjQwMH0.DJwwPlVvphX1gHsXV7FX7gHRDkd9J7Kl3XOuMWRaGaA}
+    SUPABASE_STORAGE_BUCKET: ${JT_CODE_LOCAL_SUPABASE_STORAGE_BUCKET:-jt-code-assets}
+    SUPABASE_STORAGE_PREFIX: ${JT_CODE_LOCAL_SUPABASE_STORAGE_PREFIX:-jt-code/development}
+    SUPABASE_STORAGE_API_URL: http://supabase-gateway:8000/storage/v1
+    SUPABASE_STORAGE_PUBLIC_API_URL: ${JT_CODE_LOCAL_SUPABASE_STORAGE_PUBLIC_API_URL:-http://localhost:54321/storage/v1}
+    N8N_DISPATCH_SECRET: ${JT_CODE_LOCAL_N8N_DISPATCH_SECRET:-local-n8n-dispatch-secret-change-before-production-1234567890}
+    N8N_WEBHOOK_SECRET: ${JT_CODE_LOCAL_N8N_WEBHOOK_SECRET:-local-n8n-webhook-secret-change-before-production-1234567890}
+    N8N_SENTRY_RELAY_SECRET: ${JT_CODE_LOCAL_N8N_SENTRY_RELAY_SECRET:-local-n8n-relay-secret-change-before-production-1234567890}
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  restart: unless-stopped
+
+x-bootstrap-dependencies: &bootstrap-dependencies
+  redis: {condition: service_healthy}
+  kafka: {condition: service_healthy}
+  supabase-db: {condition: service_healthy}
+  supabase-auth: {condition: service_healthy}
+  supabase-rest: {condition: service_healthy}
+  supabase-storage: {condition: service_healthy}
+  supabase-gateway: {condition: service_healthy}
+
+x-runtime-dependencies: &runtime-dependencies
+  <<: *bootstrap-dependencies
+  migrate: {condition: service_completed_successfully}
+  kafka-init: {condition: service_completed_successfully}
+
+x-app: &app
+  <<: *app-base
+  depends_on: *runtime-dependencies
+
+services:
+  # This is the Supabase subset used by JT-Code. Realtime, Edge Functions and
+  # Studio are intentionally not started because this backend does not use them.
+  supabase-db:
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}
+      PGPORT: "5432"
+      PGDATABASE: postgres
+      PGPASSWORD: ${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}
+      JWT_EXP: ${JT_CODE_LOCAL_SUPABASE_JWT_EXPIRY:-3600}
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=fatal"]
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+      - ./docker/supabase/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-jt-code-roles.sql:ro
+      - ./docker/supabase/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jt-code-jwt.sql:ro
+      - supabase-db-config:/etc/postgresql-custom
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  supabase-auth:
+    image: supabase/gotrue:v2.196.0
+    restart: unless-stopped
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}/auth/v1
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}@supabase-db:5432/postgres
+      GOTRUE_SITE_URL: ${JT_CODE_LOCAL_SUPABASE_SITE_URL:-http://localhost:5173}
+      GOTRUE_URI_ALLOW_LIST: ${JT_CODE_LOCAL_SUPABASE_ADDITIONAL_REDIRECT_URLS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8501}
+      GOTRUE_DISABLE_SIGNUP: ${JT_CODE_LOCAL_SUPABASE_DISABLE_SIGNUP:-false}
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JT_CODE_LOCAL_SUPABASE_JWT_EXPIRY:-3600}
+      GOTRUE_JWT_SECRET: ${JT_CODE_LOCAL_SUPABASE_JWT_SECRET:-local-supabase-jwt-secret-change-before-production-1234567890}
+      GOTRUE_JWT_ISSUER: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}/auth/v1
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: ${JT_CODE_LOCAL_SUPABASE_MAILER_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${JT_CODE_LOCAL_SUPABASE_SMTP_ADMIN_EMAIL:-admin@jt-code.local}
+      GOTRUE_SMTP_HOST: mailpit
+      GOTRUE_SMTP_PORT: "1025"
+      GOTRUE_SMTP_USER: ""
+      GOTRUE_SMTP_PASS: ""
+      GOTRUE_SMTP_SENDER_NAME: JT-Code Local
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+    depends_on:
+      supabase-db: {condition: service_healthy}
+      mailpit: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  supabase-rest:
+    image: postgrest/postgrest:v14.17
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgresql://authenticator:${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}@supabase-db:5432/postgres
+      PGRST_DB_SCHEMAS: public,graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_DB_EXTRA_SEARCH_PATH: public
+      PGRST_JWT_SECRET: ${JT_CODE_LOCAL_SUPABASE_JWT_SECRET:-local-supabase-jwt-secret-change-before-production-1234567890}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JT_CODE_LOCAL_SUPABASE_JWT_EXPIRY:-3600}
+      PGRST_ADMIN_SERVER_PORT: "3001"
+      PGRST_ADMIN_SERVER_HOST: localhost
+    depends_on:
+      supabase-db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "postgrest", "--ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  supabase-imgproxy:
+    image: darthsim/imgproxy:v3.31.4
+    restart: unless-stopped
+    environment:
+      IMGPROXY_BIND: :5001
+      IMGPROXY_LOCAL_FILESYSTEM_ROOT: /
+      IMGPROXY_USE_ETAG: "true"
+      IMGPROXY_AUTO_WEBP: "true"
+      IMGPROXY_MAX_SRC_RESOLUTION: "16.8"
+    volumes: [supabase-storage-data:/var/lib/storage]
+    healthcheck:
+      test: ["CMD", "imgproxy", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  supabase-storage:
+    image: supabase/storage-api:v1.74.0
+    restart: unless-stopped
+    environment:
+      ANON_KEY: ${JT_CODE_LOCAL_SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjIwNTEyMjI0MDB9.v6RJEVM3PMvl9LjjvH-IaHKJiZPNWc1--G2HH1PVfSs}
+      SERVICE_KEY: ${JT_CODE_LOCAL_SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MjA1MTIyMjQwMH0.DJwwPlVvphX1gHsXV7FX7gHRDkd9J7Kl3XOuMWRaGaA}
+      POSTGREST_URL: http://supabase-rest:3000
+      AUTH_JWT_SECRET: ${JT_CODE_LOCAL_SUPABASE_JWT_SECRET:-local-supabase-jwt-secret-change-before-production-1234567890}
+      DATABASE_URL: postgresql://supabase_storage_admin:${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}@supabase-db:5432/postgres
+      STORAGE_PUBLIC_URL: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}
+      REQUEST_ALLOW_X_FORWARDED_PATH: "true"
+      FILE_SIZE_LIMIT: ${ASSET_MAX_UPLOAD_BYTES:-26214400}
+      STORAGE_BACKEND: file
+      GLOBAL_S3_BUCKET: local
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: jt-code-local
+      REGION: local
+      ENABLE_IMAGE_TRANSFORMATION: "true"
+      IMGPROXY_URL: http://supabase-imgproxy:5001
+    volumes: [supabase-storage-data:/var/lib/storage]
+    depends_on:
+      supabase-db: {condition: service_healthy}
+      supabase-rest: {condition: service_healthy}
+      supabase-imgproxy: {condition: service_healthy}
+    healthcheck:
+      # storage-api listens on IPv4 in this image; localhost resolves to ::1
+      # first and made a healthy server appear unhealthy.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  supabase-gateway:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports: ["127.0.0.1:54321:8000"]
+    volumes: [./docker/supabase/nginx.conf:/etc/nginx/conf.d/default.conf:ro]
+    depends_on:
+      supabase-auth: {condition: service_healthy}
+      supabase-rest: {condition: service_healthy}
+      supabase-storage: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  mailpit:
+    image: axllent/mailpit:v1.24
+    restart: unless-stopped
+    ports: ["127.0.0.1:8025:8025"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8025/livez"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    volumes: [redis-data:/data]
+
+  kafka:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda start --mode dev-container --smp 1 --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092
+      - --advertise-kafka-addr internal://kafka:9092
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes: [kafka-data:/var/lib/redpanda/data]
+
+  kafka-init:
+    <<: *app-base
+    command: ["manage", "ensure_kafka_topics"]
+    restart: "no"
+    depends_on:
+      kafka: {condition: service_healthy}
+
+  migrate:
+    <<: *app-base
+    command: ["migrate"]
+    restart: "no"
+    depends_on: *bootstrap-dependencies
+
+  api:
+    <<: *app
+    command: ["api", "--reload"]
+    ports: ["127.0.0.1:8000:8000"]
+    read_only: false
+    volumes: [./apps:/app/apps:ro, ./config:/app/config:ro]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    environment:
+      <<: *app-env
+      CELERY_QUEUES: jobs.default,jobs.analysis,jobs.ingestion,analytics.analysis,analytics.visualization,orchestration
+      CELERY_CONCURRENCY: "4"
+
+  worker-documents:
+    <<: *app
+    build: {context: ., target: office}
+    image: jt-code-api-office:local
+    command: ["worker"]
+    environment:
+      <<: *app-env
+      CELERY_QUEUES: jobs.visualization
+      CELERY_CONCURRENCY: "2"
+      HOME: /tmp
+
+  beat:
+    <<: *app
+    command: ["beat"]
+
+  consumer:
+    <<: *app
+    command: ["consumer", "integrations.webhook.received", "--consumer-name", "integration-webhooks"]
+
+  n8n-db:
+    image: postgres:16.10-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: ${JT_CODE_LOCAL_N8N_DB_PASSWORD:-local-n8n-db-password-change-me}
+    volumes: [n8n-db-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.88.0
+    restart: unless-stopped
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      N8N_EDITOR_BASE_URL: http://localhost:5678/
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_ENCRYPTION_KEY: ${JT_CODE_LOCAL_N8N_ENCRYPTION_KEY:-local-n8n-encryption-key-change-before-production-1234567890}
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: n8n-db
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${JT_CODE_LOCAL_N8N_DB_PASSWORD:-local-n8n-db-password-change-me}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      JT_CODE_API_BASE_URL: http://api:8000/api/v1
+      JT_CODE_DISPATCH_SECRET: ${JT_CODE_LOCAL_N8N_DISPATCH_SECRET:-local-n8n-dispatch-secret-change-before-production-1234567890}
+      JT_CODE_CALLBACK_SECRET: ${JT_CODE_LOCAL_N8N_WEBHOOK_SECRET:-local-n8n-webhook-secret-change-before-production-1234567890}
+      JT_CODE_RELAY_SECRET: ${JT_CODE_LOCAL_N8N_SENTRY_RELAY_SECRET:-local-n8n-relay-secret-change-before-production-1234567890}
+    ports: ["127.0.0.1:5678:5678"]
+    volumes: [n8n-data:/home/node/.n8n]
+    depends_on:
+      n8n-db: {condition: service_healthy}
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:5678/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  streamlit:
+    build: ./streamlit_app
+    image: jt-code-streamlit:local
+    environment:
+      JT_CODE_API_BASE_URL: http://api:8000/api/v1
+      SUPABASE_URL: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}
+      SUPABASE_PUBLISHABLE_KEY: ${JT_CODE_LOCAL_SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjIwNTEyMjI0MDB9.v6RJEVM3PMvl9LjjvH-IaHKJiZPNWc1--G2HH1PVfSs}
+    ports: ["127.0.0.1:8501:8501"]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    depends_on:
+      api: {condition: service_healthy}
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/local.yml"]
+    volumes:
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./infra/prometheus/local.yml:/etc/prometheus/local.yml:ro
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.112.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel/collector.yaml"]
+    environment:
+      TRACES_BACKEND_ENDPOINT: http://tempo:4318
+    volumes: [./infra/otel/collector.yaml:/etc/otel/collector.yaml:ro]
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes: [./infra/otel/tempo-local.yaml:/etc/tempo.yaml:ro]
+
+volumes:
+  redis-data: {}
+  kafka-data: {}
+  n8n-data: {}
+  n8n-db-data: {}
+  supabase-db-data: {}
+  supabase-db-config: {}
+  supabase-storage-data: {}

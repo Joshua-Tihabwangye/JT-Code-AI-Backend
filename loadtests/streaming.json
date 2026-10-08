@@ -1,0 +1,35 @@
+{
+  "name": "streaming",
+  "kind": "streaming_test",
+  "stages": [
+    {
+      "duration": 60,
+      "users": 100
+    },
+    {
+      "duration": 300,
+      "users": 500
+    },
+    {
+      "duration": 30,
+      "users": 0
+    }
+  ],
+  "requests": [
+    {
+      "name": "chat_stream",
+      "weight": 1,
+      "method": "GET",
+      "path": "/api/v1/chat/requests/{chatRequestId}/stream/",
+      "stream": true
+    }
+  ],
+  "thinkTimeSeconds": [
+    1,
+    2
+  ],
+  "thresholds": {
+    "errorRate": 0.01,
+    "streamFirstEventP95Ms": 5000
+  }
+}

@@ -30,8 +30,8 @@ def provision_analytics_role(apps, schema_editor):  # noqa: ARG001
         )
         for view_name in ANALYTICS_VIEWS:
             cursor.execute(f"REVOKE ALL ON TABLE {view_name} FROM PUBLIC")  # nosec B608 -- constant DDL.
-            cursor.execute(  # nosec B608 -- constant DDL.
-                f"GRANT SELECT ON TABLE {view_name} TO {ANALYTICS_ROLE}"
+            cursor.execute(
+                f"GRANT SELECT ON TABLE {view_name} TO {ANALYTICS_ROLE}"  # nosec B608 -- constant DDL.
             )
 
 
@@ -40,8 +40,8 @@ def revoke_analytics_role_grants(apps, schema_editor):  # noqa: ARG001
         return
     with schema_editor.connection.cursor() as cursor:
         for view_name in ANALYTICS_VIEWS:
-            cursor.execute(  # nosec B608 -- constant DDL.
-                f"REVOKE SELECT ON TABLE {view_name} FROM {ANALYTICS_ROLE}"
+            cursor.execute(
+                f"REVOKE SELECT ON TABLE {view_name} FROM {ANALYTICS_ROLE}"  # nosec B608 -- constant DDL.
             )
 
 

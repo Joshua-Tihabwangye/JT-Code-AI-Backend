@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import secrets
 import uuid
-from decimal import Decimal
 
 from celery import current_app
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import status, viewsets
@@ -15,7 +12,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.billing.services import CreditService
 from apps.core.throttling import BurstThrottle, ResearchThrottle
 from apps.core.views import APIView
 from apps.identity.authorization import (
@@ -23,7 +19,7 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
-from apps.jobs.dispatch import NATIVE_TASK_TYPES, enqueue_job
+from apps.jobs.dispatch import enqueue_job
 from apps.jobs.metrics import queue_depths
 from apps.jobs.models import Callback, Job, JobStep, WorkflowRun
 from apps.jobs.serializers import (
@@ -120,7 +116,9 @@ class JobViewSet(viewsets.ModelViewSet):
                 {"detail": "Job can only be retried from failed/cancelled/expired status"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if job.task_type not in NATIVE_TASK_TYPES:
+        from apps.jobs.dispatch import supported_task_types
+
+        if job.task_type not in supported_task_types():
             return Response(
                 {"detail": "This task type is not supported by the job runtime."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -246,11 +244,14 @@ class JobStatusCallbackView(APIView):
     permission_classes = []
     authentication_classes = []
 
+    throttle_classes: list = []
+
     def post(self, request: Request, job_id: uuid.UUID):
-        secret = request.headers.get("X-JT-Code-Webhook-Secret")
-        expected_secret = settings.N8N_WEBHOOK_SECRET
-        if not expected_secret or not secret or not secrets.compare_digest(secret, expected_secret):
-            return Response({"detail": "Invalid webhook secret"}, status=status.HTTP_401_UNAUTHORIZED)
+        from apps.core.webhooks import n8n_callback_secrets, reject_unsigned
+
+        rejection = reject_unsigned(request, source="n8n", secrets_=n8n_callback_secrets())
+        if rejection is not None:
+            return rejection
         serializer = JobStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -309,19 +310,12 @@ class ResearchJobsView(APIView):
                 ).values_list("id", flat=True)
             )
 
-        estimated_credits = Decimal("150") if depth == "deep" else Decimal("75")
-        request_id = uuid.uuid4()
-        try:
-            CreditService.reserve_credits(
-                user=request.user,
-                amount=estimated_credits,
-                request_id=request_id,
-                reason=f"Deep research: {depth}",
-                organization=organization,
-            )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED)
+        from apps.usage import services as metering
+        from apps.usage.concurrency import enforce_concurrency
+        from apps.usage.models import Feature
+        from apps.usage.pricing import reservation_credits
 
+        request_id = uuid.uuid4()
         job = Job.objects.create(
             owner=request.user,
             organization=organization,
@@ -332,10 +326,22 @@ class ResearchJobsView(APIView):
                 "collection_ids": [str(c) for c in collections],
                 "depth": depth,
             },
-            reserved_credits=estimated_credits,
             request_id=request_id,
             trace_id=getattr(request, "trace_id", ""),
         )
+        enforce_concurrency(organization, "jobs", exclude=job.pk)
+        # Deep research runs a longer agent loop, so its ceiling is doubled.
+        estimated_credits = reservation_credits(Feature.SEARCH_QUERIES) * (2 if depth == "deep" else 1)
+        reservation = metering.reserve(
+            organization=organization,
+            user=request.user,
+            feature=Feature.SEARCH_QUERIES,
+            source_type="job",
+            source_id=job.id,
+            credits=estimated_credits,
+        )
+        job.reserved_credits = reservation.credits_reserved
+        job.save(update_fields=["reserved_credits", "updated_at"])
 
         enqueue_job(job)
 

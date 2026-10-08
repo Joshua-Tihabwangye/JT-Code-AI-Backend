@@ -9,14 +9,13 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from apps.core.pagination import CreatedCursorPagination
 from apps.core.throttling import BurstThrottle
-from apps.identity.authorization import organization_for_request, user_has_role
-from apps.identity.models import Role
+from apps.identity.authorization import IsOrganizationAdmin, organization_for_request
 from apps.tools.approvals import decide
 from apps.tools.gateway import ToolDenied, execute_tool, is_enabled, tenant_policy
 from apps.tools.models import McpServer, TenantToolPolicy, ToolApproval, ToolCredential, ToolInvocation
@@ -30,16 +29,6 @@ from apps.tools.serializers import (
     ToolExecuteSerializer,
     ToolInvocationSerializer,
 )
-
-
-class IsOrganizationAdmin(BasePermission):
-    """Tool governance (policies, credentials, MCP servers, audit) is admin-only."""
-
-    def has_permission(self, request: Request, view: Any) -> bool:
-        if not request.user or not request.user.is_authenticated:
-            return False
-        organization = organization_for_request(request, required=True)
-        return user_has_role(request.user, Role.RoleType.ADMIN, organization.id)
 
 
 class _TenantAdminViewSet(viewsets.ModelViewSet):

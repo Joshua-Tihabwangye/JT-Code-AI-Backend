@@ -58,15 +58,15 @@ class RelayRequestSerializer(_Serializer):
     errorCode = serializers.CharField(required=False)
 
 
-class ImageKitSignatureResponseSerializer(_Serializer):
-    publicKey = serializers.CharField()
-    endpointUrl = serializers.URLField()
+class SupabaseStorageUploadResponseSerializer(_Serializer):
+    uploadIntentId = serializers.UUIDField()
+    uploadToken = serializers.CharField()
     uploadUrl = serializers.URLField()
-    folder = serializers.CharField()
-    fileName = serializers.CharField()
-    token = serializers.CharField()
+    uploadMethod = serializers.ChoiceField(choices=("PUT",))
+    uploadHeaders = serializers.DictField(child=serializers.CharField())
     expire = serializers.IntegerField()
-    signature = serializers.CharField()
+    bucket = serializers.CharField()
+    storageKey = serializers.CharField()
 
 
 class CompletionRequestSerializer(_Serializer):
@@ -272,11 +272,11 @@ CONTRACTS: dict[str, Contract] = {
     "apps.core.views.N8nSentryRelayView": Contract(
         {"post": RelayRequestSerializer}, {"post": {202: None, 401: DetailResponseSerializer}}
     ),
-    "apps.assets.views.ImageKitSignatureView": Contract(
+    "apps.assets.views.SupabaseStorageUploadView": Contract(
         {"post": SignatureRequestSerializer},
         {
             "post": {
-                200: ImageKitSignatureResponseSerializer,
+                200: SupabaseStorageUploadResponseSerializer,
                 413: DetailResponseSerializer,
                 503: DetailResponseSerializer,
             }

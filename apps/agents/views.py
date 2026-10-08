@@ -34,7 +34,7 @@ from apps.identity.authorization import (
     tenant_scoped_queryset,
     user_has_role,
 )
-from apps.identity.models import Organization, Role
+from apps.identity.models import Role
 
 ACTIVE_STATUSES = (AgentRun.Status.QUEUED, AgentRun.Status.RUNNING, AgentRun.Status.WAITING_APPROVAL)
 
@@ -65,11 +65,12 @@ def start_run(request: Request, *, organization, agent: AgentDefinition | None =
             response = Response(AgentRunSerializer(replay).data, status=status.HTTP_200_OK)
             response["Idempotency-Replayed"] = "true"
             return response
-        # Lock the tenant row so concurrent submissions cannot both pass the limit.
-        Organization.objects.select_for_update().get(id=organization.id)
-        active = AgentRun.objects.filter(organization=organization, status__in=ACTIVE_STATUSES).count()
-        if active >= settings.MAX_CONCURRENT_AGENT_RUNS_PER_TENANT:
-            raise AgentConcurrencyLimit
+        from apps.usage import services as metering
+        from apps.usage.concurrency import enforce_concurrency
+        from apps.usage.models import Feature
+
+        # Locks the tenant row so concurrent submissions cannot both pass the limit.
+        enforce_concurrency(organization, "agent_runs", error=AgentConcurrencyLimit)
         run, _created = create_run(
             user=request.user,
             organization=organization,
@@ -79,6 +80,13 @@ def start_run(request: Request, *, organization, agent: AgentDefinition | None =
             requested_tools=serializer.validated_data.get("tools"),
             idempotency_key=key,
             trace_id=getattr(request, "trace_id", ""),
+        )
+        metering.reserve(
+            organization=organization,
+            user=request.user,
+            feature=Feature.AGENT_RUNS,
+            source_type="agent_run",
+            source_id=run.id,
         )
         dispatch_run(run)
     return Response(AgentRunSerializer(run).data, status=status.HTTP_202_ACCEPTED)

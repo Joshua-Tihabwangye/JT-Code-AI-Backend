@@ -1,0 +1,13 @@
+# Copy API_HOST / ANALYTICS_HOST from each overlay's config.env into the Ingress,
+# so a hostname is set in exactly one place per environment.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+replacements:
+  - source: {kind: ConfigMap, name: jt-code-config, fieldPath: data.API_HOST}
+    targets:
+      - select: {kind: Ingress, name: jt-code}
+        fieldPaths: [spec.rules.0.host, spec.tls.0.hosts.0]
+  - source: {kind: ConfigMap, name: jt-code-config, fieldPath: data.ANALYTICS_HOST}
+    targets:
+      - select: {kind: Ingress, name: jt-code}
+        fieldPaths: [spec.rules.1.host, spec.tls.0.hosts.1]

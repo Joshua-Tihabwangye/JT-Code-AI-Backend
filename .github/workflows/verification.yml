@@ -1,0 +1,144 @@
+name: Production verification
+# Phases 18-19: drills, load evidence and the release gate, recorded as
+# VerificationRun evidence in the target environment (manage.py release_gate).
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        default: staging
+      suite:
+        type: choice
+        options: [drills, load, spike, soak, streaming, mix-100k, restore, release-gate]
+        default: drills
+  schedule:
+    - cron: "30 3 * * 2"   # weekly drills + load smoke on staging
+permissions:
+  contents: read
+concurrency:
+  group: verification-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false
+env:
+  TARGET: ${{ github.event.inputs.environment || 'staging' }}
+  SUITE: ${{ github.event.inputs.suite || 'drills' }}
+  KUSTOMIZE_VERSION: "5.4.3"
+
+jobs:
+  drills:
+    if: github.event_name == 'schedule' || github.event.inputs.suite == 'drills'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/k8s-tools
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+      - name: DLQ recovery drill
+        run: kubectl -n "jt-code-${TARGET}" exec deploy/jt-code-api -- python manage.py dlq_drill
+      - name: RAG security evaluation
+        run: kubectl -n "jt-code-${TARGET}" exec deploy/jt-code-api -- python manage.py rag_security_evaluate
+      - name: Celery and Kafka saturation drill
+        run: |
+          kubectl -n "jt-code-${TARGET}" exec deploy/jt-code-api -- \
+            python manage.py saturation_drill --tasks-per-queue 1000 --kafka-events 5000 --max-p95-ms 10000
+
+  load:
+    if: >-
+      github.event_name == 'schedule' ||
+      contains(fromJSON('["load","spike","soak","streaming","mix-100k"]'), github.event.inputs.suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.4"
+      - run: pip install 'httpx>=0.27,<1'
+      - name: Run scenario
+        run: |
+          scenario="${SUITE}"
+          [ "${{ github.event_name }}" = "schedule" ] && scenario=smoke
+          python scripts/perf/loadtest.py --base-url "${{ vars.PUBLIC_URL }}" \
+            --scenario "loadtests/${scenario}.json" --token "${{ secrets.LOADTEST_TOKEN }}" \
+            --organization "${{ vars.LOADTEST_ORGANIZATION_ID }}" \
+            --var chatRequestId="${{ vars.LOADTEST_CHAT_REQUEST_ID }}" --out report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-report-${{ env.SUITE }}
+          path: report.json
+      - uses: ./.github/actions/k8s-tools
+        if: always()
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+      - name: Record evidence
+        if: always()
+        run: |
+          kind="$(python -c 'import json;print(json.load(open("report.json"))["kind"])')"
+          kubectl -n "jt-code-${TARGET}" exec -i deploy/jt-code-api -- python manage.py record_evidence "$kind" - < report.json
+
+  restore:
+    if: github.event.inputs.suite == 'restore'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.4"
+      - run: |
+          sudo apt-get update
+          if ! sudo apt-get install -y postgresql-client-17; then sudo apt-get install -y postgresql-client; fi
+          pip install -e .
+      - name: Restore drill (overwrites the disposable restore database)
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.ci
+          DJANGO_SECRET_KEY: ci-Key9aB3dE5fG7hI1jK2LmN4oP6qR8sT0uVxYz-0123456789  # pragma: allowlist secret
+          DATABASE_URL: ${{ secrets.SUPABASE_CI_DATABASE_URL }}
+          TEST_DATABASE_URL: ${{ secrets.SUPABASE_CI_TEST_DATABASE_URL }}
+        run: |
+          python manage.py migrate --noinput
+          python manage.py seed_restore_drill_fixture
+          set +e
+          python manage.py restore_drill_check --restore-database-url "${{ secrets.SUPABASE_CI_RESTORE_DATABASE_URL }}" \
+            --confirm-restore-target --require-source-data --format=json > drill.txt
+          status=$?
+          set -e
+          python - "$status" <<'PY'
+          import json, sys
+          text = open("drill.txt").read()
+          start = text.find("{")
+          report = json.loads(text[start:]) if start >= 0 else {}
+          json.dump({"passed": sys.argv[1] == "0", "drill": report}, open("restore.json", "w"))
+          PY
+      - uses: ./.github/actions/k8s-tools
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+      - name: Record evidence
+        run: kubectl -n "jt-code-${TARGET}" exec -i deploy/jt-code-api -- python manage.py record_evidence restore_drill - < restore.json
+
+  release-gate:
+    if: github.event.inputs.suite == 'release-gate'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/k8s-tools
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+      - name: Release gate (evidence + SLOs)
+        run: |
+          kubectl -n "jt-code-${TARGET}" exec deploy/jt-code-api -- python manage.py release_gate \
+            --prometheus-url "${{ vars.PROMETHEUS_URL }}" --prometheus-token "${{ secrets.PROMETHEUS_TOKEN }}" \
+            | tee release-gate.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-gate
+          path: release-gate.json

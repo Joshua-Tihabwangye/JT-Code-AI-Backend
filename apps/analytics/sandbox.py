@@ -3,7 +3,7 @@
 The child is ``python -I apps/analytics/engine.py`` (isolated mode: no
 ``PYTHONPATH``, user site or script-directory imports) started with an empty
 environment except for locale, single-threaded math libraries and a private
-temporary ``HOME``/Matplotlib cache. It therefore holds no database, ImageKit,
+temporary ``HOME``/Matplotlib cache. It therefore holds no database, Supabase Storage,
 model-provider or Django credentials. The engine applies address-space, CPU,
 file-size and open-file limits before reading the request, and the parent
 enforces a wall-clock timeout.

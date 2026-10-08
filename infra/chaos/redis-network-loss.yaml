@@ -1,0 +1,19 @@
+# Hypothesis: with Redis unreachable the API keeps serving (rate limits fail
+# open, RateLimitStoreUnavailable pages), jobs and chat requests stay durable
+# in PostgreSQL and are dispatched once Redis returns.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: jt-code-redis-loss
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces: [jt-code-staging]
+    labelSelectors:
+      app.kubernetes.io/part-of: jt-code
+  direction: to
+  externalTargets: [redis.staging.internal]   # set to the managed Redis host
+  loss:
+    loss: "100"
+  duration: 5m

@@ -49,12 +49,14 @@ class Command(BaseCommand):
             },
         )
         Asset.objects.get_or_create(
-            imagekit_file_id="restore-drill-asset",
+            storage_object_id="restore-drill-asset",
+            storage_key="jt-code/restore-drill/asset.txt",
+            storage_bucket="jt-code-assets",
+            storage_url="",
             defaults={
                 "owner": user,
                 "organization": organization,
-                "imagekit_file_path": "/restore-drill/asset.txt",
-                "secure_url": "https://example.invalid/restore-drill/asset.txt",
+                "storage_url": "",
                 "resource_type": "file",
                 "original_filename": "restore-drill.txt",
             },

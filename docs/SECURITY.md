@@ -10,7 +10,7 @@ revised before production launch.
 |------|-----------|----------|---------|--------|
 | **C0 — Public** | Non-sensitive, non-user data | model catalog, plan catalog, this repo (docs exclude secrets) | any | public |
 | **C1 — Internal** | Operational, non-personal data | audit categories, usage aggregates, feature flags | PostgreSQL (Django) | authenticated staff |
-| **C2 — Confidential** | Personal + business data under access control | user profiles, org membership, conversations, knowledge documents, jobs, assets metadata, billing, consents | PostgreSQL; assets via signed ImageKit delivery (ADR-002) | members of owning organization only |
+| **C2 — Confidential** | Personal + business data under access control | user profiles, org membership, conversations, knowledge documents, jobs, assets metadata, billing, consents | PostgreSQL; assets via signed private Supabase Storage delivery (ADR-002) | members of owning organization only |
 | **C3 — Restricted** | Highest sensitivity/regulated | credentials (API keys), webhook secrets, Supabase/Stripe keys, SafetyEvent containing content, export payloads at-rest | secrets only in env/vault; never in logs or source | service accounts, minimal staff, audit-logged |
 
 **Rule of thumb:** any row carrying a user or organization reference is at least
@@ -54,3 +54,18 @@ Data-loss/DR concerns are covered by the Phase 3 backup/PITR procedures.
 
 Measurement baseline: Sentry traces + `/api/v1/health/*` probes; dashboards and
 OpenTelemetry come in Phase 15.
+
+## 4. Hardening controls (Phase 15)
+
+The controls behind the threat model are documented in
+[OBSERVABILITY.md](OBSERVABILITY.md):
+
+* Sentry PII scrubbing.
+* Authenticated metrics.
+* Tracing with credential scrubbing at the collector.
+* The append-only audit pipeline, exported through Kafka.
+* Security headers and a strict API CSP.
+* Cloudflare WAF, edge rate limits and the origin lock.
+* Trusted-proxy client-IP resolution.
+* Timestamped, nonce-bound webhook signatures with replay rejection.
+* The SAST, dependency, secret and DAST gates (`manage.py security_gate` and CI).

@@ -20,8 +20,7 @@ class SignatureRequestSerializer(serializers.Serializer):
 class CompleteUploadSerializer(serializers.Serializer):
     uploadIntentId = serializers.UUIDField()
     uploadToken = serializers.CharField(max_length=100)
-    fileId = serializers.CharField(max_length=500)
-    filePath = serializers.CharField(max_length=1000)
+    storageKey = serializers.CharField(max_length=1000)
 
 
 class AssetAccessResponseSerializer(serializers.Serializer):
@@ -36,14 +35,14 @@ class AssetSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source="display_name", read_only=True)
     mimeType = serializers.CharField(source="content_type", read_only=True)
     size = serializers.IntegerField(source="bytes", read_only=True)
-    blobKey = serializers.CharField(source="imagekit_file_id", read_only=True)
+    blobKey = serializers.CharField(source="storage_object_id", read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
     usedIn = serializers.SerializerMethodField()
     ownerId = serializers.UUIDField(source="owner_id", read_only=True, allow_null=True)
     originalFilename = serializers.CharField(source="original_filename", read_only=True)
-    imagekitFileId = serializers.CharField(source="imagekit_file_id", read_only=True)
-    imagekitFilePath = serializers.CharField(source="imagekit_file_path", read_only=True)
+    storageBucket = serializers.CharField(source="storage_bucket", read_only=True)
+    storageKey = serializers.CharField(source="storage_key", read_only=True)
     resourceType = serializers.CharField(source="resource_type", read_only=True)
     checksumSha256 = serializers.CharField(source="checksum_sha256", read_only=True)
     deletedAt = serializers.DateTimeField(source="deleted_at", read_only=True, allow_null=True)
@@ -63,8 +62,8 @@ class AssetSerializer(serializers.ModelSerializer):
             "status",
             "ownerId",
             "originalFilename",
-            "imagekitFileId",
-            "imagekitFilePath",
+            "storageBucket",
+            "storageKey",
             "resourceType",
             "format",
             "bytes",

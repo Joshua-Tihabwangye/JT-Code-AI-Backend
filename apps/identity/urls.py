@@ -1,5 +1,6 @@
 from django.urls import path
 
+from apps.identity.account_views import AccountView, PasswordChangeView
 from apps.identity.settings_views import (
     SettingsAccountView,
     SettingsConsentsView,
@@ -19,6 +20,8 @@ from apps.identity.webhooks import supabase_webhook
 urlpatterns = [
     path("auth/ping/", AuthPingView.as_view(), name="auth-ping"),
     path("me/", MeView.as_view(), name="me"),
+    path("accounts/me/", AccountView.as_view(), name="account-me"),
+    path("accounts/me/password/", PasswordChangeView.as_view(), name="account-password"),
     path("settings/profile/", SettingsProfileView.as_view(), name="settings-profile"),
     path("settings/organization/", SettingsOrganizationView.as_view(), name="settings-organization"),
     path("settings/consents/", SettingsConsentsView.as_view(), name="settings-consents"),

@@ -32,14 +32,14 @@ def _strict_env() -> dict[str, str]:
         "KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
         "KAFKA_SASL_USERNAME": "jt-code",
         "KAFKA_SASL_PASSWORD": "kafka-password",
-        "IMAGEKIT_PUBLIC_KEY": "public_key",
-        "IMAGEKIT_PRIVATE_KEY": "private_key",
-        "IMAGEKIT_ENDPOINT_URL": "https://ik.imagekit.io/jt-code",
+        "SUPABASE_STORAGE_BUCKET": "jt-code-assets",
         "STRIPE_SECRET_KEY": "sk_live_9mY7Kq2Vx5Zp8Lr3",
         "STRIPE_WEBHOOK_SECRET": "whsec_9mY7Kq2Vx5Zp8Lr3",
         "N8N_BASE_URL": "https://n8n.example.com",
         "N8N_API_KEY": "n8n-api-key",
-        "N8N_WEBHOOK_SECRET": "n8n-webhook-secret",
+        "N8N_WEBHOOK_SECRET": "ci-n8n-callback-secret-0123456789abcdef",  # pragma: allowlist secret
+        "N8N_DISPATCH_SECRET": "ci-n8n-dispatch-secret-0123456789abcdef",  # pragma: allowlist secret
+        "N8N_CALLBACK_BASE_URL": "https://api.example.com/api/v1",
         "N8N_SENTRY_RELAY_SECRET": "n8n-sentry-relay-secret",
         "SENTRY_DSN": "https://public@example.ingest.sentry.io/1",
         "SENTRY_ENVIRONMENT": "production",
@@ -47,6 +47,8 @@ def _strict_env() -> dict[str, str]:
         "TOOL_CREDENTIALS_ENCRYPTION_KEYS": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "GEMINI_API_KEY": "gemini-production-key-9mY7Kq2V",
         "RAG_EMBEDDING_PROVIDER": "gemini",
+        "FRONTEND_URL": "https://app.example.com",
+        "METRICS_AUTH_TOKEN": "ci-metrics-scrape-token-0123456789abcdef",
         "WEBHOOK_ALLOWED_HOSTS": "callbacks.example.com",
         "WEBHOOK_SIGNING_SECRET": "outbound-callback-signing-secret",
         "DJANGO_DEBUG": "false",
@@ -128,7 +130,6 @@ def test_env_example_contains_only_live_variables_and_no_development_secrets():
         not {
             "FEATURE_FLAG_ENABLE_RAG",
             "STREAMLIT_SERVER_PORT",
-            "OTEL_EXPORTER_OTLP_ENDPOINT",
             "EMAIL_HOST_PASSWORD",
         }
         & declared
@@ -143,7 +144,7 @@ def test_ci_security_scans_are_gating():
     assert "python manage.py migrate --noinput --settings=config.settings.ci" in ci
     assert "python manage.py check --deploy --settings=config.settings.production" in ci
     assert "- run: mypy" in ci
-    assert "python-version: '3.14.4'" in ci
+    assert 'PYTHON_VERSION: "3.14.4"' in ci and "python-version: ${{ env.PYTHON_VERSION }}" in ci
     assert "bandit -q -r apps config manage.py" in ci
     assert "pip-audit --strict" in ci
     assert "|| true" not in ci

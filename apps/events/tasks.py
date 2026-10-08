@@ -153,12 +153,16 @@ def publish_outbox_batch(limit: int = 500) -> int:
     except Exception as exc:  # noqa: BLE001 - producer construction/transport failure
         sentry_sdk.capture_exception(exc)
         results = {event_id: str(exc) for event_id in tokens}
+    from apps.core.metrics import OUTBOX_PUBLISHED
+
     published = 0
     for event_id, (event, token) in tokens.items():
         if (error := results.get(event_id)) is None:
             published += int(_mark_published(event.id, token))
+            OUTBOX_PUBLISHED.labels("published").inc()
         else:
             _mark_delivery_failure(event.id, token, RuntimeError(error))
+            OUTBOX_PUBLISHED.labels("failed").inc()
     return published
 
 

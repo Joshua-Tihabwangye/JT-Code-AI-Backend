@@ -10,6 +10,7 @@ from asgiref.sync import sync_to_async
 from celery import current_app
 from django.conf import settings
 from django.db import IntegrityError, close_old_connections, connection, transaction
+from django.db.models import Count, Exists, OuterRef, Subquery
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
@@ -19,6 +20,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.assets.models import ConversationAttachment
 from apps.conversations.models import ChatRequest, Conversation, ConversationFeedback, Message
 from apps.conversations.serializers import (
     ChatRequestCreateSerializer,
@@ -33,7 +35,12 @@ from apps.conversations.serializers import (
 from apps.conversations.streaming import chat_status_channel, notify_chat_status
 from apps.conversations.tasks import next_dispatch_time, process_chat_request
 from apps.core.exceptions import ArchivedConversation, IdempotencyConflict
-from apps.core.pagination import CreatedCursorPagination, UpdatedCursorPagination
+from apps.core.pagination import (
+    CreatedCursorPagination,
+    ExportFormatMixin,
+    OptionalCreatedCursorPagination,
+    OptionalUpdatedCursorPagination,
+)
 from apps.core.throttling import BurstThrottle, ChatThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
@@ -104,7 +111,23 @@ def create_chat_request(
     celery_task_id = str(uuid4())
     try:
         with transaction.atomic():
+            from apps.usage import services as metering
+            from apps.usage.concurrency import enforce_concurrency
+            from apps.usage.models import Feature
+
+            # A replayed Idempotency-Key raises IntegrityError below and rolls
+            # this hold back, so retries are never charged twice.
+            chat_request_id = uuid4()
+            enforce_concurrency(conversation.organization, "chat_requests")
+            metering.reserve(
+                organization=conversation.organization,
+                user=request.user,
+                feature=Feature.CHAT_MESSAGES,
+                source_type="chat_request",
+                source_id=chat_request_id,
+            )
             chat_request = ChatRequest.objects.create(
+                id=chat_request_id,
                 owner=request.user,
                 organization=conversation.organization,
                 conversation=conversation,
@@ -151,23 +174,140 @@ def create_chat_request(
     return chat_request, False
 
 
-class ConversationRuntimeViewSet(viewsets.ModelViewSet):
+def cancel_chat_request(item: ChatRequest) -> ChatRequest:
+    """Cancel queued/running chat work (idempotent); used by both cancel endpoints."""
+    with transaction.atomic():
+        item = ChatRequest.objects.select_for_update().get(id=item.id)
+        if item.status not in {
+            ChatRequest.Status.COMPLETED,
+            ChatRequest.Status.FAILED,
+            ChatRequest.Status.CANCELLED,
+        }:
+            item.cancel_requested_at = timezone.now()
+            item.status = ChatRequest.Status.CANCELLED
+            item.error_code = ""
+            item.error_message = ""
+            item.completed_at = item.completed_at or timezone.now()
+            item.save(
+                update_fields=(
+                    "cancel_requested_at",
+                    "status",
+                    "error_code",
+                    "error_message",
+                    "completed_at",
+                    "updated_at",
+                )
+            )
+            add_outbox_event(
+                "chat.request.cancelled",
+                str(item.id),
+                {
+                    "requestId": str(item.id),
+                    "conversationId": str(item.conversation_id),
+                    "userId": str(item.owner_id),
+                    "traceId": item.trace_id,
+                    "status": item.status,
+                },
+                headers={"trace_id": item.trace_id},
+            )
+            transaction.on_commit(lambda request_id=str(item.id): notify_chat_status(request_id))
+            if item.celery_task_id:
+                transaction.on_commit(lambda task_id=item.celery_task_id: current_app.control.revoke(task_id))
+    return item
+
+
+class ConversationRuntimeViewSet(ExportFormatMixin, viewsets.ModelViewSet):
     """Version 1 conversation API with cursor reads and tenant-scoped writes."""
 
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = ConversationSerializer
-    pagination_class = UpdatedCursorPagination
+    pagination_class = OptionalUpdatedCursorPagination
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        params = self.request.query_params
         queryset = tenant_scoped_queryset(Conversation.objects.all(), self.request.user)
-        include_archived = self.request.query_params.get("includeArchived", "").lower() == "true"
-        if self.action == "unarchive" or not include_archived:
+        flag = lambda name: params.get(name, "").lower() == "true"  # noqa: E731
+        if flag("archivedOnly"):
+            queryset = queryset.filter(archived_at__isnull=False)
+        elif self.action not in {"unarchive", "partial_update", "retrieve", "destroy", "export"} and not flag(
+            "includeArchived"
+        ):
             queryset = queryset.filter(archived_at__isnull=True)
-        search = self.request.query_params.get("q", "").strip()
+        if flag("pinnedOnly"):
+            queryset = queryset.filter(pinned=True)
+        if flag("withFilesOnly"):
+            queryset = queryset.filter(attachments__isnull=False).distinct()
+        search = (params.get("q") or params.get("search") or "").strip()
         if search:
             queryset = queryset.filter(title__icontains=search[:255])
-        return queryset.order_by("-updated_at", "-id")
+        last_message = Message.objects.filter(conversation=OuterRef("pk")).order_by("-created_at")
+        queryset = queryset.annotate(
+            message_count=Count("messages", distinct=True),
+            last_message=Subquery(last_message.values("content")[:1]),
+            has_attachments=Exists(ConversationAttachment.objects.filter(conversation=OuterRef("pk"))),
+        )
+        return queryset.order_by("-pinned", "-updated_at", "-id")
+
+    @action(detail=False, methods=["post"], url_path="bulk-delete")
+    def bulk_delete(self, request: Request) -> Response:
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 200:
+            raise ValidationError({"ids": "Provide 1-200 conversation ids."})
+        deleted = self._deletable().filter(id__in=[str(value) for value in ids]).delete()[0]
+        return Response({"deleted": deleted})
+
+    @action(detail=False, methods=["post"])
+    def clear(self, request: Request) -> Response:
+        """Delete every conversation the caller owns in the selected organization."""
+        deleted = self._deletable().delete()[0]
+        return Response({"deleted": deleted})
+
+    def _deletable(self):
+        organization = organization_for_request(self.request, required=True)
+        return Conversation.objects.filter(organization=organization, owner=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel_generation(self, request: Request, pk=None) -> Response:
+        """Stop any queued or running generation in this conversation."""
+        conversation = self.get_object()
+        open_requests = ChatRequest.objects.filter(
+            conversation=conversation, status__in=(ChatRequest.Status.QUEUED, ChatRequest.Status.RUNNING)
+        )
+        cancelled = [str(cancel_chat_request(item).id) for item in open_requests]
+        return Response({"cancelled": cancelled})
+
+    @action(detail=True, methods=["get"])
+    def export(self, request: Request, pk=None) -> Response:
+        conversation = self.get_object()
+        export_format = request.query_params.get("format", "markdown")
+        if export_format not in {"markdown", "json"}:
+            raise ValidationError({"format": "Use markdown or json."})
+        messages = list(
+            conversation.messages.filter(organization=conversation.organization).order_by("created_at", "id")
+        )
+        if export_format == "json":
+            content = json.dumps(
+                {
+                    "id": str(conversation.id),
+                    "title": conversation.title,
+                    "createdAt": conversation.created_at.isoformat(),
+                    "messages": MessageSerializer(messages, many=True).data,
+                },
+                indent=2,
+                default=str,
+            )
+        else:
+            parts = [f"# {conversation.title}", ""]
+            for message in messages:
+                parts += [
+                    f"**{message.role}** ({message.created_at:%Y-%m-%d %H:%M} UTC)",
+                    "",
+                    message.content,
+                    "",
+                ]
+            content = "\n".join(parts)
+        return Response({"content": content, "format": export_format})
 
     def perform_create(self, serializer):
         serializer.save(
@@ -194,7 +334,7 @@ class ConversationRuntimeViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=["get", "post"],
-        pagination_class=CreatedCursorPagination,
+        pagination_class=OptionalCreatedCursorPagination,
         throttle_classes=[ChatThrottle, BurstThrottle],
     )
     def messages(self, request: Request, pk=None) -> Response:
@@ -228,7 +368,7 @@ class ConversationRuntimeViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=["get", "post"],
-        pagination_class=CreatedCursorPagination,
+        pagination_class=OptionalCreatedCursorPagination,
     )
     def feedback(self, request: Request, pk=None) -> Response:
         conversation = self.get_object()
@@ -339,46 +479,7 @@ class ChatRequestRuntimeViewSet(
     @action(detail=True, methods=["post"])
     def cancel(self, request: Request, pk=None) -> Response:
         """Cancel queued/running chat work without exposing broker ids to clients."""
-        item = self.get_object()
-        with transaction.atomic():
-            item = ChatRequest.objects.select_for_update().get(id=item.id)
-            if item.status not in {
-                ChatRequest.Status.COMPLETED,
-                ChatRequest.Status.FAILED,
-                ChatRequest.Status.CANCELLED,
-            }:
-                item.cancel_requested_at = timezone.now()
-                item.status = ChatRequest.Status.CANCELLED
-                item.error_code = ""
-                item.error_message = ""
-                item.completed_at = item.completed_at or timezone.now()
-                item.save(
-                    update_fields=(
-                        "cancel_requested_at",
-                        "status",
-                        "error_code",
-                        "error_message",
-                        "completed_at",
-                        "updated_at",
-                    )
-                )
-                add_outbox_event(
-                    "chat.request.cancelled",
-                    str(item.id),
-                    {
-                        "requestId": str(item.id),
-                        "conversationId": str(item.conversation_id),
-                        "userId": str(item.owner_id),
-                        "traceId": item.trace_id,
-                        "status": item.status,
-                    },
-                    headers={"trace_id": item.trace_id},
-                )
-                transaction.on_commit(lambda request_id=str(item.id): notify_chat_status(request_id))
-                if item.celery_task_id:
-                    transaction.on_commit(
-                        lambda task_id=item.celery_task_id: current_app.control.revoke(task_id)
-                    )
+        item = cancel_chat_request(self.get_object())
         return Response(self.get_serializer(item).data)
 
     @action(detail=True, methods=["get"])

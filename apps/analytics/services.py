@@ -45,20 +45,20 @@ def dataframe_from_bytes(content: bytes, *, mime_type: str) -> Any:
 
 def bytes_for_asset(asset: Any) -> bytes:
     """Download a READY asset through signed, host-pinned egress and verify its checksum."""
-    from apps.assets.imagekit import generate_signed_delivery_url
     from apps.assets.models import Asset
+    from apps.assets.supabase_storage import generate_signed_delivery_url, storage_api_url
     from apps.tools.egress import safe_request
 
-    if asset.status != Asset.Status.READY or not asset.imagekit_file_path:
+    if asset.status != Asset.Status.READY or not asset.storage_key:
         raise AnalysisError("The dataset asset is not ready.")
     if asset.bytes > settings.ANALYTICS_MAX_DATASET_BYTES:
         raise AnalysisError("The dataset asset exceeds the configured byte limit.")
-    host = urlsplit(settings.IMAGEKIT_ENDPOINT_URL).hostname
+    host = urlsplit(storage_api_url()).hostname
     if not host:
-        raise AnalysisError("ImageKit delivery is not configured.")
+        raise AnalysisError("Supabase Storage delivery is not configured.")
     response = safe_request(
         "GET",
-        generate_signed_delivery_url(asset.imagekit_file_path),
+        generate_signed_delivery_url(asset.storage_key, external=False),
         allowed_hosts=[host],
         timeout=settings.ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS,
         max_bytes=settings.ANALYTICS_MAX_DATASET_BYTES,

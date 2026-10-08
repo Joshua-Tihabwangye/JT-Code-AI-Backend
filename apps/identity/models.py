@@ -63,6 +63,8 @@ class User(AbstractUser):
     job_title = models.CharField(max_length=255, blank=True)
     contact = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)
+    country_code = models.CharField(max_length=2, blank=True)
+    dial_code = models.CharField(max_length=8, blank=True)
     timezone = models.CharField(max_length=100, blank=True)
     bio = models.TextField(blank=True)
     organizations = models.ManyToManyField(Organization, through="UserOrganization", related_name="members")

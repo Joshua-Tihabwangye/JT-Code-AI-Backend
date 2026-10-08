@@ -29,6 +29,9 @@ SUPABASE_JWT_SECRET = "test-jwt-secret"  # nosec B105 - deterministic test-only 
 SUPABASE_JWT_AUDIENCE = "authenticated"
 SUPABASE_JWT_ISSUER = ""
 SUPABASE_URL = ""
+SUPABASE_INTERNAL_URL = ""
+SUPABASE_JWT_VERIFICATION = "hs256"
+SUPABASE_STORAGE_PUBLIC_API_URL = ""
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET", "")  # noqa: F405
 WEBHOOK_ALLOWED_HOSTS = ["callbacks.example.test"]
 SUPABASE_SECRET_KEY = "sb_secret_test-only-admin-key"  # nosec B105
@@ -42,6 +45,22 @@ RAG_EMBEDDING_MAX_RETRIES = 0
 # Model reranking/judging go through the AI gateway; tests opt in with a mock.
 RAG_RERANKER = "deterministic"
 RAG_JUDGE = "deterministic"
+
+# Unsubscribed tenants fall back to no plan in tests (the seeded "free" plan's
+# quotas and concurrency limits would otherwise apply to every test tenant);
+# plan behaviour is exercised explicitly.
+BILLING_DEFAULT_PLAN = ""
+STRIPE_SECRET_KEY = "sk_test_jtcode_unit_tests"  # nosec B105 # pragma: allowlist secret
+STRIPE_WEBHOOK_SECRET = "whsec_jtcode_unit_tests"  # nosec B105 # pragma: allowlist secret
+FRONTEND_URL = "https://app.example.test"
+
+# n8n is off unless a test configures it (Phase 16 tests use a fake n8n).
+N8N_BASE_URL = ""
+N8N_WEBHOOK_BASE_URL = ""
+N8N_API_KEY = ""
+N8N_DISPATCH_SECRET = ""  # nosec B105 - disables n8n in tests
+N8N_CALLBACK_BASE_URL = ""
+N8N_CREDENTIAL_IDS = {}  # noqa: F405
 
 # Deterministic offline chat backend for the test suite (no SDK/key required).
 AI_PROVIDER = "echo"

@@ -12,6 +12,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections, connection
 
+from apps.core.tracing import span_from_headers
 from apps.events.consumers import UnhandledEventError, dead_letter_event, process_event
 from apps.events.contracts import EventContractError, parse_envelope, validate_transport_headers
 from apps.events.kafka import kafka_client_config
@@ -49,6 +50,17 @@ class Command(BaseCommand):
         """Return ``processed``/``duplicate``, or raise the final error to dead-letter."""
         envelope = parse_envelope(payload)
         validate_transport_headers(envelope, headers)
+        attributes = {
+            "messaging.system": "kafka",
+            "messaging.destination.name": message.topic(),
+            "messaging.consumer.group.name": group_id,
+            "messaging.message.id": envelope.event_id,
+        }
+        # Continue the producer's trace (``traceparent`` captured by the outbox).
+        with span_from_headers(f"consume {envelope.event_type}", headers, **attributes):
+            return self._process_attempts(group_id=group_id, message=message, envelope=envelope)
+
+    def _process_attempts(self, *, group_id: str, message, envelope) -> str:
         attempts = max(1, settings.KAFKA_CONSUMER_MAX_ATTEMPTS)
         for attempt in range(1, attempts + 1):
             try:

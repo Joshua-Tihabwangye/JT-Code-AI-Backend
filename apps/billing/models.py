@@ -18,7 +18,12 @@ class Plan(models.Model):
     slug = models.SlugField(unique=True)
     description = models.TextField(blank=True)
     price_cents = models.PositiveIntegerField(default=0)
+    price_yearly_cents = models.PositiveIntegerField(default=0)
     currency = models.CharField(max_length=3, default="USD")
+    # Stripe catalogue identifiers (``manage.py sync_stripe_prices`` creates/links them).
+    stripe_product_id = models.CharField(max_length=255, blank=True)
+    stripe_price_monthly_id = models.CharField(max_length=255, blank=True)
+    stripe_price_yearly_id = models.CharField(max_length=255, blank=True)
     interval = models.CharField(max_length=20, choices=Interval.choices, default=Interval.MONTHLY)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
     features = models.JSONField(default=dict, blank=True)
@@ -36,6 +41,13 @@ class Plan(models.Model):
 
     def __str__(self):
         return f"{self.name} (${self.price_cents / 100:.2f}/{self.interval})"
+
+    def stripe_price_for(self, interval: str) -> str:
+        return self.stripe_price_yearly_id if interval == "year" else self.stripe_price_monthly_id
+
+    @property
+    def is_free(self) -> bool:
+        return self.price_cents == 0 and self.price_yearly_cents == 0
 
 
 class Entitlement(models.Model):
@@ -55,6 +67,8 @@ class Entitlement(models.Model):
         CUSTOM_MODELS = "custom_models", "Custom Models"
         SSO = "sso", "SSO"
         AUDIT_LOGS = "audit_logs", "Audit Logs"
+        AGENT_RUNS = "agent_runs", "Agent Runs"
+        ANALYSIS_RUNS = "analysis_runs", "Analysis Runs"
 
     class LimitType(models.TextChoices):
         HARD = "hard", "Hard Limit"
@@ -105,6 +119,10 @@ class Subscription(models.Model):
     trial_start = models.DateTimeField(null=True, blank=True)
     trial_end = models.DateTimeField(null=True, blank=True)
     quantity = models.PositiveIntegerField(default=1)
+    interval = models.CharField(max_length=10, default="month")
+    stripe_price_id = models.CharField(max_length=255, blank=True)
+    # Stripe's ``created`` timestamp of the newest state applied (out-of-order guard).
+    provider_updated_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -132,6 +150,8 @@ class CreditWallet(models.Model):
     auto_topup_enabled = models.BooleanField(default=False)
     auto_topup_threshold = models.DecimalField(max_digits=20, decimal_places=6, default=0)
     auto_topup_amount = models.DecimalField(max_digits=20, decimal_places=6, default=0)
+    # Credits charged + held in a calendar month may not exceed this (None = no cap).
+    monthly_spending_limit = models.DecimalField(max_digits=20, decimal_places=6, null=True, blank=True)
     last_topup_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -166,6 +186,10 @@ class CreditLedger(models.Model):
         USAGE_RAG = "usage_rag", "RAG Query"
         USAGE_WORKFLOW = "usage_workflow", "Workflow Execution"
         USAGE_STORAGE = "usage_storage", "Storage"
+        USAGE_KNOWLEDGE = "usage_knowledge", "Knowledge Ingestion"
+        USAGE_AGENT = "usage_agent", "Agent Run"
+        USAGE_ANALYSIS = "usage_analysis", "Analysis Run"
+        USAGE_API = "usage_api", "API Call"
         REFUND = "refund", "Refund"
         ADJUSTMENT = "adjustment", "Adjustment"
         EXPIRED = "expired", "Expired Credits"
@@ -218,6 +242,8 @@ class Invoice(models.Model):
     )
     provider = models.CharField(max_length=50, default="stripe")
     provider_invoice_id = models.CharField(max_length=255, unique=True)
+    number = models.CharField(max_length=100, blank=True)
+    description = models.CharField(max_length=500, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     amount_cents = models.PositiveIntegerField(default=0)
     amount_paid_cents = models.PositiveIntegerField(default=0)
@@ -275,6 +301,8 @@ class Payment(models.Model):
     amount_cents = models.PositiveIntegerField(default=0)
     currency = models.CharField(max_length=3, default="USD")
     credits_granted = models.DecimalField(max_digits=20, decimal_places=6, default=0)
+    refunded_cents = models.PositiveIntegerField(default=0)
+    credits_reversed = models.DecimalField(max_digits=20, decimal_places=6, default=0)
     idempotency_key = models.CharField(max_length=255, db_index=True)
     failure_code = models.CharField(max_length=100, blank=True)
     failure_message = models.TextField(blank=True)
@@ -294,3 +322,46 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"Payment {self.provider_payment_id} - {self.amount_cents / 100:.2f} {self.currency} ({self.status})"  # noqa: E501
+
+
+class BillingCustomer(models.Model):
+    """The organization's Stripe customer (one per tenant)."""
+
+    organization = models.OneToOneField(
+        "identity.Organization", on_delete=models.CASCADE, related_name="billing_customer"
+    )
+    stripe_customer_id = models.CharField(max_length=255, unique=True)
+    default_payment_method_id = models.CharField(max_length=255, blank=True)
+    payment_method_summary = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.organization} -> {self.stripe_customer_id}"
+
+
+class StripeEvent(models.Model):
+    """Every verified Stripe event, processed exactly once (by ``event_id``)."""
+
+    class Status(models.TextChoices):
+        RECEIVED = "received", "Received"
+        PROCESSED = "processed", "Processed"
+        IGNORED = "ignored", "Ignored"
+        FAILED = "failed", "Failed"
+
+    event_id = models.CharField(max_length=255, unique=True)
+    event_type = models.CharField(max_length=100, db_index=True)
+    livemode = models.BooleanField(default=False)
+    stripe_created = models.DateTimeField()
+    payload = models.JSONField()
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.RECEIVED)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=("status", "received_at"), name="billing_evt_status_idx")]
+
+    def __str__(self):
+        return f"{self.event_type} {self.event_id} ({self.status})"

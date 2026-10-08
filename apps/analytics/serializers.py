@@ -4,14 +4,14 @@ from rest_framework import serializers
 
 from apps.analytics.models import AnalysisRun, Dataset, DatasetGrant, Visualization
 from apps.analytics.services import AnalysisError, validate_transform_spec
-from apps.assets.imagekit import generate_signed_delivery_url
 from apps.assets.models import Asset
+from apps.assets.supabase_storage import generate_signed_delivery_url
 
 
 def _signed(asset) -> str | None:
     if asset is None or asset.status != Asset.Status.READY:
         return None
-    return generate_signed_delivery_url(asset.imagekit_file_path)
+    return generate_signed_delivery_url(asset.storage_key)
 
 
 class AnalysisResultSchemaSerializer(serializers.Serializer):

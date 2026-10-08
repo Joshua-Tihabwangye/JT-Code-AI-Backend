@@ -111,7 +111,7 @@ def test_transient_embedding_errors_are_retried(settings, monkeypatch):
 
 
 def test_gemini_provider_uses_batch_embed_rest_contract(settings, monkeypatch):
-    settings.GEMINI_API_KEY = "test-gemini-key"
+    settings.GEMINI_API_KEY = "test-gemini-key"  # pragma: allowlist secret
     settings.GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
     captured = {}
 
@@ -136,7 +136,7 @@ def test_gemini_provider_uses_batch_embed_rest_contract(settings, monkeypatch):
 def test_gemini_provider_maps_retryable_failures_to_transient(settings, monkeypatch):
     from apps.ai_gateway.providers.base import ProviderBadRequest, ProviderRateLimited
 
-    settings.GEMINI_API_KEY = "test-gemini-key"
+    settings.GEMINI_API_KEY = "test-gemini-key"  # pragma: allowlist secret
 
     def rate_limited(*args, **kwargs):
         raise ProviderRateLimited("slow down")
@@ -198,7 +198,9 @@ def test_text_and_unsupported_sources():
         extract_source_text(source_type="text", config={"text": "   "})
     with pytest.raises(ExtractionError, match="asset_id"):
         extract_source_text(source_type="file", config={})
+    with pytest.raises(ExtractionError, match="no content"):
+        extract_source_text(source_type="integration", config={})  # nothing pushed by n8n yet
     with pytest.raises(ExtractionError, match="not supported"):
-        extract_source_text(source_type="integration", config={})
+        extract_source_text(source_type="ftp", config={})
     with pytest.raises(ExtractionError, match="Unsupported content type"):
         _from_bytes(b"\x00\x01", content_type="application/octet-stream")

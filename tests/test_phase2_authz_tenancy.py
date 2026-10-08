@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import time
 import uuid
@@ -241,7 +239,8 @@ def test_organization_member_can_list_team_conversations(api_client, user):
     response = api_client.get(reverse("conversation-list"))
 
     assert response.status_code == 200
-    items = response.json().get("results", response.json())
+    body = response.json()
+    items = body.get("results", body) if isinstance(body, dict) else body
     assert str(conversation.id) in {item["id"] for item in items}
 
 
@@ -257,11 +256,16 @@ def test_job_status_callback_reads_configured_secret(api_client, user, monkeypat
         trace_id="phase2-callback",
     )
     monkeypatch.setattr(settings, "N8N_WEBHOOK_SECRET", "phase2-webhook-secret")
+    from apps.core.signing import sign_request
 
-    response = api_client.post(
+    body = json.dumps({"status": Job.Status.RUNNING}).encode()
+    signed = sign_request(body, "phase2-webhook-secret")
+    response = api_client.generic(
+        "POST",
         reverse("job-status-callback", kwargs={"job_id": job.id}),
-        {"status": Job.Status.RUNNING},
-        HTTP_X_JT_CODE_WEBHOOK_SECRET="phase2-webhook-secret",
+        data=body,
+        content_type="application/json",
+        **{f"HTTP_{k.upper().replace('-', '_')}": v for k, v in signed.items()},
     )
 
     assert response.status_code == 200, response.content
@@ -283,14 +287,13 @@ def test_supabase_profile_update_does_not_reactivate_suspended_user(api_client, 
         },
     }
     body = json.dumps(payload).encode()
-    signature = hmac.new(b"phase2-supabase-secret", body, hashlib.sha256).hexdigest()
 
     response = api_client.generic(
         "POST",
         reverse("supabase-webhook"),
         data=body,
         content_type="application/json",
-        HTTP_X_SUPABASE_SIGNATURE=signature,
+        HTTP_AUTHORIZATION="Bearer phase2-supabase-secret",
     )
 
     assert response.status_code == 200

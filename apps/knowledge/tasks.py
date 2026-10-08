@@ -92,6 +92,15 @@ def sync_source(source_id: str):
         source.processing_started_at = timezone.now()
         source.last_error = ""
         source.save(update_fields=["status", "processing_started_at", "last_error", "updated_at"])
+        if source.source_type == Source.SourceType.INTEGRATION:
+            # Many documents per source: n8n reads the provider and pushes them back.
+            from apps.orchestration.knowledge import IntegrationSyncError, request_integration_sync
+
+            try:
+                request_integration_sync(source, run)
+            except IntegrationSyncError as exc:
+                _fail_sync(source, run, str(exc))
+            return
 
         try:
             visibility, user_ids = normalize_acl(source.config.get("acl"))
@@ -233,10 +242,12 @@ def process_document(document_id: str, sync_run_id: str | None = None):
                 processing_started_at=None,
                 updated_at=timezone.now(),
             )
-            source.status = source.Status.FAILED
-            source.last_error = message
-            source.processing_started_at = None
-            source.save(update_fields=["status", "last_error", "processing_started_at", "updated_at"])
+            if source.source_type != source.SourceType.INTEGRATION:
+                # One bad document of an integration does not fail the whole source.
+                source.status = source.Status.FAILED
+                source.last_error = message
+                source.processing_started_at = None
+                source.save(update_fields=["status", "last_error", "processing_started_at", "updated_at"])
             if sync_run:
                 sync_run.status = SyncRun.Status.FAILED
                 sync_run.error_message = message

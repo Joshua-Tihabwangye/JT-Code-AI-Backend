@@ -17,6 +17,47 @@ django.setup()
 
 from django.conf import settings  # noqa: E402
 
+TEST_WALLET_CREDITS = 1_000_000
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Rate-limit counters (per IP/user/tenant) must not leak between tests."""
+    from django.core.cache import caches
+
+    caches["rate_limits"].clear()
+
+
+@pytest.fixture(autouse=True)
+def fund_new_organizations(request):
+    """Give every organization created in a test a funded wallet.
+
+    Metering (Phase 13) reserves credits for chat, jobs, agent runs and other
+    billable work. Tests of the insufficient-credit path opt out with
+    ``@pytest.mark.unfunded``; metering tests set balances explicitly.
+    """
+    if request.node.get_closest_marker("unfunded"):
+        yield
+        return
+    from decimal import Decimal
+
+    from django.db.models.signals import post_save
+
+    from apps.billing.models import CreditWallet
+    from apps.identity.models import Organization
+
+    def fund(sender, instance, created, **kwargs):
+        if created:
+            CreditWallet.objects.get_or_create(
+                organization=instance, defaults={"balance": Decimal(TEST_WALLET_CREDITS)}
+            )
+
+    post_save.connect(fund, sender=Organization, dispatch_uid="test-fund-wallets")
+    try:
+        yield
+    finally:
+        post_save.disconnect(sender=Organization, dispatch_uid="test-fund-wallets")
+
 
 @pytest.fixture(scope="session")
 def celery_config():

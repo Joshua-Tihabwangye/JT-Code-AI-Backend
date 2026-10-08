@@ -36,12 +36,12 @@ def _strict_env() -> dict[str, str]:
         "KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
         "KAFKA_SASL_USERNAME": "ci",
         "KAFKA_SASL_PASSWORD": "ci-kafka-password",
-        "IMAGEKIT_PUBLIC_KEY": "public_key",
-        "IMAGEKIT_PRIVATE_KEY": "private_key",
-        "IMAGEKIT_ENDPOINT_URL": "https://ik.imagekit.io/jt-code",
+        "SUPABASE_STORAGE_BUCKET": "jt-code-assets",
         "N8N_BASE_URL": "https://n8n.example.com",
         "N8N_API_KEY": "ci-n8n-api-key",
-        "N8N_WEBHOOK_SECRET": "ci-n8n-webhook-secret",
+        "N8N_WEBHOOK_SECRET": "ci-n8n-callback-secret-0123456789abcdef",  # pragma: allowlist secret
+        "N8N_DISPATCH_SECRET": "ci-n8n-dispatch-secret-0123456789abcdef",  # pragma: allowlist secret
+        "N8N_CALLBACK_BASE_URL": "https://api.example.com/api/v1",
         "N8N_SENTRY_RELAY_SECRET": "ci-n8n-sentry-relay-secret",
         "STRIPE_SECRET_KEY": "sk_live_ci9mY7Kq2Vx5Zp8Lr3",
         "STRIPE_WEBHOOK_SECRET": "whsec_ci9mY7Kq2Vx5Zp8Lr3",
@@ -51,6 +51,8 @@ def _strict_env() -> dict[str, str]:
         "TOOL_CREDENTIALS_ENCRYPTION_KEYS": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "GEMINI_API_KEY": "gemini-production-key-9mY7Kq2V",
         "RAG_EMBEDDING_PROVIDER": "gemini",
+        "FRONTEND_URL": "https://app.example.com",
+        "METRICS_AUTH_TOKEN": "ci-metrics-scrape-token-0123456789abcdef",
         "DJANGO_DEBUG": "false",
     }
 

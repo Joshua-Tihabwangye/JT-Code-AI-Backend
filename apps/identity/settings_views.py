@@ -11,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.edge import client_ip
 from apps.governance.models import ConsentRecord
 from apps.governance.serializers import ConsentRecordSerializer
 from apps.identity.authorization import (
@@ -76,7 +77,7 @@ class SettingsConsentsView(APIView):
                 "status": requested_status,
                 "version": "1.0",
                 "granted_at": None,
-                "ip_address": request.META.get("REMOTE_ADDR", ""),
+                "ip_address": client_ip(request._request),
                 "user_agent": request.META.get("HTTP_USER_AGENT", "")[:500],
             },
         )
@@ -145,9 +146,9 @@ class SettingsExportView(APIView):
             "assets": [
                 {
                     "id": str(a.id),
-                    "imagekit_file_id": a.imagekit_file_id,
-                    "imagekit_file_path": a.imagekit_file_path,
-                    "secure_url": a.secure_url,
+                    "storage_object_id": a.storage_object_id,
+                    "storage_key": a.storage_key,
+                    "storage_bucket": a.storage_bucket,
                     "resource_type": a.resource_type,
                     "format": a.format,
                     "bytes": a.bytes,

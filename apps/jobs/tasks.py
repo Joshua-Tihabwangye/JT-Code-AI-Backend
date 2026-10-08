@@ -17,7 +17,7 @@ from apps.jobs.webhooks import signed_callback_request, validate_callback_url
 
 def retry_delay_seconds(retry_count: int) -> int:
     """Bounded exponential backoff with jitter for transient worker failures."""
-    return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)
+    return min(300, 2 ** max(retry_count, 0)) + random.randint(0, 3)  # nosec B311 - retry jitter
 
 
 @shared_task(bind=True, acks_late=True, reject_on_worker_lost=True)
@@ -153,7 +153,7 @@ def recover_stalled_jobs() -> int:
             continue
         try:
             result = execute_job_task.apply_async(args=[str(job_id)], queue=queue_name)
-        except Exception:  # noqa: BLE001 - dispatch_queued_jobs retries durable work on the next beat tick
+        except Exception:  # noqa: BLE001  # nosec B112 - dispatch_queued_jobs retries on the next beat tick
             continue
         Job.objects.filter(id=job_id, status=Job.Status.QUEUED, celery_task_id="").update(
             celery_task_id=result.id
@@ -167,13 +167,14 @@ def dispatch_queued_jobs() -> int:
     """Republish jobs whose initial broker publication failed after DB commit."""
     from apps.jobs.dispatch import _dispatch_job, queue_for_task_type
     from apps.jobs.models import Job
+    from apps.orchestration.registry import n8n_task_types
 
     dispatched = 0
-    jobs = Job.objects.filter(
-        status=Job.Status.QUEUED,
-        celery_task_id="",
-        cancel_requested_at__isnull=True,
-    ).order_by("created_at")[:100]
+    jobs = (
+        Job.objects.filter(status=Job.Status.QUEUED, celery_task_id="", cancel_requested_at__isnull=True)
+        .exclude(task_type__in=n8n_task_types())  # retried by the orchestration sweeper
+        .order_by("created_at")[:100]
+    )
     for job in jobs:
         queue_name = queue_for_task_type(job.task_type)
         Job.objects.filter(id=job.id, status=Job.Status.QUEUED, celery_task_id="").update(

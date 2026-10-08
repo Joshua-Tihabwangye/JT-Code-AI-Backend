@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from decimal import Decimal
 from pathlib import Path
 
 from django.http import FileResponse, Http404
@@ -12,7 +11,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.billing.services import CreditService
 from apps.conversions.converter import CONVERSION_ROOT, finalize_conversion, run_conversion
 from apps.conversions.models import ConversionJob
 from apps.conversions.serializers import (
@@ -27,6 +25,9 @@ from apps.identity.authorization import (
     organization_for_request,
     tenant_scoped_queryset,
 )
+from apps.usage import services as metering
+from apps.usage.models import Feature
+from apps.usage.pricing import flat_credits
 
 
 class ConversionViewSet(viewsets.ModelViewSet):
@@ -71,27 +72,28 @@ class ConversionViewSet(viewsets.ModelViewSet):
             input_bytes = len(content)
             input_filename = f"input.{input_format}"
 
-        estimated_credits = Decimal("10") if output_format != "pdf" else Decimal("20")
         organization = organization_for_request(request, required=True)
-        try:
-            CreditService.reserve_credits(
-                user=request.user,
-                amount=estimated_credits,
-                request_id=uuid.uuid4(),
-                reason=f"File conversion {input_format}->{output_format}",
-                organization=organization,
-            )
-        except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED)
+        # PDF output needs a rendering pass, so it is priced at twice the flat rate.
+        price = flat_credits(Feature.FILE_CONVERSIONS) * (2 if output_format == "pdf" else 1)
+        job_id = uuid.uuid4()
+        reservation = metering.reserve(
+            organization=organization,
+            user=request.user,
+            feature=Feature.FILE_CONVERSIONS,
+            source_type="conversion",
+            source_id=job_id,
+            credits=price,
+        )
 
         job = ConversionJob.objects.create(
+            id=job_id,
             owner=request.user,
             organization=organization,
             input_filename=input_filename,
             input_format=input_format,
             output_format=output_format,
             input_bytes=input_bytes,
-            reserved_credits=estimated_credits,
+            reserved_credits=reservation.credits_reserved,
             options={
                 "input_format": input_format,
                 "output_format": output_format,
@@ -121,7 +123,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
             job.status = ConversionJob.Status.RUNNING
             job.save(update_fields=["status", "updated_at"])
             output = run_conversion(job)
-            imagekit_url = finalize_conversion(job, output)
+            storage_url = finalize_conversion(job, output)
             job.status = ConversionJob.Status.COMPLETED
             job.save(
                 update_fields=[
@@ -140,10 +142,11 @@ class ConversionViewSet(viewsets.ModelViewSet):
                     "conversionId": str(job.id),
                     "userId": str(request.user.id),
                     "outputBytes": job.output_bytes,
-                    "outputUrl": imagekit_url,
+                    "outputUrl": storage_url,
                 },
             )
         except Exception as exc:
+            metering.release(reservation.id, reason="conversion failed")
             job.status = ConversionJob.Status.FAILED
             job.error_message = str(exc)[:500]
             job.save(update_fields=["status", "error_message", "updated_at"])
@@ -161,6 +164,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
+        metering.settle(reservation.id, credits=price)
         return Response(ConversionJobSerializer(job).data, status=status.HTTP_201_CREATED)
 
 

@@ -274,6 +274,7 @@ def test_expired_job_is_not_overwritten_by_a_late_handler_completion(user, org, 
 
 
 @pytest.mark.django_db
+@pytest.mark.unfunded
 def test_job_creation_without_credits_is_a_client_error(authenticated_client, org):
     """P5-5: an unfunded wallet yields 402, not 500."""
     authenticated_client.raise_request_exception = False
