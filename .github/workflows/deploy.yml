@@ -57,7 +57,7 @@ jobs:
           echo "base=${REGISTRY}/${owner}" >> "$GITHUB_OUTPUT"
       - name: Build and push API image
         id: api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: runtime
@@ -72,7 +72,7 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Build and push office image
         id: office
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           target: office
@@ -86,7 +86,7 @@ jobs:
           cache-from: type=gha
       - name: Build and push Streamlit image
         id: streamlit
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: streamlit_app
           push: true
