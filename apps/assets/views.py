@@ -1,4 +1,4 @@
-"""Asset API (``/api/v1/files/``) over the ImageKit registry.
+"""Asset API (``/api/v1/files/``) over private Supabase Storage.
 
 Reads are filtered by :mod:`apps.assets.access` (private assets: owner and
 organization admins; organization assets: every member). Changing or deleting
@@ -25,21 +25,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.assets.access import assets_visible_to, can_manage_asset
-from apps.assets.imagekit import (
-    ImageKitError,
-    content_checksum,
-    content_matches_type,
-    generate_signed_delivery_url,
-    generate_upload_token,
-    imagekit_is_configured,
-    provider_identity_fingerprint,
-    sanitize_file_name,
-    stream_file,
-    upload_url,
-    user_upload_folder,
-    validate_upload_type,
-    verify_imagekit_file,
-)
 from apps.assets.models import Asset, ConversationAttachment, UploadIntent
 from apps.assets.serializers import (
     AssetAccessResponseSerializer,
@@ -52,6 +37,20 @@ from apps.assets.serializers import (
     SignatureRequestSerializer,
 )
 from apps.assets.services import asset_references, register_uploaded_asset, restore_asset, soft_delete_asset
+from apps.assets.supabase_storage import (
+    FINGERPRINT_VERSION,
+    SupabaseStorageError,
+    content_checksum,
+    content_matches_type,
+    create_signed_upload,
+    generate_signed_delivery_url,
+    provider_identity_fingerprint,
+    sanitize_file_name,
+    stream_file,
+    supabase_storage_is_configured,
+    user_upload_folder,
+    validate_upload_type,
+)
 from apps.core.throttling import BurstThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
@@ -65,7 +64,9 @@ _LIST_LIMIT = 500
 
 
 def _unavailable() -> Response:
-    return Response({"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response(
+        {"detail": "Supabase Storage is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+    )
 
 
 def _serialize(assets: list[Asset]) -> list[dict]:
@@ -132,24 +133,24 @@ class AssetListView(APIView):
 
     @extend_schema(request={"multipart/form-data": AssetUploadSerializer}, responses={201: AssetSerializer})
     def post(self, request: Request) -> Response:
-        """Proxy a file to ImageKit as a private object after size and byte-signature checks."""
+        """Proxy a file to private Supabase Storage after byte-signature checks."""
         serializer = AssetUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         organization = organization_for_request(request, required=True)
         upload = serializer.validated_data["file"]
-        if upload.size > settings.IMAGEKIT_MAX_UPLOAD_BYTES:
+        if upload.size > settings.ASSET_MAX_UPLOAD_BYTES:
             return Response(
                 {"detail": "File exceeds the configured upload limit."},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
         try:
             content_type = validate_upload_type(upload.content_type or "")
-        except ImageKitError as exc:
+        except SupabaseStorageError as exc:
             raise ValidationError({"file": str(exc)}) from exc
         content = upload.read()
         if not content or not content_matches_type(content[:512], content_type):
             raise ValidationError({"file": "The file's contents do not match its declared type."})
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return _unavailable()
         try:
             asset = register_uploaded_asset(
@@ -159,7 +160,7 @@ class AssetListView(APIView):
                 file_name=sanitize_file_name(upload.name or "upload"),
                 content_type=content_type,
             )
-        except (ImageKitError, OSError) as exc:
+        except (SupabaseStorageError, OSError) as exc:
             return Response({"detail": f"Upload failed: {exc}"}, status=status.HTTP_502_BAD_GATEWAY)
         visibility = serializer.validated_data["visibility"]
         if visibility != asset.visibility:
@@ -168,8 +169,8 @@ class AssetListView(APIView):
         return Response(_serialize([asset])[0], status=status.HTTP_201_CREATED)
 
 
-class ImageKitSignatureView(APIView):
-    """Issue a V2 upload JWT that binds folder, file name, privacy and size."""
+class SupabaseStorageUploadView(APIView):
+    """Issue a short-lived, one-object Supabase Storage upload capability."""
 
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = SignatureRequestSerializer
@@ -177,31 +178,30 @@ class ImageKitSignatureView(APIView):
     def post(self, request: Request) -> Response:
         serializer = SignatureRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if serializer.validated_data["bytes"] > settings.IMAGEKIT_MAX_UPLOAD_BYTES:
+        if serializer.validated_data["bytes"] > settings.ASSET_MAX_UPLOAD_BYTES:
             return Response(
                 {"detail": "File exceeds the configured upload limit."},
                 status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             )
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return _unavailable()
         organization = organization_for_request(request, required=True)
         intent_id = uuid.uuid4()
-        expires_at = timezone.now() + timezone.timedelta(seconds=settings.IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS)
-        upload_params = {
-            "fileName": f"{intent_id}-{sanitize_file_name(serializer.validated_data['originalFilename'])}",
-            "folder": user_upload_folder(request.user, organization.id),
-            "useUniqueFileName": "false",
-            "overwriteFile": "false",
-            "isPrivateFile": "true",
-            "checks": f'"file.size" = {serializer.validated_data["bytes"]}',
-        }
+        expires_at = timezone.now() + timezone.timedelta(seconds=settings.ASSET_UPLOAD_AUTH_TTL_SECONDS)
+        folder = user_upload_folder(request.user, organization.id)
+        file_name = f"{intent_id}-{sanitize_file_name(serializer.validated_data['originalFilename'])}"
+        storage_key = f"{folder}/{file_name}"
+        try:
+            upload_url, provider_token = create_signed_upload(storage_key)
+        except SupabaseStorageError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         intent = UploadIntent.objects.create(
             id=intent_id,
             owner=request.user,
             organization=organization,
             token=secrets.token_urlsafe(32),
-            folder=upload_params["folder"],
-            file_name=upload_params["fileName"],
+            folder=folder,
+            file_name=file_name,
             original_filename=serializer.validated_data["originalFilename"],
             content_type=serializer.validated_data["contentType"],
             expected_bytes=serializer.validated_data["bytes"],
@@ -211,13 +211,17 @@ class ImageKitSignatureView(APIView):
             {
                 "uploadIntentId": str(intent.id),
                 "uploadToken": intent.token,
-                "uploadUrl": upload_url("v2"),
-                "token": generate_upload_token(upload_params, expires_at=int(expires_at.timestamp())),
-                "uploadParams": upload_params,
+                "uploadUrl": upload_url,
+                "uploadMethod": "PUT",
+                "uploadHeaders": {
+                    "x-signature": provider_token,
+                    "x-upsert": "false",
+                    "Content-Type": serializer.validated_data["contentType"],
+                    "cache-control": "private, max-age=31536000, immutable",
+                },
                 "expire": int(expires_at.timestamp()),
-                "publicKey": settings.IMAGEKIT_PUBLIC_KEY,
-                "folder": upload_params["folder"],
-                "fileName": upload_params["fileName"],
+                "bucket": settings.SUPABASE_STORAGE_BUCKET,
+                "storageKey": storage_key,
             }
         )
 
@@ -240,43 +244,28 @@ class CompleteUploadView(APIView):
         if not secrets.compare_digest(intent.token, serializer.validated_data["uploadToken"]):
             return Response({"detail": "Upload intent token is invalid."}, status=status.HTTP_403_FORBIDDEN)
         if intent.status == UploadIntent.Status.COMPLETED:
-            asset = Asset.objects.filter(imagekit_file_id=intent.imagekit_file_id).first()
+            asset = Asset.objects.filter(storage_object_id=intent.storage_object_key).first()
             if asset and asset.owner_id == request.user.id:
                 return Response(_serialize([asset])[0], status=status.HTTP_200_OK)
             return Response({"detail": "Upload intent has already been consumed."}, status=409)
         if intent.status != UploadIntent.Status.PENDING or intent.expires_at <= timezone.now():
             UploadIntent.objects.filter(id=intent.id).update(status=UploadIntent.Status.EXPIRED)
             return Response({"detail": "Upload intent has expired."}, status=status.HTTP_410_GONE)
-        file_id = serializer.validated_data["fileId"]
-        file_path = serializer.validated_data["filePath"]
-        if file_path != f"{intent.folder.rstrip('/')}/{intent.file_name}":
+        storage_key = serializer.validated_data["storageKey"]
+        if storage_key != f"{intent.folder.rstrip('/')}/{intent.file_name}":
             return Response(
                 {"detail": "Uploaded asset is outside the authorized folder."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return _unavailable()
         try:
-            resource = verify_imagekit_file(file_id)
+            checksum, delivered_type, head = content_checksum(
+                storage_key, expected_size=intent.expected_bytes
+            )
         except Exception:
             return Response(
-                {"detail": "ImageKit asset could not be verified."}, status=status.HTTP_400_BAD_REQUEST
-            )
-        if resource.get("filePath") != file_path:
-            return Response({"detail": "ImageKit asset path mismatch."}, status=status.HTTP_409_CONFLICT)
-        if not all(resource.get(field) for field in ("url", "fileType")):
-            return Response(
-                {"detail": "ImageKit asset metadata is incomplete."}, status=status.HTTP_409_CONFLICT
-            )
-        if int(resource.get("size", -1)) != intent.expected_bytes:
-            return Response({"detail": "ImageKit asset size mismatch."}, status=status.HTTP_409_CONFLICT)
-        if resource.get("isPrivateFile") is not True:
-            return Response({"detail": "ImageKit asset must be private."}, status=status.HTTP_409_CONFLICT)
-        try:
-            checksum, _delivered_type, head = content_checksum(file_path, expected_size=intent.expected_bytes)
-        except Exception:
-            return Response(
-                {"detail": "ImageKit asset content could not be verified."},
+                {"detail": "Supabase Storage asset could not be verified."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not content_matches_type(head, intent.content_type):
@@ -284,59 +273,71 @@ class CompleteUploadView(APIView):
                 {"detail": "The uploaded bytes do not match the declared content type."},
                 status=status.HTTP_409_CONFLICT,
             )
+        if delivered_type and delivered_type != intent.content_type:
+            return Response(
+                {"detail": "The object content type does not match the upload intent."},
+                status=status.HTTP_409_CONFLICT,
+            )
         with transaction.atomic():
             locked_intent = UploadIntent.objects.select_for_update().get(id=intent.id)
             if locked_intent.status != UploadIntent.Status.PENDING:
-                asset = Asset.objects.filter(imagekit_file_id=locked_intent.imagekit_file_id).first()
+                asset = Asset.objects.filter(storage_object_id=locked_intent.storage_object_key).first()
                 if asset:
                     return Response(_serialize([asset])[0], status=status.HTTP_200_OK)
                 return Response({"detail": "Upload intent is no longer available."}, status=409)
-            if Asset.objects.filter(imagekit_file_id=file_id).exists():
+            if Asset.objects.filter(storage_object_id=storage_key).exists():
                 return Response(
-                    {"detail": "ImageKit file is already registered."}, status=status.HTTP_409_CONFLICT
+                    {"detail": "Supabase Storage object is already registered."},
+                    status=status.HTTP_409_CONFLICT,
                 )
-            version_name = str((resource.get("versionInfo") or {}).get("name") or "")
-            version_suffix = version_name.rsplit(" ", 1)[-1]
             asset = Asset.objects.create(
                 owner=request.user,
                 organization=organization,
-                imagekit_file_id=file_id,
-                imagekit_file_path=file_path,
-                secure_url=resource["url"],
-                resource_type=resource["fileType"],
-                format=str(resource.get("format") or "")[:50],
-                bytes=int(resource["size"]),
-                version=int(version_suffix) if version_suffix.isdigit() else 0,
+                storage_object_id=storage_key,
+                storage_key=storage_key,
+                storage_bucket=settings.SUPABASE_STORAGE_BUCKET,
+                storage_url="",
+                resource_type="file",
+                format=intent.original_filename.rsplit(".", 1)[-1][:50]
+                if "." in intent.original_filename
+                else "",
+                bytes=intent.expected_bytes,
+                version=0,
                 original_filename=intent.original_filename,
                 name=intent.original_filename,
                 metadata={
-                    "thumbnail_url": resource.get("thumbnailUrl"),
-                    "version_info": resource.get("versionInfo"),
-                    "content_type": intent.content_type,
+                    "content_type": delivered_type or intent.content_type,
                 },
                 checksum_sha256=checksum,
-                provider_fingerprint=provider_identity_fingerprint(resource),
+                provider_fingerprint=provider_identity_fingerprint(
+                    {
+                        "bucket": settings.SUPABASE_STORAGE_BUCKET,
+                        "key": storage_key,
+                        "size": intent.expected_bytes,
+                    }
+                ),
                 provenance={
-                    "provider": "imagekit",
+                    "provider": "supabase-storage",
                     "origin": "direct-upload",
-                    "provider_file_id": file_id,
+                    "bucket": settings.SUPABASE_STORAGE_BUCKET,
+                    "storage_key": storage_key,
                     "upload_intent_id": str(intent.id),
                     "verified_at": timezone.now().isoformat(),
                     "verified_by": str(request.user.id),
-                    "fingerprintVersion": 2,
+                    "fingerprintVersion": FINGERPRINT_VERSION,
                 },
                 last_verified_at=timezone.now(),
             )
             locked_intent.status = UploadIntent.Status.COMPLETED
-            locked_intent.imagekit_file_id = file_id
+            locked_intent.storage_object_key = storage_key
             locked_intent.completed_at = timezone.now()
-            locked_intent.save(update_fields=["status", "imagekit_file_id", "completed_at"])
+            locked_intent.save(update_fields=["status", "storage_object_key", "completed_at"])
             add_outbox_event(
                 "asset.created",
                 str(asset.id),
                 {
                     "assetId": str(asset.id),
-                    "fileId": file_id,
+                    "storageKey": storage_key,
                     "ownerId": str(request.user.id),
                     "organizationId": str(organization.id),
                     "resourceType": asset.resource_type,
@@ -357,13 +358,13 @@ class AssetAccessView(APIView):
         asset = assets_visible_to(request.user).filter(id=id, status=Asset.Status.READY).first()
         if asset is None:
             return Response({"detail": "Asset not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return _unavailable()
         return Response(
             {
                 "assetId": str(asset.id),
-                "url": generate_signed_delivery_url(asset.imagekit_file_path),
-                "expiresIn": settings.IMAGEKIT_SIGNED_URL_TTL_SECONDS,
+                "url": generate_signed_delivery_url(asset.storage_key),
+                "expiresIn": settings.ASSET_SIGNED_URL_TTL_SECONDS,
             }
         )
 
@@ -378,11 +379,9 @@ class AssetDownloadView(APIView):
         asset = assets_visible_to(request.user).filter(id=id, status=Asset.Status.READY).first()
         if asset is None:
             return Response({"detail": "Asset not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return _unavailable()
-        response = StreamingHttpResponse(
-            stream_file(asset.imagekit_file_path), content_type=asset.content_type
-        )
+        response = StreamingHttpResponse(stream_file(asset.storage_key), content_type=asset.content_type)
         response["Content-Length"] = str(asset.bytes)
         response["Content-Disposition"] = f'attachment; filename="{sanitize_file_name(asset.display_name)}"'
         response["X-Content-Type-Options"] = "nosniff"

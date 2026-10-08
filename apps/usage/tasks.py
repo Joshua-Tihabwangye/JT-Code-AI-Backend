@@ -160,3 +160,11 @@ def usage_totals(queryset: Any) -> dict[str, Any]:
         "units": int(totals["units"] or 0),
         "records": int(totals["records"] or 0),
     }
+
+
+@shared_task
+def detect_cost_anomalies() -> int:
+    """Hourly: provider cost of the last full hour against its 14-day baseline."""
+    from apps.usage.anomalies import detect_cost_anomalies as detect
+
+    return len(detect())

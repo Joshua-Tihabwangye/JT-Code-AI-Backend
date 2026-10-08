@@ -65,9 +65,10 @@ def make_asset(organization, owner, label: str, **overrides):
     values = {
         "organization": organization,
         "owner": owner,
-        "imagekit_file_id": f"file-{label}",
-        "imagekit_file_path": f"/jt-code/{label}.csv",
-        "secure_url": f"https://ik.example.test/jt-code/{label}.csv",
+        "storage_object_id": f"jt-code/{label}.csv",
+        "storage_key": f"jt-code/{label}.csv",
+        "storage_bucket": "jt-code-assets",
+        "storage_url": "",
         "resource_type": "raw",
         "format": "csv",
         "bytes": 10,
@@ -151,10 +152,10 @@ def test_asset_reader_uses_signed_egress_and_verifies_integrity(analytics_org, m
         checksum_sha256=hashlib.sha256(content).hexdigest(),
         metadata={"content_type": "text/csv"},
     )
-    monkeypatch.setattr(settings, "IMAGEKIT_ENDPOINT_URL", "https://ik.example.test")
+    monkeypatch.setattr(settings, "SUPABASE_STORAGE_API_URL", "https://project.supabase.co/storage/v1")
     monkeypatch.setattr(
-        "apps.assets.imagekit.generate_signed_delivery_url",
-        lambda _path: "https://ik.example.test/signed.csv?token=short-lived",
+        "apps.assets.supabase_storage.generate_signed_delivery_url",
+        lambda _path: "https://project.supabase.co/storage/v1/object/sign/signed.csv?token=short-lived",
     )
     seen = {}
 
@@ -164,7 +165,7 @@ def test_asset_reader_uses_signed_egress_and_verifies_integrity(analytics_org, m
 
     monkeypatch.setattr("apps.tools.egress.safe_request", request)
     assert bytes_for_asset(asset) == content
-    assert seen["allowed_hosts"] == ["ik.example.test"]
+    assert seen["allowed_hosts"] == ["project.supabase.co"]
     assert seen["max_bytes"] == settings.ANALYTICS_MAX_DATASET_BYTES
 
     asset.checksum_sha256 = "0" * 64
@@ -466,7 +467,7 @@ def test_sandbox_child_gets_no_credentials_and_isolated_interpreter(monkeypatch)
     for secret in (
         "DATABASE_URL",
         "DJANGO_SECRET_KEY",
-        "IMAGEKIT_PRIVATE_KEY",
+        "SUPABASE_SECRET_KEY",
         "SUPABASE",
         "GEMINI",
         "OPENAI",
@@ -582,7 +583,7 @@ def test_run_retry_download_and_delete(
     )
     queued: list[str] = []
     monkeypatch.setattr(execute_analysis_run, "delay", queued.append)
-    monkeypatch.setattr("apps.assets.imagekit.stream_file", lambda path: iter([b"region\nEast\n"]))
+    monkeypatch.setattr("apps.assets.supabase_storage.stream_file", lambda path: iter([b"region\nEast\n"]))
     api_client.force_authenticate(owner)
     headers = {"HTTP_X_ORGANIZATION_ID": str(organization.id)}
 

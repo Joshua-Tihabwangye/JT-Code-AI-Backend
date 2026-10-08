@@ -441,7 +441,7 @@ policies = [
         },
     },
     {
-        # Egress stays open (Supabase, Redis, Kafka, AI providers, n8n, Stripe, ImageKit)
+        # Egress stays open (Supabase, Redis, Kafka, AI providers, n8n, Stripe)
         # except the cloud metadata endpoint, a classic SSRF target.
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",

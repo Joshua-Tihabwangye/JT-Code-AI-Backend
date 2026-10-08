@@ -14,9 +14,13 @@ prepare_metrics_dir() {
   fi
 }
 
+# Management commands import the same metric registry as the long-lived
+# processes. Prepare the writable directory before Django is imported for every
+# container role, not only API and Celery worker roles.
+prepare_metrics_dir
+
 case "$role" in
   api)
-    prepare_metrics_dir
     exec uvicorn config.asgi:application \
       --host 0.0.0.0 --port "${PORT:-8000}" \
       --workers "${WEB_CONCURRENCY:-2}" \
@@ -25,7 +29,6 @@ case "$role" in
       --no-server-header --no-access-log "$@"
     ;;
   worker)
-    prepare_metrics_dir
     exec celery -A config worker \
       --loglevel "${CELERY_LOG_LEVEL:-INFO}" \
       --queues "${CELERY_QUEUES:?CELERY_QUEUES is required for the worker role}" \
@@ -41,8 +44,9 @@ case "$role" in
     exec python manage.py run_kafka_consumer "$@"
     ;;
   migrate)
-    # Idempotent: applies migrations and registers versioned n8n workflows.
+    # Idempotent: applies migrations, verifies private asset storage, and registers workflows.
     python manage.py migrate --noinput
+    python manage.py configure_asset_storage
     exec python manage.py verify_supabase --format=json
     ;;
   n8n-push)

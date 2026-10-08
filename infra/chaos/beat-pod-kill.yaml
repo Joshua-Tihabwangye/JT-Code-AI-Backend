@@ -1,0 +1,13 @@
+# Hypothesis: losing Celery beat for a few minutes delays sweeps/reconciliation
+# but loses nothing; the Recreate deployment brings exactly one beat back.
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: jt-code-beat-kill
+spec:
+  action: pod-kill
+  mode: all
+  selector:
+    namespaces: [jt-code-staging]
+    labelSelectors:
+      app.kubernetes.io/component: beat

@@ -208,7 +208,7 @@ _DUMMY = {
     "CELERY_BROKER_URL": "rediss://redis.example.net:6380/1",
     "CELERY_RESULT_BACKEND": "rediss://redis.example.net:6380/2",
     "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.net:9093",
-    "IMAGEKIT_ENDPOINT_URL": "https://ik.imagekit.io/jtcode",
+    "SUPABASE_STORAGE_BUCKET": "jt-code-assets",
     "STRIPE_SECRET_KEY": "sk_live_0123456789abcdef",  # pragma: allowlist secret
     "STRIPE_WEBHOOK_SECRET": "whsec_0123456789abcdef",  # pragma: allowlist secret
     "TOOL_CREDENTIALS_ENCRYPTION_KEYS": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
@@ -257,14 +257,51 @@ def test_terraform_owns_namespace_secret_and_validates_required_keys():
     assert not list((ROOT / "infra/terraform").rglob("*.tfvars")), "tfvars must never be committed"
 
 
-def test_local_compose_uses_supabase_not_a_local_database():
+def test_local_compose_runs_a_self_hosted_supabase_runtime():
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
-    images = " ".join(str(service.get("image", "")) for service in compose["services"].values())
-    assert "postgres" not in images and "supabase/postgres" not in images
+    services = compose["services"]
+    assert services["supabase-db"]["image"].startswith("supabase/postgres:")
+    assert "supabase-auth" in services
+    assert "supabase-storage" in services
+    assert "supabase-gateway" in services
+    assert services["n8n-db"]["image"].startswith("postgres:")
     for name, service in compose["services"].items():
         for port in service.get("ports", []):
             assert str(port).startswith("127.0.0.1:"), f"{name} must not listen on all interfaces"
-    assert compose["services"]["worker"]["env_file"] == ".env"
+    assert services["worker"]["env_file"] == [{"path": ".env", "required": False}]
+    # Compose expands variables before a service's env_file is loaded. These
+    # startup-critical passwords must therefore have Compose-level defaults.
+    supabase_password = services["supabase-db"]["environment"]["POSTGRES_PASSWORD"]
+    n8n_password = services["n8n-db"]["environment"]["POSTGRES_PASSWORD"]
+    assert "${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-" in supabase_password
+    assert "${JT_CODE_LOCAL_N8N_DB_PASSWORD:-" in n8n_password
+    storage_probe = services["supabase-storage"]["healthcheck"]["test"]
+    assert "http://127.0.0.1:5000/status" in storage_probe
+
+
+def test_local_compose_launcher_lists_and_opens_browser_endpoints():
+    launcher = (ROOT / "scripts/compose_up.sh").read_text()
+    for endpoint in (
+        "http://127.0.0.1:8000/api/docs/",
+        "http://127.0.0.1:54321/auth/v1/health",
+        "http://127.0.0.1:5678",
+        "http://127.0.0.1:8025",
+        "http://127.0.0.1:8501",
+        "http://127.0.0.1:9090",
+        "http://127.0.0.1:3000",
+    ):
+        assert endpoint in launcher
+    assert "up --build --detach" in launcher
+    assert "google-chrome" in launcher
+    assert "AUTO_OPEN_BROWSER" in launcher
+    makefile = (ROOT / "Makefile").read_text()
+    assert "compose-up-no-browser:" in makefile
+    assert "bash scripts/compose_up.sh" in makefile
+
+
+def test_container_entrypoint_prepares_prometheus_directory_before_manage_commands():
+    entrypoint = (ROOT / "docker/entrypoint.sh").read_text()
+    assert entrypoint.index("prepare_metrics_dir\n\ncase") < entrypoint.index("  manage)")
 
 
 # CI/CD ---------------------------------------------------------------------------------------

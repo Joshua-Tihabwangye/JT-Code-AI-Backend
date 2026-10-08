@@ -1,4 +1,4 @@
-.PHONY: images compose-up compose-down k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: images compose-up compose-up-no-browser compose-down k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -32,7 +32,8 @@ help:
 	@echo "  restore-drill Run local Phase 3 restore verification"
 	@echo "Infrastructure (Phase 17):"
 	@echo "  images        Build the API, office and Streamlit images"
-	@echo "  compose-up    Local full stack (database: Supabase from .env)"
+	@echo "  compose-up    Local full stack; lists and opens browser-facing endpoints"
+	@echo "  compose-up-no-browser  Same stack, without opening browser tabs"
 	@echo "  k8s-generate  Regenerate infra/k8s/base and components"
 	@echo "  k8s-render    Render the staging and production overlays"
 	@echo "  k8s-validate  Render + kubeconform-validate every overlay"
@@ -156,7 +157,10 @@ images:
 	docker build -t jt-code-streamlit:local streamlit_app
 
 compose-up:
-	docker compose up --build
+	@bash scripts/compose_up.sh
+
+compose-up-no-browser:
+	@AUTO_OPEN_BROWSER=0 bash scripts/compose_up.sh
 
 compose-down:
 	docker compose down

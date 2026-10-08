@@ -1,25 +1,18 @@
-"""Migrate pre-ImageKit asset references into the ImageKit registry.
+"""Finish the one-time cutover of asset records to Supabase Storage.
 
-Two sources of legacy references exist:
+Before this command is run, copy any retained provider bytes into the private
+Supabase bucket using your approved transfer path. Then map each quarantined
+row to its new bucket key, for example::
 
-1. ``Asset`` rows quarantined by ``assets.0007`` because they predate ImageKit
-   identities. Map each to the ImageKit file that now holds its bytes::
+    python manage.py migrate_legacy_assets --map <asset-uuid>=jt-code/<org>/uploads/<file>
 
-       python manage.py migrate_legacy_assets --map <asset-uuid>=<imagekit-file-id>
-
-   The file is verified through the ImageKit API (path, size, privacy) and its
-   bytes are hashed before the row becomes READY again.
-
-2. Files written by the development-only local fallback (generated images,
-   rendered documents, conversion outputs). ``--local-fallbacks`` uploads each
-   file privately to ImageKit, links the new ``Asset`` to its row and clears the
-   local URL.
-
-Use ``--dry-run`` to list what would change.
+The command downloads and hashes the mapped object before making it available.
+``--local-fallbacks`` also registers development-only local generated files.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -28,15 +21,15 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
-from apps.assets.imagekit import (
-    FINGERPRINT_VERSION,
-    content_checksum,
-    imagekit_is_configured,
-    provider_identity_fingerprint,
-    verify_imagekit_file,
-)
 from apps.assets.models import Asset
 from apps.assets.services import register_generated_asset
+from apps.assets.supabase_storage import (
+    FINGERPRINT_VERSION,
+    SupabaseStorageError,
+    content_checksum,
+    provider_identity_fingerprint,
+    supabase_storage_is_configured,
+)
 
 _ROOT = Path(settings.BASE_DIR)
 _DOCUMENT_TYPES = {
@@ -46,53 +39,54 @@ _DOCUMENT_TYPES = {
 
 
 class Command(BaseCommand):
-    help = "Map legacy asset rows to ImageKit files and upload local-fallback files to ImageKit."
+    help = "Map imported legacy objects to Supabase Storage and register local fallback files."
 
     def add_arguments(self, parser):
-        parser.add_argument("--map", action="append", default=[], metavar="ASSET_ID=FILE_ID")
+        parser.add_argument("--map", action="append", default=[], metavar="ASSET_ID=STORAGE_KEY")
         parser.add_argument("--local-fallbacks", action="store_true")
         parser.add_argument("--dry-run", action="store_true")
 
     def handle(self, *args: Any, **options: Any) -> None:
-        if not imagekit_is_configured() and not options["dry_run"]:
-            raise CommandError("ImageKit must be configured to migrate assets.")
+        if not supabase_storage_is_configured() and not options["dry_run"]:
+            raise CommandError("Supabase Storage must be configured to migrate assets.")
         mapped = sum(self._map(pair, dry_run=options["dry_run"]) for pair in options["map"])
         uploaded = self._local_fallbacks(dry_run=options["dry_run"]) if options["local_fallbacks"] else 0
         self.stdout.write(self.style.SUCCESS(f"mapped={mapped} uploaded={uploaded}"))
 
     def _map(self, pair: str, *, dry_run: bool) -> int:
-        asset_id, _, file_id = pair.partition("=")
+        asset_id, separator, storage_key = pair.partition("=")
         asset = Asset.objects.filter(id=asset_id).first()
-        if asset is None or not file_id:
-            raise CommandError(f"Invalid mapping {pair!r}: expected <asset-uuid>=<imagekit-file-id>.")
+        if asset is None or not separator or not storage_key:
+            raise CommandError(f"Invalid mapping {pair!r}: expected <asset-uuid>=<storage-key>.")
         if dry_run:
-            self.stdout.write(f"would map {asset.id} -> {file_id}")
+            self.stdout.write(f"would map {asset.id} -> {storage_key}")
             return 0
-        resource = verify_imagekit_file(file_id)
-        if resource.get("isPrivateFile") is not True:
-            raise CommandError(f"ImageKit file {file_id} must be private before it is registered.")
-        size = int(resource["size"])
-        checksum, _content_type, _head = content_checksum(resource["filePath"], expected_size=size)
+        try:
+            checksum, content_type, _head = content_checksum(storage_key, expected_size=asset.bytes)
+        except SupabaseStorageError as exc:
+            raise CommandError(f"Could not verify {storage_key!r}: {exc}") from exc
         with transaction.atomic():
-            asset.imagekit_file_id = file_id
-            asset.imagekit_file_path = resource["filePath"]
-            asset.secure_url = resource["url"]
-            asset.resource_type = resource.get("fileType") or asset.resource_type
-            asset.bytes = size
+            asset.storage_object_id = storage_key
+            asset.storage_key = storage_key
+            asset.storage_bucket = settings.SUPABASE_STORAGE_BUCKET
+            asset.storage_url = ""
             asset.checksum_sha256 = checksum
-            asset.provider_fingerprint = provider_identity_fingerprint(resource)
+            asset.provider_fingerprint = provider_identity_fingerprint(
+                {"bucket": asset.storage_bucket, "key": storage_key, "size": asset.bytes}
+            )
             asset.status = Asset.Status.READY
             asset.deletion_error = ""
             asset.last_verified_at = timezone.now()
+            asset.metadata = {**(asset.metadata or {}), "content_type": content_type}
             asset.provenance = {
                 **(asset.provenance or {}),
-                "provider": "imagekit",
+                "provider": "supabase-storage",
                 "migration_required": False,
                 "migrated_at": timezone.now().isoformat(),
                 "fingerprintVersion": FINGERPRINT_VERSION,
             }
             asset.save()
-        self.stdout.write(f"mapped {asset.id} -> {file_id}")
+        self.stdout.write(f"mapped {asset.id} -> {storage_key}")
         return 1
 
     def _local_fallbacks(self, *, dry_run: bool) -> int:
@@ -101,9 +95,8 @@ class Command(BaseCommand):
         from apps.documents.models import Document
 
         uploaded = 0
-        for image in GeneratedImage.objects.filter(asset__isnull=True).select_related(
-            "organization", "owner"
-        ):
+        images = GeneratedImage.objects.filter(asset__isnull=True).select_related("organization", "owner")
+        for image in images:
             path = _ROOT / "generated_images" / f"{image.id}.png"
             if path.exists():
                 uploaded += self._upload(
@@ -157,8 +150,9 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(f"would upload {path} for {type(row).__name__} {row.pk}")
             return 0
+        content = path.read_bytes()
         asset = register_generated_asset(
-            path.read_bytes(),
+            content,
             owner=row.owner,
             organization=row.organization,
             file_name=path.name,
@@ -167,6 +161,7 @@ class Command(BaseCommand):
             provenance={
                 "migrated_from": str(path.relative_to(_ROOT)),
                 "row": f"{type(row).__name__}:{row.pk}",
+                "sha256": hashlib.sha256(content).hexdigest(),
             },
         )
         setattr(row, link, asset)

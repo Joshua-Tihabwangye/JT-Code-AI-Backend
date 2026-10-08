@@ -239,7 +239,8 @@ def test_organization_member_can_list_team_conversations(api_client, user):
     response = api_client.get(reverse("conversation-list"))
 
     assert response.status_code == 200
-    items = response.json().get("results", response.json())
+    body = response.json()
+    items = body.get("results", body) if isinstance(body, dict) else body
     assert str(conversation.id) in {item["id"] for item in items}
 
 

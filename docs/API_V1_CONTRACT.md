@@ -71,7 +71,7 @@ table is in [AGENTIC_RAG_DESIGN.md](AGENTIC_RAG_DESIGN.md#api-apiv1knowledge). H
   settles credits; `402 insufficient_credits` when the wallet cannot cover it).
 - `POST /api/v1/knowledge/rag/query/` — the same as an asynchronous job.
 
-## Files (ImageKit assets)
+## Files (private Supabase Storage assets)
 
 - `GET /api/v1/files/` — visible files as `FileItem[]` (newest 500; add `?page=` for a paginated
   envelope, `?q=` to filter by name). `POST` with multipart `file` uploads a private file.
@@ -81,9 +81,10 @@ table is in [AGENTIC_RAG_DESIGN.md](AGENTIC_RAG_DESIGN.md#api-apiv1knowledge). H
 - `POST /api/v1/files/{id}/restore/`, `POST /api/v1/files/bulk-delete/` (`{ids, force}`),
   `GET /api/v1/files/{id}/download/` (streamed bytes), `POST /api/v1/files/{id}/access/`
   (short-lived signed URL), `POST /api/v1/files/{id}/attach/` (`{conversationId}`).
-- Direct uploads: `POST /api/v1/files/signature/` returns an ImageKit V2 `token` plus the exact
-  `uploadParams` to send to `uploadUrl`; then `POST /api/v1/files/complete/` with
-  `uploadIntentId`, `uploadToken`, `fileId` and `filePath`.
+- Direct uploads: `POST /api/v1/files/signature/` returns a signed `uploadUrl`,
+  `uploadMethod`, `uploadHeaders`, and exact `storageKey`. Send the object with
+  that `PUT` capability, then call `POST /api/v1/files/complete/` with
+  `uploadIntentId`, `uploadToken`, and `storageKey`.
 
 ## Usage, quotas and limits
 

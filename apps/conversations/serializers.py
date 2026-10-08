@@ -4,23 +4,92 @@ from apps.conversations.models import ChatRequest, Conversation, ConversationFee
 
 
 class ConversationSerializer(serializers.ModelSerializer):
+    """The frontend ``Conversation`` shape (camelCase) plus ``archivedAt``."""
+
     archivedAt = serializers.DateTimeField(source="archived_at", read_only=True)
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+    archived = serializers.BooleanField(required=False)
+    preview = serializers.SerializerMethodField()
+    messageCount = serializers.SerializerMethodField()
+    hasAttachments = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
-        fields = ("id", "title", "archivedAt", "createdAt", "updatedAt")
+        fields = (
+            "id",
+            "title",
+            "preview",
+            "messageCount",
+            "model",
+            "pinned",
+            "archived",
+            "hasAttachments",
+            "archivedAt",
+            "createdAt",
+            "updatedAt",
+        )
         read_only_fields = ("id", "archivedAt", "createdAt", "updatedAt")
+
+    def to_representation(self, instance: Conversation) -> dict:
+        data = super().to_representation(instance)
+        data["archived"] = instance.archived_at is not None
+        return data
+
+    def get_preview(self, obj: Conversation) -> str:
+        preview = getattr(obj, "last_message", None)
+        if preview is None:
+            last = obj.messages.order_by("-created_at").values_list("content", flat=True).first()
+            preview = last or ""
+        return str(preview)[:160]
+
+    def get_messageCount(self, obj: Conversation) -> int:
+        count = getattr(obj, "message_count", None)
+        return int(count if count is not None else obj.messages.count())
+
+    def get_hasAttachments(self, obj: Conversation) -> bool:
+        flag = getattr(obj, "has_attachments", None)
+        return bool(flag if flag is not None else obj.attachments.exists())
+
+    def create(self, validated_data: dict) -> Conversation:
+        from django.utils import timezone
+
+        archived = validated_data.pop("archived", False)
+        conversation = super().create(validated_data)
+        if archived:
+            conversation.archived_at = timezone.now()
+            conversation.save(update_fields=["archived_at"])
+        return conversation
+
+    def update(self, instance: Conversation, validated_data: dict) -> Conversation:
+        from django.utils import timezone
+
+        if "archived" in validated_data:
+            archived = validated_data.pop("archived")
+            if archived and instance.archived_at is None:
+                instance.archived_at = timezone.now()
+            elif not archived:
+                instance.archived_at = None
+        return super().update(instance, validated_data)
 
 
 class MessageSerializer(serializers.ModelSerializer):
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    conversationId = serializers.UUIDField(source="conversation_id", read_only=True)
+    status = serializers.SerializerMethodField()
+    model = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
-        fields = ("id", "role", "content", "metadata", "createdAt")
+        fields = ("id", "conversationId", "role", "content", "status", "model", "metadata", "createdAt")
         read_only_fields = fields
+
+    def get_status(self, obj: Message) -> str:
+        return str((obj.metadata or {}).get("status") or "complete")
+
+    def get_model(self, obj: Message) -> str | None:
+        metadata = obj.metadata or {}
+        return metadata.get("modelAlias") or metadata.get("model")
 
 
 class ChatRequestCreateSerializer(serializers.Serializer):

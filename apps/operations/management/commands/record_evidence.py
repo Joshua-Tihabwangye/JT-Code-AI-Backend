@@ -1,6 +1,6 @@
 """Store a report produced outside the cluster (load test, chaos experiment) as evidence.
 
-    kubectl exec -i deploy/jt-code-api -- python manage.py record_evidence load_test - < report.json
+kubectl exec -i deploy/jt-code-api -- python manage.py record_evidence load_test - < report.json
 """
 
 from __future__ import annotations
@@ -33,7 +33,9 @@ class Command(BaseCommand):
             raise CommandError("The report must be an object with a boolean 'passed'.")
         run = VerificationRun.objects.create(
             kind=options["kind"],
-            status=VerificationRun.Status.PASSED if report["passed"] is True else VerificationRun.Status.FAILED,
+            status=VerificationRun.Status.PASSED
+            if report["passed"] is True
+            else VerificationRun.Status.FAILED,
             environment=environment_name(),
             git_sha=str(report.get("gitSha", "")),
             parameters=report.get("parameters") or {},

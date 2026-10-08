@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from apps.usage.views import (
+    InternalCostAnomalyViewSet,
     InternalReconciliationViewSet,
     InternalReservationViewSet,
     InternalUsageOrganizationsView,
@@ -16,6 +17,7 @@ router.register(
     r"internal/usage/reconciliations", InternalReconciliationViewSet, basename="usage-reconciliation"
 )
 router.register(r"internal/usage/reservations", InternalReservationViewSet, basename="usage-reservation")
+router.register(r"internal/usage/anomalies", InternalCostAnomalyViewSet, basename="usage-anomaly")
 
 urlpatterns = [
     path("usage/", UsageView.as_view(), name="usage"),

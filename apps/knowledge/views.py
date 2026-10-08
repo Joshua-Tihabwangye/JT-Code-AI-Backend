@@ -394,8 +394,8 @@ class DocumentViewSet(
     @action(detail=True, methods=["post"])
     def download(self, request: Request, id=None):
         """Short-lived link to a FILE document's original bytes, under the document ACL."""
-        from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
         from apps.assets.models import Asset
+        from apps.assets.supabase_storage import generate_signed_delivery_url, supabase_storage_is_configured
 
         document = self.get_object()
         source = document.source
@@ -407,14 +407,14 @@ class DocumentViewSet(
         ).first()
         if asset is None:
             raise NotFound("The original file is no longer available.")
-        if not imagekit_is_configured():
+        if not supabase_storage_is_configured():
             return Response(
-                {"detail": "ImageKit is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+                {"detail": "Supabase Storage is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
         return Response(
             {
-                "url": generate_signed_delivery_url(asset.imagekit_file_path),
-                "expiresIn": settings.IMAGEKIT_SIGNED_URL_TTL_SECONDS,
+                "url": generate_signed_delivery_url(asset.storage_key),
+                "expiresIn": settings.ASSET_SIGNED_URL_TTL_SECONDS,
             }
         )
 

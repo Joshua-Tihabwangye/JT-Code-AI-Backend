@@ -68,6 +68,7 @@ WEBHOOKS = Counter("jt_webhooks_received_total", "Inbound webhooks by outcome.",
 SECURITY_EVENTS = Counter("jt_security_events_total", "Security-relevant rejections.", ["kind"])
 AUDIT_EVENTS = Counter("jt_audit_events_total", "Audit events recorded.", ["category", "severity"])
 OUTBOX_PUBLISHED = Counter("jt_outbox_published_total", "Outbox events published to Kafka.", ["outcome"])
+COST_ANOMALIES = Counter("jt_cost_anomalies_total", "Hourly provider-cost anomalies.", ["scope"])
 WORKFLOW_DISPATCHES = Counter(
     "jt_workflow_dispatches_total", "n8n workflow dispatch attempts.", ["workflow", "outcome"]
 )

@@ -71,7 +71,7 @@ SLO_QUERIES = (
 )
 
 
-def evaluate_slos(prometheus_url: str, token: str = "") -> tuple[dict[str, Any], list[str]]:
+def evaluate_slos(prometheus_url: str, token: str = "") -> tuple[dict[str, Any], list[str]]:  # nosec B107
     results: dict[str, Any] = {}
     failures: list[str] = []
     headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -92,7 +92,9 @@ def evaluate_slos(prometheus_url: str, token: str = "") -> tuple[dict[str, Any],
     return results, failures
 
 
-def evaluate_evidence(*, max_age_days: int, environment: str, kinds: tuple[str, ...]) -> tuple[dict[str, Any], list[str]]:
+def evaluate_evidence(
+    *, max_age_days: int, environment: str, kinds: tuple[str, ...]
+) -> tuple[dict[str, Any], list[str]]:
     cutoff = timezone.now() - timedelta(days=max_age_days)
     evidence: dict[str, Any] = {}
     failures: list[str] = []
@@ -100,7 +102,9 @@ def evaluate_evidence(*, max_age_days: int, environment: str, kinds: tuple[str, 
     if environment:
         runs = runs.filter(environment=environment)
     for kind in kinds:
-        last_pass = runs.filter(kind=kind, status=VerificationRun.Status.PASSED).order_by("-started_at").first()
+        last_pass = (
+            runs.filter(kind=kind, status=VerificationRun.Status.PASSED).order_by("-started_at").first()
+        )
         if last_pass is None:
             failures.append(f"{kind}: no passing run in the last {max_age_days} days")
             evidence[kind] = None
@@ -127,7 +131,10 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         environment = environment_name() if options["environment"] is None else options["environment"]
         kinds = tuple(kind for kind in REQUIRED_KINDS if kind not in set(options["skip_kind"]))
-        with recorded(VerificationRun.Kind.RELEASE_GATE, parameters={**options, "prometheus_token": ""}) as run:
+        with recorded(
+            VerificationRun.Kind.RELEASE_GATE,
+            parameters={**options, "prometheus_token": ""},  # nosec B105 - redacted
+        ) as run:
             evidence, failures = evaluate_evidence(
                 max_age_days=options["max_age_days"], environment=environment, kinds=kinds
             )
@@ -140,6 +147,8 @@ class Command(BaseCommand):
                 failures.append("slos: no --prometheus-url given; SLO compliance not measured")
             for failure in failures:
                 run.fail(failure)
-        self.stdout.write(json.dumps({**run.summary, "failures": run.failures, "passed": not run.failures}, indent=2))
+        self.stdout.write(
+            json.dumps({**run.summary, "failures": run.failures, "passed": not run.failures}, indent=2)
+        )
         if run.failures:
             raise CommandError(f"Release gate failed ({len(run.failures)} problems).")

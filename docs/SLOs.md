@@ -38,3 +38,31 @@ production verification).
 
 Companion docs: `docs/SECURITY.md` (data classification + threat model),
 `docs/INVENTORY.md` (inventory).
+
+## 99.9% → 99.95% tier review (Phase 19)
+
+| | 99.9% (current) | 99.95% |
+| --- | --- | --- |
+| Monthly error budget | 43 min 49 s | 21 min 54 s |
+| A single 30-minute incident | fits | breaches the month |
+| Database | Supabase single region, PITR restore (RTO 4 h) | Supabase HA (read replica promoted) **and** a warm standby project in a second region with continuous replication; RTO ≤ 15 min |
+| Redis / Kafka | managed, single region | multi-AZ clusters with automatic failover (already tolerated: fail-open and outbox) |
+| Kubernetes | single cluster, multi-node | multi-AZ node pools; a second-region cluster with GitOps parity |
+| Deploys | rolling, auto-rollback on smoke failure | plus canary or progressive delivery (1% → 10% → 100%) gated on SLO burn |
+| Operations | business-hours on-call | 24×7 on-call with 5-minute acknowledgement; quarterly game days |
+| Release gate | current evidence set | plus a multi-region failover drill in the window |
+
+**Recommendation:** launch at **99.9%**. The current architecture already
+contains each failure domain (outbox, durable jobs, provider fallback,
+fail-open rate limits). Most of the error budget is at risk from regional
+database loss, which only multi-region infrastructure addresses.
+
+Move to 99.95% once all of the following hold:
+
+1. two consecutive months stay within the 99.9% budget with measured evidence;
+2. Supabase HA and a cross-region standby are provisioned (Terraform
+   `supabase_project` in a second region);
+3. a failover drill meets RTO ≤ 15 min.
+
+Burn-rate alerts that protect this target are in `infra/prometheus/alerts.yml`.
+Their availability input is `jt_http_requests_total`.

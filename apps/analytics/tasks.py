@@ -3,7 +3,7 @@
 Each task claims its record under a row lock (``FOR UPDATE OF`` the record only,
 so optional related rows can be joined), fetches and verifies source bytes,
 runs all pandas/Plotly/Matplotlib work in the isolated engine process, stores
-artifacts privately in ImageKit, and validates the result against the
+artifacts privately in Supabase Storage, and validates the result against the
 versioned result schema before saving it.
 """
 

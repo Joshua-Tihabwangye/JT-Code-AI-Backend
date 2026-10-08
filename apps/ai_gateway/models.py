@@ -344,10 +344,46 @@ class Evaluation(models.Model):
         return f"{self.name} ({self.type}) - {self.status}"
 
 
+class ImageGeneration(models.Model):
+    """One generate/edit/understand request and its images (the frontend's gallery item)."""
+
+    class Mode(models.TextChoices):
+        GENERATE = "generate", "Generate"
+        EDIT = "edit", "Edit"
+        UNDERSTAND = "understand", "Understand"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.CASCADE, related_name="image_generations"
+    )
+    owner = models.ForeignKey("identity.User", on_delete=models.CASCADE, related_name="image_generations")
+    mode = models.CharField(max_length=12, choices=Mode.choices, default=Mode.GENERATE)
+    prompt = models.TextField()
+    negative_prompt = models.TextField(blank=True)
+    model = models.CharField(max_length=40, default="auto")
+    provider = models.CharField(max_length=40, blank=True)
+    aspect_ratio = models.CharField(max_length=10, default="1:1")
+    style = models.CharField(max_length=80, blank=True)
+    seed = models.BigIntegerField(null=True, blank=True)
+    image_count = models.PositiveSmallIntegerField(default=1)
+    answer = models.TextField(blank=True)
+    favorite = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("organization", "owner", "-created_at"), name="ai_imagegen_owner_idx")
+        ]
+
+    def __str__(self):
+        return f"{self.mode}: {self.prompt[:40]}"
+
+
 class GeneratedImage(models.Model):
     """Tenant-owned metadata for locally served generated images.
 
-    ImageKit URLs are authorized by ImageKit. Local fallback files need a
+    Supabase Storage URLs are authorized by Supabase Storage. Local fallback files need a
     database ownership record so an opaque UUID never becomes authorization.
     """
 
@@ -364,6 +400,11 @@ class GeneratedImage(models.Model):
         null=True,
         blank=True,
     )
+    generation = models.ForeignKey(
+        ImageGeneration, on_delete=models.CASCADE, related_name="images", null=True, blank=True
+    )
+    width = models.PositiveIntegerField(default=0)
+    height = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

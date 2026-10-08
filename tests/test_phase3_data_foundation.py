@@ -73,7 +73,7 @@ def test_restore_drill_fixture_populates_every_canonical_table():
     assert Organization.objects.filter(slug="restore-drill").exists()
     assert Conversation.objects.filter(title="Restore drill conversation").exists()
     assert Job.objects.filter(idempotency_key="restore-drill-job").exists()
-    assert Asset.objects.filter(imagekit_file_id="restore-drill-asset").exists()
+    assert Asset.objects.filter(storage_object_id="restore-drill-asset").exists()
     assert CreditLedger.objects.filter(idempotency_key="restore-drill-ledger").exists()
     assert AuditEvent.objects.filter(action="restore_drill.seeded").exists()
 

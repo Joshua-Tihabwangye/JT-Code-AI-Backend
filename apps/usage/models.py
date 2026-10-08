@@ -148,3 +148,44 @@ class UsageReconciliation(models.Model):
 
     def __str__(self):
         return f"{self.date} {self.provider} {self.status}"
+
+
+class CostAnomaly(models.Model):
+    """An hour whose provider cost is far above its trailing baseline (Phase 19).
+
+    ``organization`` is null for the platform-wide series.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        ACKNOWLEDGED = "acknowledged", "Acknowledged"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization",
+        on_delete=models.CASCADE,
+        related_name="cost_anomalies",
+        null=True,
+        blank=True,
+    )
+    hour = models.DateTimeField()
+    observed_usd = models.DecimalField(max_digits=20, decimal_places=8)
+    expected_usd = models.DecimalField(max_digits=20, decimal_places=8)
+    stddev_usd = models.DecimalField(max_digits=20, decimal_places=8)
+    zscore = models.FloatField()
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-hour",)
+        constraints = [
+            models.UniqueConstraint(fields=("organization", "hour"), name="uniq_cost_anomaly_org_hour"),
+            models.UniqueConstraint(
+                fields=("hour",),
+                condition=models.Q(organization__isnull=True),
+                name="uniq_cost_anomaly_platform_hour",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.organization_id or 'platform'} {self.hour:%Y-%m-%d %H}:00 z={self.zscore:.1f}"

@@ -29,6 +29,8 @@ _OPS_EVENTS = {
     "events.dead_lettered": "Consumer {consumer_group} dead-lettered {event_type}: {error}",
     "safety.image_prompt_blocked": "An image prompt was blocked for organization {organization_id}.",
     "knowledge.integration.sync_requested": "Integration sync requested for source {sourceId}.",
+    "usage.cost.anomaly": "Cost anomaly ({scope} {organization_id}): ${observed_usd} in the hour "
+    "from {hour} against an expected ${expected_usd} (z={zscore}).",
 }
 
 

@@ -245,15 +245,17 @@ def test_a_version_is_immutable_and_the_newest_version_is_dispatched(tmp_path):
     with pytest.raises(RegistryError, match="bump the version"):
         register_specs(load_specs(tmp_path))
 
-    v2 = copy.deepcopy(changed)
-    v2["name"] = "jt-code.event-notifications.v2"
-    v2["meta"]["jtCode"].update(version=2, webhookPath="jt-code/event-notifications/v2")
-    v2["nodes"][0]["parameters"]["path"] = "jt-code/event-notifications/v2"
+    latest = WorkflowDefinition.objects.filter(key="event-notifications").order_by("-version").first().version
+    nxt = latest + 1
+    newer = copy.deepcopy(changed)
+    newer["name"] = f"jt-code.event-notifications.v{nxt}"
+    newer["meta"]["jtCode"].update(version=nxt, webhookPath=f"jt-code/event-notifications/v{nxt}")
+    newer["nodes"][0]["parameters"]["path"] = f"jt-code/event-notifications/v{nxt}"
     (tmp_path / path.name).write_text(json.dumps(data))
-    (tmp_path / "event-notifications.v2.json").write_text(json.dumps(v2))
+    (tmp_path / f"event-notifications.v{nxt}.json").write_text(json.dumps(newer))
     register_specs(load_specs(tmp_path))
     active = WorkflowDefinition.objects.get(key="event-notifications", is_active=True)
-    assert active.version == 2
+    assert active.version == nxt
     assert WorkflowDefinition.objects.get(key="event-notifications", version=1).is_active is False
 
 
@@ -703,7 +705,9 @@ def test_automations_validate_inputs_schedule_and_run_through_n8n(
 def test_push_deploys_links_the_error_workflow_and_check_detects_drift(n8n):
     call_command("n8n_workflows", "push")
     deployed = {w["name"]: w for w in n8n.workflows.values()}
-    assert len(deployed) == 5
+    assert len(deployed) == WorkflowDefinition.objects.count() == 6  # every version is stored in n8n
+    assert deployed["jt-code.event-notifications.v1"]["active"] is False  # superseded by v2
+    assert deployed["jt-code.event-notifications.v2"]["active"] is True
     error_id = deployed["jt-code.error-handler.v1"]["id"]
     automation = deployed["jt-code.scheduled-automation.v1"]
     assert automation["active"] is True

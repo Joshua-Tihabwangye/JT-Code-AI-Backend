@@ -8,7 +8,7 @@ Production-oriented Django boilerplate for JT-Code. This is the backend reposito
 - **Authentication**: Supabase JWT verification and Supabase user webhook
 - **Database**: PostgreSQL (Supabase)
 - **Vector search / RAG**: Supabase pgvector (semantic retrieval with tenant scoping)
-- **Storage**: ImageKit signed uploads and verified asset registration
+- **Storage**: private Supabase Storage signed uploads and verified asset registration
 - **Caching/Queue**: Redis for Django caching and Celery transport
 - **Background Jobs**: Celery workers + Celery Beat
 - **Event Streaming**: Kafka event bus using `confluent-kafka`
@@ -70,7 +70,7 @@ jt-code backend/
 |-----|---------|------------|
 | `identity` | User auth, Supabase integration | `User` |
 | `conversations` | Chat conversations & messages | `Conversation`, `Message`, `ChatRequest` |
-| `assets` | File uploads via ImageKit | `Asset` |
+| `assets` | File uploads via Supabase Storage | `Asset` |
 | `events` | Kafka outbox pattern | `OutboxEvent` |
 | `core` | Shared utilities | Middleware, logging, exceptions |
 
@@ -162,11 +162,11 @@ See `.env.example` for all available variables. Key variables:
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated allowed hosts | Yes |
 | `DATABASE_URL` | PostgreSQL connection URL | Yes |
 | `SUPABASE_URL` | Supabase project URL | Yes |
-| `SUPABASE_JWT_SECRET` | Supabase JWT secret for token verification | Yes |
+| `SUPABASE_JWT_SECRET` | Local Docker HS256 token verifier; unset for hosted JWKS | Local only |
 | `SUPABASE_WEBHOOK_SIGNING_SECRET` | Supabase webhook signing secret | Yes |
-| `IMAGEKIT_PUBLIC_KEY` | ImageKit public key for client uploads | Yes |
-| `IMAGEKIT_PRIVATE_KEY` | ImageKit private key for server signing/API verification | Yes |
-| `IMAGEKIT_ENDPOINT_URL` | ImageKit URL endpoint | Yes |
+| `SUPABASE_STORAGE_BUCKET` | Private Supabase Storage bucket for application assets | Yes |
+| `SUPABASE_STORAGE_PREFIX` | Environment-specific tenant object-key prefix | Yes |
+| `SUPABASE_SECRET_KEY` | Server-only Supabase service-role key for Auth and Storage | Yes |
 | `REDIS_URL` | Redis connection URL | Yes |
 | `CELERY_BROKER_URL` | Celery broker URL | Yes |
 | `CELERY_RESULT_BACKEND` | Celery result backend URL | Yes |
@@ -188,10 +188,10 @@ See `.env.example` for all available variables. Key variables:
 - Webhook handler for user sync at `/api/v1/webhooks/supabase/`
 - Local user mapping created on first authenticated request
 
-### File Uploads (ImageKit)
-- Signed upload workflow: client requests auth parameters → uploads to ImageKit → calls completion endpoint
-- Upload authorization is represented by a single-use, tenant-bound intent; the client must return its id and token at completion
-- Server verifies private-file path, size, type, provider identity, and a downloaded SHA-256 checksum before storing metadata
+### File Uploads (Supabase Storage)
+- Signed upload workflow: client requests a one-object capability → uploads to the private Supabase bucket → calls completion endpoint
+- Upload authorization is represented by a single-use, tenant-bound intent; the client must return its id, token, and exact storage key at completion
+- Server verifies private object key, size, type, and a downloaded SHA-256 checksum before storing metadata
 - Assets tracked in `Asset` model with status (ready/quarantined/deleted)
 - Server-generated images, rendered documents, conversions, and charts are registered as owned assets
 
@@ -224,7 +224,7 @@ See `.env.example` for all available variables. Key variables:
 ### Data Analysis and Visualization
 - Dataset access is tenant-filtered with owner, shared, `view`, and `analyze` policies under `/api/v1/analysis/`.
 - Dedicated `analytics.analysis` and `analytics.visualization` Celery queues execute bounded declarative Pandas transforms and render Plotly/Matplotlib outputs.
-- CSV results and PNG charts are integrity-tracked ImageKit `Asset` records; signed URLs are generated only for authorized completed results.
+- CSV results and PNG charts are integrity-tracked Supabase Storage `Asset` records; signed URLs are generated only for authorized completed results.
 - `streamlit_app/` has its own requirements and container image, performs read-only API calls, and receives user identity from an authentication proxy. See `docs/DATA_ANALYSIS_AND_VISUALIZATION.md`.
 
 ### Health Checks
@@ -291,8 +291,12 @@ clean infrastructure) is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
   - Pushes to `main` build, sign and scan the images, then deploy their
     digests to staging.
   - Production is a manually approved promotion of the same digests.
-- **Local full stack:** `docker compose up --build`. The database is still
-  Supabase, taken from `.env`.
+- **Local full stack:** `make compose-up` starts self-hosted Supabase in
+  Docker alongside the API, workers, n8n, Kafka, Redis and local
+  observability. It lists the browser-facing endpoints immediately and opens
+  each one when ready; use `make compose-up-no-browser` to only list them.
+  It has localhost-only defaults; copy `docker/.env.docker.example` to
+  `.env` only to override its `JT_CODE_LOCAL_*` values.
 
 ## Architecture
 

@@ -36,9 +36,7 @@ def _strict_env() -> dict[str, str]:
         "KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
         "KAFKA_SASL_USERNAME": "ci",
         "KAFKA_SASL_PASSWORD": "ci-kafka-password",
-        "IMAGEKIT_PUBLIC_KEY": "public_key",
-        "IMAGEKIT_PRIVATE_KEY": "private_key",
-        "IMAGEKIT_ENDPOINT_URL": "https://ik.imagekit.io/jt-code",
+        "SUPABASE_STORAGE_BUCKET": "jt-code-assets",
         "N8N_BASE_URL": "https://n8n.example.com",
         "N8N_API_KEY": "ci-n8n-api-key",
         "N8N_WEBHOOK_SECRET": "ci-n8n-callback-secret-0123456789abcdef",  # pragma: allowlist secret

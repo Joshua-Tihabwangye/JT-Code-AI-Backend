@@ -103,3 +103,28 @@ class SecurityHeadersMiddleware:
         if "Authorization" in request.headers or request.COOKIES.get(settings.SESSION_COOKIE_NAME):
             response.headers.setdefault("Cache-Control", "no-store")
         return response
+
+
+_READ_ONLY_EXEMPT = ("/api/v1/health/", "/metrics")
+
+
+class ReadOnlyModeMiddleware:
+    """``READ_ONLY_MODE=true`` during a planned database failover or restore: unsafe
+    methods get 503 + ``Retry-After`` (webhook senders retry), reads keep working."""
+
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        if (
+            getattr(settings, "READ_ONLY_MODE", False)
+            and request.method not in ("GET", "HEAD", "OPTIONS")
+            and not request.path.startswith(_READ_ONLY_EXEMPT)
+        ):
+            response = JsonResponse(
+                {"detail": "JT-Code is in read-only maintenance; please retry shortly.", "code": "read_only"},
+                status=503,
+            )
+            response["Retry-After"] = "300"
+            return response
+        return self.get_response(request)

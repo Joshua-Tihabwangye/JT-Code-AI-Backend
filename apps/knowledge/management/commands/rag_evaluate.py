@@ -43,5 +43,9 @@ class Command(BaseCommand):
             load_cases(options["dataset"]), organization=organization, user=user, top_k=options["top_k"]
         )
         self.stdout.write(json.dumps(report.as_dict(), indent=2))
+        from apps.operations.evidence import record_result
+        from apps.operations.models import VerificationRun
+
+        record_result(VerificationRun.Kind.RAG_EVALUATION, passed=report.passed, summary=report.as_dict())
         if not report.passed:
             raise CommandError("RAG retrieval quality is below the configured thresholds.")

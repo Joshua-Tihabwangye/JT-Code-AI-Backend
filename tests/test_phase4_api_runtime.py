@@ -94,7 +94,7 @@ def test_conversation_message_and_feedback_contracts(authenticated_client, user,
     )
 
     assert messages.status_code == 200, messages.content
-    assert messages.json()["results"][0]["content"] == "input"
+    assert messages.json()[0]["content"] == "input"
     assert created.status_code == 201, created.content
     assert updated.status_code == 200, updated.content
     assert ConversationFeedback.objects.get(owner=user, chat_request=request).rating == 5
@@ -108,10 +108,12 @@ def test_conversation_filters_and_archiving(authenticated_client, conversation):
     included = authenticated_client.get(reverse("conversation-list"), {"includeArchived": "true"})
 
     assert listed.status_code == 200
-    assert listed.json()["results"][0]["id"] == str(conversation.id)
+    assert listed.json()[0]["id"] == str(conversation.id)
     assert archived.status_code == 200
-    assert hidden.json()["results"] == []
-    assert included.json()["results"][0]["archivedAt"] is not None
+    assert hidden.json() == []
+    assert included.json()[0]["archivedAt"] is not None
+    paged = authenticated_client.get(reverse("conversation-list"), {"includeArchived": "true", "pageSize": 1})
+    assert paged.json()["results"][0]["id"] == str(conversation.id)  # cursor pagination on request
 
 
 @pytest.mark.django_db

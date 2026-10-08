@@ -5,7 +5,7 @@ normalized UTF-8 text that can be chunked and embedded:
 
 * ``text`` sources embed their configured content directly;
 * ``url`` sources are fetched through the egress policy (HTML, PDF, text/JSON);
-* ``file`` sources read a registered ImageKit asset through a short-lived signed
+* ``file`` sources read a registered Supabase Storage asset through a short-lived signed
   URL (PDF, DOCX, HTML, Markdown, CSV, JSON and plain text).
 
 PDF extraction records each page's start offset so chunks carry page numbers.
@@ -253,8 +253,8 @@ def _extract_asset_text(asset_id: str, metadata: dict[str, Any]) -> ExtractedTex
     """Read a registered asset through the same egress and size controls as URLs."""
     from urllib.parse import urlsplit
 
-    from apps.assets.imagekit import generate_signed_delivery_url
     from apps.assets.models import Asset
+    from apps.assets.supabase_storage import generate_signed_delivery_url, storage_api_url
 
     asset = Asset.objects.filter(id=asset_id, status=Asset.Status.READY).first()
     if asset is None:
@@ -264,13 +264,13 @@ def _extract_asset_text(asset_id: str, metadata: dict[str, Any]) -> ExtractedTex
         raise ExtractionError("The requested knowledge asset belongs to another organization.")
     if asset.bytes > settings.RAG_MAX_EXTRACTED_BYTES * 4:
         raise ExtractionError("The knowledge asset exceeds the ingestion size limit.")
-    host = urlsplit(settings.IMAGEKIT_ENDPOINT_URL).hostname
+    host = urlsplit(storage_api_url()).hostname
     if not host:
-        raise ExtractionError("ImageKit delivery is not configured.")
+        raise ExtractionError("Supabase Storage delivery is not configured.")
     try:
         response = safe_request(
             "GET",
-            generate_signed_delivery_url(asset.imagekit_file_path),
+            generate_signed_delivery_url(asset.storage_key, external=False),
             allowed_hosts=[host],
             timeout=settings.RAG_URL_FETCH_TIMEOUT_SECONDS,
             max_bytes=settings.RAG_MAX_EXTRACTED_BYTES * 4,

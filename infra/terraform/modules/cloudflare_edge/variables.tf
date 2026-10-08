@@ -44,7 +44,7 @@ variable "admin_allowed_cidrs" {
 }
 
 variable "max_body_bytes" {
-  description = "Largest accepted request body (matches IMAGEKIT_MAX_UPLOAD_BYTES plus multipart overhead)."
+  description = "Largest accepted request body (matches ASSET_MAX_UPLOAD_BYTES plus multipart overhead)."
   type        = number
   default     = 27262976
 }

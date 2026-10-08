@@ -1,0 +1,415 @@
+"""Private Supabase Storage client for the tenant-owned asset registry.
+
+The application database remains the authorization source of truth.  Objects
+are kept in one private Supabase bucket, under tenant-prefixed keys; browsers
+receive a short-lived upload token or delivery URL only after Django has
+validated the request.  The service-role key is deliberately server-only.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+import uuid
+from collections.abc import Iterator
+from datetime import datetime
+from typing import Any
+from urllib.parse import quote, urlsplit
+
+import httpx
+from django.conf import settings
+
+FINGERPRINT_VERSION = 1
+
+
+class SupabaseStorageError(RuntimeError):
+    """A Supabase Storage request could not be completed safely."""
+
+
+class SupabaseStorageNotFound(SupabaseStorageError):
+    """The requested private object no longer exists."""
+
+
+def supabase_storage_is_configured() -> bool:
+    return bool(
+        (settings.SUPABASE_INTERNAL_URL or settings.SUPABASE_URL)
+        and settings.SUPABASE_SECRET_KEY
+        and settings.SUPABASE_SECRET_KEY != "replace_me"
+        and settings.SUPABASE_STORAGE_BUCKET
+    )
+
+
+def storage_api_url() -> str:
+    configured = settings.SUPABASE_STORAGE_API_URL.strip()
+    if configured:
+        return configured.rstrip("/")
+    base_url = settings.SUPABASE_INTERNAL_URL or settings.SUPABASE_URL
+    return f"{base_url.rstrip('/')}/storage/v1"
+
+
+def storage_public_api_url() -> str:
+    configured = settings.SUPABASE_STORAGE_PUBLIC_API_URL.strip()
+    if configured:
+        return configured.rstrip("/")
+    return f"{settings.SUPABASE_URL.rstrip('/')}/storage/v1"
+
+
+def _admin_headers() -> dict[str, str]:
+    key = settings.SUPABASE_SECRET_KEY
+    return {"apikey": key, "Authorization": f"Bearer {key}"}
+
+
+def _api(path: str) -> str:
+    return f"{storage_api_url()}/{path.lstrip('/')}"
+
+
+def _public_api(path: str) -> str:
+    return f"{storage_public_api_url()}/{path.lstrip('/')}"
+
+
+def _object_path(bucket: str, key: str) -> str:
+    return f"{quote(bucket, safe='')}/{quote(normalize_key(key), safe='/')}"
+
+
+def normalize_key(key: str) -> str:
+    """Accept only a relative, POSIX object key without traversal segments."""
+    normalized = key.strip().strip("/")
+    if not normalized or "\\" in normalized or any(part in {"", ".", ".."} for part in normalized.split("/")):
+        raise SupabaseStorageError("Storage object keys must be non-empty relative POSIX paths.")
+    if any(ord(character) < 32 for character in normalized):
+        raise SupabaseStorageError("Storage object keys cannot contain control characters.")
+    return normalized
+
+
+def sanitize_file_name(file_name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", file_name.strip())
+    return cleaned.strip("._") or "upload"
+
+
+def storage_prefix() -> str:
+    return normalize_key(settings.SUPABASE_STORAGE_PREFIX or "jt-code")
+
+
+def organization_folder(organization_id: Any, kind: str) -> str:
+    return normalize_key(f"{storage_prefix()}/{organization_id}/{kind.strip('/')}")
+
+
+def user_upload_folder(user: Any, organization_id: Any) -> str:
+    return organization_folder(organization_id, f"uploads/{user.id}")
+
+
+def unique_file_name(file_name: str) -> str:
+    return f"{uuid.uuid4().hex[:12]}-{sanitize_file_name(file_name)}"
+
+
+def _response_payload(response: httpx.Response, *, operation: str) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SupabaseStorageError(f"Supabase Storage returned an invalid {operation} response.") from exc
+    if not isinstance(payload, dict):
+        raise SupabaseStorageError(f"Supabase Storage returned an invalid {operation} response.")
+    return payload
+
+
+def ensure_private_bucket() -> None:
+    """Create or repair the application bucket as a private, constrained bucket.
+
+    This is idempotent and may be called at deployment or before the first
+    direct upload.  It intentionally does not expose public bucket URLs.
+    """
+    if not supabase_storage_is_configured():
+        raise SupabaseStorageError("Supabase Storage is not configured.")
+    bucket = settings.SUPABASE_STORAGE_BUCKET
+    limits = {
+        "id": bucket,
+        "name": bucket,
+        "public": False,
+        "file_size_limit": settings.ASSET_MAX_UPLOAD_BYTES,
+        "allowed_mime_types": list(settings.ASSET_ALLOWED_CONTENT_TYPES),
+    }
+    response = httpx.get(
+        _api(f"bucket/{quote(bucket, safe='')}"),
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    if response.status_code == 404:
+        created = httpx.post(
+            _api("bucket/"),
+            json=limits,
+            headers=_admin_headers(),
+            timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+        )
+        if created.status_code not in {200, 201, 409}:
+            created.raise_for_status()
+        return
+    response.raise_for_status()
+    existing = _response_payload(response, operation="bucket lookup")
+    if existing.get("public") is True:
+        raise SupabaseStorageError(
+            f"Supabase Storage bucket {bucket!r} is public. Refusing to issue private asset URLs."
+        )
+    updated = httpx.put(
+        _api(f"bucket/{quote(bucket, safe='')}"),
+        json={key: value for key, value in limits.items() if key not in {"id", "name"}},
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    updated.raise_for_status()
+
+
+def create_signed_upload(key: str) -> tuple[str, str]:
+    """Return a one-use direct-upload URL and its ``x-signature`` token."""
+    key = normalize_key(key)
+    ensure_private_bucket()
+    response = httpx.post(
+        _api(f"object/upload/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"),
+        json={"upsert": "false"},
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = _response_payload(response, operation="signed upload")
+    token = str(payload.get("token") or "")
+    relative_url = str(payload.get("url") or "")
+    if not token:
+        raise SupabaseStorageError("Supabase Storage did not return a signed upload token.")
+    if relative_url.startswith("http://") or relative_url.startswith("https://"):
+        return relative_url, token
+    # Storage returns a relative route on hosted projects.  Build the canonical
+    # endpoint ourselves so the frontend never needs the service key.
+    return _public_api(f"object/upload/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"), token
+
+
+def generate_signed_delivery_url(
+    key: str, *, expires_in: int | None = None, external: bool = True
+) -> str:
+    """Generate a short-lived read URL for a private object."""
+    key = normalize_key(key)
+    ttl = int(expires_in or settings.ASSET_SIGNED_URL_TTL_SECONDS)
+    if ttl <= 0:
+        raise SupabaseStorageError("Signed URL expiry must be positive.")
+    response = httpx.post(
+        _api(f"object/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"),
+        json={"expiresIn": ttl},
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    if response.status_code == 404:
+        raise SupabaseStorageNotFound(f"Supabase Storage object {key!r} was not found.")
+    response.raise_for_status()
+    payload = _response_payload(response, operation="signed URL")
+    signed_url = str(payload.get("signedURL") or payload.get("signedUrl") or "")
+    if not signed_url:
+        raise SupabaseStorageError("Supabase Storage did not return a signed delivery URL.")
+    if not signed_url.startswith(("https://", "http://")):
+        return (_public_api if external else _api)(signed_url)
+    if external:
+        return signed_url
+    parsed = urlsplit(signed_url)
+    return f"{storage_api_url()}{parsed.path}" + (f"?{parsed.query}" if parsed.query else "")
+
+
+def object_metadata(key: str) -> dict[str, Any]:
+    key = normalize_key(key)
+    response = httpx.get(
+        _api(f"object/info/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"),
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    if response.status_code == 404:
+        raise SupabaseStorageNotFound(f"Supabase Storage object {key!r} was not found.")
+    response.raise_for_status()
+    return _response_payload(response, operation="object metadata")
+
+
+def _resource(key: str, *, size: int, content_type: str = "") -> dict[str, Any]:
+    return {
+        "bucket": settings.SUPABASE_STORAGE_BUCKET,
+        "key": normalize_key(key),
+        "size": int(size),
+        "content_type": content_type.split(";", 1)[0].strip().lower(),
+    }
+
+
+def provider_identity_fingerprint(resource: dict[str, Any]) -> str:
+    """Fingerprint immutable object location and verified byte size."""
+    canonical = "\x1f".join(
+        [
+            str(resource.get("bucket") or ""),
+            str(resource.get("key") or ""),
+            str(resource.get("size") or ""),
+        ]
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "application/pdf": (b"%PDF-",),
+    "application/zip": (b"PK\x03\x04", b"PK\x05\x06"),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (b"PK\x03\x04",),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": (b"PK\x03\x04",),
+}
+_TEXT_TYPES = {"text/csv", "text/markdown", "text/plain", "application/json"}
+
+
+def content_matches_type(head: bytes, content_type: str) -> bool:
+    content_type = content_type.split(";", 1)[0].strip().lower()
+    if content_type == "image/webp":
+        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    if content_type in _SIGNATURES:
+        return head.startswith(_SIGNATURES[content_type])
+    if content_type in _TEXT_TYPES or content_type.startswith("text/"):
+        if b"\x00" in head:
+            return False
+        try:
+            head.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return exc.start >= len(head) - 3
+        return True
+    return False
+
+
+def validate_upload_type(content_type: str) -> str:
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    if normalized not in settings.ASSET_ALLOWED_CONTENT_TYPES:
+        raise SupabaseStorageError("This content type is not allowed for asset uploads.")
+    return normalized
+
+
+def content_checksum(key: str, *, expected_size: int) -> tuple[str, str, bytes]:
+    """Read a just-uploaded private object and verify its exact byte count."""
+    if expected_size > settings.ASSET_MAX_UPLOAD_BYTES:
+        raise SupabaseStorageError("Provider object exceeds the configured upload limit.")
+    digest = hashlib.sha256()
+    received = 0
+    head = b""
+    url = generate_signed_delivery_url(key, expires_in=120, external=False)
+    with httpx.stream(
+        "GET", url, timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS, follow_redirects=False
+    ) as response:
+        if response.status_code == 404:
+            raise SupabaseStorageNotFound(f"Supabase Storage object {key!r} was not found.")
+        response.raise_for_status()
+        declared = response.headers.get("content-length")
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if declared and int(declared) != expected_size:
+            raise SupabaseStorageError("Provider download size does not match verified metadata.")
+        for block in response.iter_bytes():
+            received += len(block)
+            if received > settings.ASSET_MAX_UPLOAD_BYTES:
+                raise SupabaseStorageError("Provider download exceeded the configured upload limit.")
+            if len(head) < 512:
+                head += block[: 512 - len(head)]
+            digest.update(block)
+    if received != expected_size:
+        raise SupabaseStorageError("Provider download size does not match verified metadata.")
+    return digest.hexdigest(), content_type, head
+
+
+def stream_file(key: str, *, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
+    with httpx.stream(
+        "GET",
+        generate_signed_delivery_url(key, expires_in=120, external=False),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+        follow_redirects=False,
+    ) as response:
+        response.raise_for_status()
+        yield from response.iter_bytes(chunk_size)
+
+
+def upload_bytes(
+    content: bytes,
+    *,
+    file_name: str,
+    folder: str,
+    content_type: str = "application/octet-stream",
+) -> dict[str, Any]:
+    """Store server-generated bytes privately, without an overwrite path."""
+    if not supabase_storage_is_configured():
+        raise SupabaseStorageError("Supabase Storage is not configured.")
+    if not content or len(content) > settings.ASSET_MAX_UPLOAD_BYTES:
+        raise SupabaseStorageError("Asset is empty or exceeds the configured upload limit.")
+    ensure_private_bucket()
+    key = normalize_key(f"{folder}/{unique_file_name(file_name)}")
+    response = httpx.post(
+        _api(f"object/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"),
+        content=content,
+        headers={
+            **_admin_headers(),
+            "Content-Type": content_type,
+            "x-upsert": "false",
+            "cache-control": "private, max-age=31536000, immutable",
+        },
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return _resource(key, size=len(content), content_type=content_type)
+
+
+def delete_storage_object(key: str) -> None:
+    key = normalize_key(key)
+    response = httpx.delete(
+        _api(f"object/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"),
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    if response.status_code not in {200, 204, 404}:
+        response.raise_for_status()
+
+
+def list_storage_objects(*, prefix: str, offset: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+    response = httpx.post(
+        _api(f"object/list/{quote(settings.SUPABASE_STORAGE_BUCKET, safe='')}"),
+        json={
+            "prefix": normalize_key(prefix),
+            "limit": min(limit, 1000),
+            "offset": offset,
+            "sortBy": {"column": "name", "order": "asc"},
+        },
+        headers=_admin_headers(),
+        timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise SupabaseStorageError("Supabase Storage object listing returned invalid JSON.") from exc
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise SupabaseStorageError("Supabase Storage object listing returned an invalid response.")
+    return payload
+
+
+def walk_storage_objects(
+    root: str, *, max_depth: int, page_size: int, max_pages: int
+) -> Iterator[dict[str, Any]]:
+    """Bounded breadth-first traversal used only by the orphan sweeper."""
+    pending: list[tuple[str, int]] = [(normalize_key(root), 0)]
+    while pending:
+        prefix, depth = pending.pop(0)
+        for page in range(max_pages):
+            items = list_storage_objects(prefix=prefix, offset=page * page_size, limit=page_size)
+            for item in items:
+                name = str(item.get("name") or "")
+                if not name:
+                    continue
+                key = normalize_key(f"{prefix}/{name}")
+                if item.get("id"):
+                    yield {**item, "key": key}
+                elif depth + 1 <= max_depth:
+                    pending.append((key, depth + 1))
+            if len(items) < page_size:
+                break
+
+
+def provider_created_at(resource: dict[str, Any]) -> datetime | None:
+    value = resource.get("created_at") or resource.get("createdAt")
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None

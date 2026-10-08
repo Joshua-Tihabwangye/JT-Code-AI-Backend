@@ -1,0 +1,18 @@
+# Hypothesis: CPU saturation on API pods triggers the HPA within 2 minutes and
+# the error rate stays under 1% (run together with loadtests/load.json).
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: jt-code-api-cpu
+spec:
+  mode: fixed-percent
+  value: "50"
+  selector:
+    namespaces: [jt-code-staging]
+    labelSelectors:
+      app.kubernetes.io/component: api
+  stressors:
+    cpu:
+      workers: 2
+      load: 90
+  duration: 10m

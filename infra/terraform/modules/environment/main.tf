@@ -100,7 +100,7 @@ module "app" {
       SUPABASE_SECRET_KEY              = data.supabase_apikeys.this.service_role_key
       TOOL_CREDENTIALS_ENCRYPTION_KEYS = replace(replace(random_bytes.tool_credentials_key.base64, "+", "-"), "/", "_")
     },
-    # Third-party credentials (Redis, Kafka, ImageKit, Gemini, Stripe, Sentry, n8n API key).
+    # Third-party credentials (Redis, Kafka, Gemini, Stripe, Sentry, n8n API key).
     var.external_secrets,
   )
 }

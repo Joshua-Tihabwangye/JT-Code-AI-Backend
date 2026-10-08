@@ -80,6 +80,17 @@ class Command(BaseCommand):
             for name, detail in checks.items()
             if detail is not True
         ]
+        if target:
+            # Only a real dump/restore/compare counts as restore-drill evidence.
+            from apps.operations.evidence import record_result
+            from apps.operations.models import VerificationRun
+
+            record_result(
+                VerificationRun.Kind.RESTORE_DRILL,
+                passed=not failures,
+                summary={k: v for k, v in report.items() if k != "database_vendor"},
+                failures=failures,
+            )
         if failures:
             raise CommandError("Restore drill verification failed:\n" + "\n".join(failures))
         output = (

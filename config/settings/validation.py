@@ -37,9 +37,7 @@ _REQUIRED_STRICT = (
     "KAFKA_SASL_MECHANISM",
     "KAFKA_SASL_USERNAME",
     "KAFKA_SASL_PASSWORD",
-    "IMAGEKIT_PUBLIC_KEY",
-    "IMAGEKIT_PRIVATE_KEY",
-    "IMAGEKIT_ENDPOINT_URL",
+    "SUPABASE_STORAGE_BUCKET",
     "N8N_BASE_URL",
     "N8N_API_KEY",
     "N8N_WEBHOOK_SECRET",
@@ -66,7 +64,6 @@ _SECRET_ENV = (
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "WEBHOOK_SIGNING_SECRET",
-    "IMAGEKIT_PRIVATE_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
     "LLAMA_API_KEY",
@@ -83,20 +80,21 @@ _BOOL_ENV = (
     "ENABLE_MCP",
     "ASSET_LOCAL_FALLBACK_ENABLED",
     "METRICS_DATABASE_STATE",
+    "READ_ONLY_MODE",
     "CLOUDFLARE_ENFORCE_ORIGIN",
 )
 _INT_ENV = (
     "AGENT_MAX_ITERATIONS",
     "AI_GATEWAY_MAX_LATENCY_MS",
-    "IMAGEKIT_MAX_UPLOAD_BYTES",
-    "IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS",
+    "ASSET_MAX_UPLOAD_BYTES",
+    "ASSET_UPLOAD_AUTH_TTL_SECONDS",
     "ASSET_DELETE_GRACE_DAYS",
     "ASSET_ORPHAN_GRACE_HOURS",
-    "IMAGEKIT_RECONCILE_PAGE_SIZE",
-    "IMAGEKIT_RECONCILE_MAX_PAGES",
-    "IMAGEKIT_RECONCILE_BATCH_SIZE",
-    "IMAGEKIT_RECONCILE_INTERVAL_HOURS",
-    "IMAGEKIT_RECONCILE_MAX_DEPTH",
+    "ASSET_RECONCILE_PAGE_SIZE",
+    "ASSET_RECONCILE_MAX_PAGES",
+    "ASSET_RECONCILE_BATCH_SIZE",
+    "ASSET_RECONCILE_INTERVAL_HOURS",
+    "ASSET_RECONCILE_MAX_DEPTH",
     "ASSET_DELETE_MAX_ATTEMPTS",
     "DATABASE_CONN_MAX_AGE",
     "DATABASE_CONNECT_TIMEOUT_SECONDS",
@@ -180,6 +178,7 @@ _INT_ENV = (
     "N8N_REQUEST_TIMEOUT_SECONDS",
     "N8N_RETRY_BASE_SECONDS",
     "N8N_RETRY_MAX_SECONDS",
+    "USAGE_ANOMALY_BASELINE_DAYS",
 )
 _FLOAT_ENV = (
     "AI_GATEWAY_MAX_COST_USD",
@@ -192,7 +191,7 @@ _FLOAT_ENV = (
     "RAG_EVAL_MIN_MRR",
     "RAG_URL_FETCH_TIMEOUT_SECONDS",
     "RAG_EMBEDDING_TIMEOUT_SECONDS",
-    "IMAGEKIT_API_TIMEOUT_SECONDS",
+    "SUPABASE_STORAGE_TIMEOUT_SECONDS",
     "SENTRY_TRACES_SAMPLE_RATE",
     "SENTRY_PROFILES_SAMPLE_RATE",
     "CHAT_SSE_HEARTBEAT_SECONDS",
@@ -203,6 +202,8 @@ _FLOAT_ENV = (
     "CHAT_SSE_RECONCILIATION_SECONDS",
     "WEBHOOK_DELIVERY_TIMEOUT_SECONDS",
     "OTEL_TRACES_SAMPLE_RATIO",
+    "USAGE_ANOMALY_Z",
+    "USAGE_ANOMALY_MIN_USD",
 )
 _FRACTION_ENV = {
     "VECTOR_MIN_SIMILARITY": (0.0, 1.0),
@@ -512,6 +513,11 @@ def validate_environment(profile: str) -> list[str]:
     protocol = _val("KAFKA_SECURITY_PROTOCOL").upper()
     if protocol != "SASL_SSL":
         problems.append("KAFKA_SECURITY_PROTOCOL must be SASL_SSL in deployable environments.")
+    verification_mode = _val("SUPABASE_JWT_VERIFICATION", "jwks").lower()
+    if verification_mode not in {"jwks", "hs256"}:
+        problems.append("SUPABASE_JWT_VERIFICATION must be jwks or hs256.")
+    elif verification_mode != "jwks":
+        problems.append("SUPABASE_JWT_VERIFICATION must be jwks in deployable environments.")
     supabase_url, issuer = _val("SUPABASE_URL"), _val("SUPABASE_JWT_ISSUER")
     if supabase_url and issuer and not issuer.startswith(supabase_url.rstrip("/") + "/"):
         problems.append("SUPABASE_JWT_ISSUER must start with SUPABASE_URL.")
@@ -519,7 +525,7 @@ def validate_environment(profile: str) -> list[str]:
     expected_jwks_url = supabase_url.rstrip("/") + "/auth/v1/.well-known/jwks.json"
     if supabase_url and jwks_url != expected_jwks_url:
         problems.append("SUPABASE_JWKS_URL must be the JWKS endpoint for SUPABASE_URL.")
-    for name in ("SUPABASE_URL", "SUPABASE_JWKS_URL", "IMAGEKIT_ENDPOINT_URL", "N8N_BASE_URL"):
+    for name in ("SUPABASE_URL", "SUPABASE_JWKS_URL", "SUPABASE_STORAGE_API_URL", "N8N_BASE_URL"):
         value = _val(name)
         if value and urlparse(value).scheme != "https":
             problems.append(f"{name} must use HTTPS in deployable environments.")

@@ -123,7 +123,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
             job.status = ConversionJob.Status.RUNNING
             job.save(update_fields=["status", "updated_at"])
             output = run_conversion(job)
-            imagekit_url = finalize_conversion(job, output)
+            storage_url = finalize_conversion(job, output)
             job.status = ConversionJob.Status.COMPLETED
             job.save(
                 update_fields=[
@@ -142,7 +142,7 @@ class ConversionViewSet(viewsets.ModelViewSet):
                     "conversionId": str(job.id),
                     "userId": str(request.user.id),
                     "outputBytes": job.output_bytes,
-                    "outputUrl": imagekit_url,
+                    "outputUrl": storage_url,
                 },
             )
         except Exception as exc:

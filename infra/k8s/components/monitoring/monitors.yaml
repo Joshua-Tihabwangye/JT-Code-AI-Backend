@@ -53,6 +53,26 @@ metadata:
     release: kube-prometheus-stack
 spec:
   groups:
+  - name: jt-code-slo
+    rules:
+    - alert: SLOErrorBudgetFastBurn
+      expr: (sum(rate(jt_http_requests_total{status=~"5.."}[1h])) / clamp_min(sum(rate(jt_http_requests_total[1h])),
+        1)) > (14.4 * 0.001) and (sum(rate(jt_http_requests_total{status=~"5.."}[5m]))
+        / clamp_min(sum(rate(jt_http_requests_total[5m])), 1)) > (14.4 * 0.001)
+      labels:
+        severity: page
+      annotations:
+        summary: Burning the 99.9% monthly error budget 14x too fast (2% in 1 h).
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#sloerrorbudgetfastburn
+    - alert: SLOErrorBudgetSlowBurn
+      expr: (sum(rate(jt_http_requests_total{status=~"5.."}[6h])) / clamp_min(sum(rate(jt_http_requests_total[6h])),
+        1)) > (6 * 0.001) and (sum(rate(jt_http_requests_total{status=~"5.."}[30m]))
+        / clamp_min(sum(rate(jt_http_requests_total[30m])), 1)) > (6 * 0.001)
+      labels:
+        severity: ticket
+      annotations:
+        summary: Burning the 99.9% monthly error budget 6x too fast (5% in 6 h).
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#sloerrorbudgetslowburn
   - name: jt-code-api
     rules:
     - alert: APIHighErrorRate
@@ -63,6 +83,7 @@ spec:
         severity: page
       annotations:
         summary: More than 2% of API requests are failing with 5xx.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#apihigherrorrate
     - alert: APIHighLatency
       expr: 'histogram_quantile(0.95, sum by (le) (rate(jt_http_request_duration_seconds_bucket[5m])))
         > 2
@@ -73,6 +94,7 @@ spec:
         severity: ticket
       annotations:
         summary: API p95 latency is above 2s.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#apihighlatency
     - alert: MetricsStateCollectorFailing
       expr: jt_metrics_collector_up == 0
       for: 10m
@@ -80,6 +102,7 @@ spec:
         severity: ticket
       annotations:
         summary: Business-state metrics cannot be read from PostgreSQL.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#metricsstatecollectorfailing
   - name: jt-code-workers
     rules:
     - alert: CeleryTaskFailures
@@ -89,6 +112,7 @@ spec:
         severity: ticket
       annotations:
         summary: Celery task {{ $labels.task }} is failing repeatedly.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#celerytaskfailures
     - alert: OutboxBacklog
       expr: jt_outbox_events{state="pending"} > 1000
       for: 10m
@@ -96,6 +120,7 @@ spec:
         severity: page
       annotations:
         summary: Outbox events are not reaching Kafka.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#outboxbacklog
     - alert: OutboxEventsFailed
       expr: jt_outbox_events{state="failed"} > 0
       for: 5m
@@ -103,12 +128,14 @@ spec:
         severity: ticket
       annotations:
         summary: Outbox events exhausted their publish attempts.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#outboxeventsfailed
     - alert: DeadLetterGrowth
       expr: increase(jt_dead_letter_events[1h]) > 10
       labels:
         severity: ticket
       annotations:
         summary: Kafka consumers are dead-lettering events.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#deadlettergrowth
     - alert: JobsStuckQueued
       expr: jt_jobs_active{status="queued"} > 200
       for: 15m
@@ -116,6 +143,7 @@ spec:
         severity: ticket
       annotations:
         summary: Jobs are queuing faster than workers drain them.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#jobsstuckqueued
     - alert: WorkflowRunsBacklog
       expr: sum(jt_workflow_runs_active) > 100
       for: 15m
@@ -123,6 +151,7 @@ spec:
         severity: ticket
       annotations:
         summary: n8n workflow runs are not completing.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#workflowrunsbacklog
     - alert: WorkflowDispatchFailures
       expr: sum(rate(jt_workflow_dispatches_total{outcome!="accepted"}[10m])) > 0.05
       for: 10m
@@ -130,6 +159,7 @@ spec:
         severity: ticket
       annotations:
         summary: Dispatches to n8n are failing.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#workflowdispatchfailures
   - name: jt-code-business
     rules:
     - alert: StripeEventsFailing
@@ -139,6 +169,7 @@ spec:
         severity: page
       annotations:
         summary: Stripe events are failing to process.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#stripeeventsfailing
     - alert: AIProviderErrors
       expr: "sum by (provider) (rate(jt_ai_requests_total{status!=\"completed\"}[10m]))\n\
         \  / clamp_min(sum by (provider) (rate(jt_ai_requests_total[10m])), 0.001)\
@@ -148,12 +179,14 @@ spec:
         severity: ticket
       annotations:
         summary: More than 20% of {{ $labels.provider }} model runs fail.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#aiprovidererrors
     - alert: AISpendSpike
       expr: sum(increase(jt_ai_provider_cost_usd_total[1h])) > 50
       labels:
         severity: ticket
       annotations:
         summary: Provider spend exceeded $50 in the last hour.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#aispendspike
     - alert: StaleCreditReservations
       expr: jt_usage_open_reservations{measure="count"} > 500
       for: 30m
@@ -161,6 +194,14 @@ spec:
         severity: ticket
       annotations:
         summary: Credit reservations are not being settled.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#stalecreditreservations
+    - alert: CostAnomalyDetected
+      expr: sum(increase(jt_cost_anomalies_total[1h])) > 0
+      labels:
+        severity: ticket
+      annotations:
+        summary: Provider cost far above its 14-day baseline (see /internal/usage/anomalies/).
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#costanomalydetected
   - name: jt-code-security
     rules:
     - alert: WebhookSignatureFailures
@@ -169,12 +210,14 @@ spec:
         severity: page
       annotations:
         summary: Many webhooks with invalid or replayed signatures (possible attack).
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#webhooksignaturefailures
     - alert: OriginBypassAttempts
       expr: sum(increase(jt_security_events_total{kind="origin_bypass"}[15m])) > 50
       labels:
         severity: ticket
       annotations:
         summary: Requests are reaching the origin without passing Cloudflare.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#originbypassattempts
     - alert: RateLimitSurge
       expr: sum(rate(jt_rate_limited_total[5m])) > 5
       for: 10m
@@ -182,6 +225,7 @@ spec:
         severity: ticket
       annotations:
         summary: Sustained rate-limit rejections.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#ratelimitsurge
     - alert: HighSeverityAuditEvents
       expr: sum(increase(jt_audit_events_total{severity=~"high|critical"}[15m])) >
         25
@@ -189,3 +233,13 @@ spec:
         severity: ticket
       annotations:
         summary: Unusual volume of high-severity audit events.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#highseverityauditevents
+    - alert: RateLimitStoreUnavailable
+      expr: sum(increase(jt_security_events_total{kind="ratelimit_unavailable"}[5m]))
+        > 0
+      for: 5m
+      labels:
+        severity: page
+      annotations:
+        summary: Redis is unreachable; in-app rate limits are failing open.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#ratelimitstoreunavailable

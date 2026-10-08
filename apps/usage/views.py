@@ -13,6 +13,7 @@ from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
@@ -288,3 +289,47 @@ class InternalReservationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAdminUser]
     serializer_class = UsageReservationSerializer
     queryset = UsageReservation.objects.filter(status=UsageReservation.Status.HELD).order_by("created_at")
+
+
+class CostAnomalySerializer(serializers.ModelSerializer):
+    organizationId = serializers.UUIDField(source="organization_id", read_only=True)
+    observedUsd = serializers.DecimalField(
+        source="observed_usd", max_digits=20, decimal_places=8, read_only=True
+    )
+    expectedUsd = serializers.DecimalField(
+        source="expected_usd", max_digits=20, decimal_places=8, read_only=True
+    )
+
+    class Meta:
+        from apps.usage.models import CostAnomaly
+
+        model = CostAnomaly
+        fields = (
+            "id",
+            "organizationId",
+            "hour",
+            "observedUsd",
+            "expectedUsd",
+            "zscore",
+            "status",
+            "created_at",
+        )
+
+
+class InternalCostAnomalyViewSet(viewsets.ReadOnlyModelViewSet):
+    """Staff: provider-cost anomalies (``POST {id}/acknowledge/`` once investigated)."""
+
+    permission_classes = [IsAdminUser]
+    serializer_class = CostAnomalySerializer
+
+    def get_queryset(self):
+        from apps.usage.models import CostAnomaly
+
+        return CostAnomaly.objects.select_related("organization")
+
+    @action(detail=True, methods=["post"])
+    def acknowledge(self, request, pk=None):
+        anomaly = self.get_object()
+        anomaly.status = anomaly.Status.ACKNOWLEDGED
+        anomaly.save(update_fields=["status"])
+        return Response(self.get_serializer(anomaly).data)

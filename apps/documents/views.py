@@ -5,18 +5,20 @@ import uuid
 from pathlib import Path
 
 from django.conf import settings
-from django.http import FileResponse, Http404
-from drf_spectacular.utils import OpenApiTypes, extend_schema
+from django.db import transaction
+from django.http import FileResponse, Http404, HttpResponse
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from apps.assets.imagekit import generate_signed_delivery_url, imagekit_is_configured
 from apps.assets.services import register_generated_asset, soft_delete_asset
+from apps.assets.supabase_storage import generate_signed_delivery_url, supabase_storage_is_configured
+from apps.core.pagination import ExportFormatMixin
 from apps.core.throttling import BurstThrottle, ConversionThrottle
-from apps.documents.models import Document
+from apps.documents.models import Document, DocumentVersion
 from apps.documents.rendering import render_docx, render_pdf
 from apps.documents.serializers import (
     DocumentCreateSerializer,
@@ -33,7 +35,7 @@ from apps.identity.authorization import (
 RENDER_ROOT = Path(settings.BASE_DIR) / "rendered_documents"
 
 
-class DocumentViewSet(viewsets.ModelViewSet):
+class DocumentViewSet(ExportFormatMixin, viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = DocumentSerializer
     lookup_field = "id"
@@ -50,10 +52,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def create(self, request: Request, *args, **kwargs):
         create_serializer = DocumentCreateSerializer(data=request.data)
         create_serializer.is_valid(raise_exception=True)
-        document = create_serializer.save(
-            owner=request.user,
-            organization=organization_for_request(request, required=True),
-        )
+        with transaction.atomic():
+            document = create_serializer.save(
+                owner=request.user,
+                organization=organization_for_request(request, required=True),
+            )
+            DocumentVersion.objects.create(
+                document=document, version=1, content=document.content, created_by=request.user
+            )
         return Response(DocumentSerializer(document).data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
@@ -63,23 +69,89 @@ class DocumentViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
+        """Edits (autosave) keep the version number; ``POST versions/`` snapshots a new
+        version. Any content change invalidates a previously rendered file."""
+        content_changed = "content" in serializer.validated_data and (
+            serializer.validated_data["content"] != serializer.instance.content
+        )
         instance = serializer.save()
+        if not content_changed:
+            return
         soft_delete_asset(instance.rendered_asset)
-        instance.version += 1
         instance.status = Document.Status.DRAFT
         instance.download_url = ""
         instance.rendered_asset = None
         instance.page_count = None
-        instance.save(
-            update_fields=[
-                "version",
-                "status",
-                "download_url",
-                "rendered_asset",
-                "page_count",
-                "updated_at",
-            ]
+        instance.save(update_fields=["status", "download_url", "rendered_asset", "page_count", "updated_at"])
+
+    @extend_schema(request=None, responses={201: DocumentSerializer})
+    @action(detail=True, methods=["post"])
+    def duplicate(self, request: Request, id=None):
+        source = self.get_object()
+        with transaction.atomic():
+            copy = Document.objects.create(
+                owner=request.user,
+                organization=source.organization,
+                title=f"{source.title} (copy)"[:500],
+                template=source.template,
+                template_version=source.template_version,
+                content=source.content,
+            )
+            DocumentVersion.objects.create(
+                document=copy, version=1, content=copy.content, created_by=request.user
+            )
+        return Response(DocumentSerializer(copy).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=None, responses={201: DocumentSerializer})
+    @action(detail=True, methods=["post"])
+    def versions(self, request: Request, id=None):
+        """Snapshot the current content as the next version."""
+        with transaction.atomic():
+            document = Document.objects.select_for_update().get(pk=self.get_object().pk)
+            document.version += 1
+            document.save(update_fields=["version", "updated_at"])
+            DocumentVersion.objects.create(
+                document=document, version=document.version, content=document.content, created_by=request.user
+            )
+        return Response(DocumentSerializer(document).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        parameters=[OpenApiParameter("format", str, enum=["md", "pdf"], required=False)],
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    @action(detail=True, methods=["get"])
+    def export(self, request: Request, id=None):
+        document = self.get_object()
+        export_format = request.query_params.get("format", "md")
+        if export_format == "md":
+            return Response({"content": f"# {document.title}\n\n{document.content}", "format": "md"})
+        if export_format != "pdf":
+            return Response({"detail": "format must be md or pdf."}, status=status.HTTP_400_BAD_REQUEST)
+        response = HttpResponse(render_pdf(document), content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{_safe_name(document.title)}.pdf"'
+        return response
+
+    @extend_schema(request=None, responses={201: OpenApiTypes.OBJECT})
+    @action(detail=True, methods=["post"], url_path="save-to-files")
+    def save_to_files(self, request: Request, id=None):
+        """Store the document as a Markdown file in the caller's private asset storage."""
+        from apps.assets.views import _serialize
+
+        document = self.get_object()
+        if not supabase_storage_is_configured():
+            return Response(
+                {"detail": "File storage is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        asset = register_generated_asset(
+            f"# {document.title}\n\n{document.content}".encode(),
+            owner=request.user,
+            organization=document.organization,
+            file_name=f"{_safe_name(document.title)}.md",
+            kind="documents",
+            content_type="text/markdown",
+            provenance={"document_id": str(document.id), "document_version": document.version},
         )
+        return Response(_serialize([asset])[0], status=status.HTTP_201_CREATED)
 
     def perform_destroy(self, instance):
         soft_delete_asset(instance.rendered_asset)
@@ -93,7 +165,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 path.unlink(missing_ok=True)
 
     def _save_render(self, instance: Document, content: bytes, fmt: str):
-        if imagekit_is_configured():
+        if supabase_storage_is_configured():
             content_types = {
                 "pdf": "application/pdf",
                 "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -107,9 +179,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 content_type=content_types[fmt],
                 provenance={"document_id": str(instance.id), "document_version": instance.version},
             )
-            return generate_signed_delivery_url(asset.imagekit_file_path), asset
+            return generate_signed_delivery_url(asset.storage_key), asset
         if not settings.ASSET_LOCAL_FALLBACK_ENABLED:
-            raise RuntimeError("ImageKit is required for rendered documents in deployable environments.")
+            raise RuntimeError(
+                "Supabase Storage is required for rendered documents in deployable environments."
+            )
         RENDER_ROOT.mkdir(parents=True, exist_ok=True)
         path = RENDER_ROOT / f"{instance.id}.{fmt}"
         with open(path, "wb") as fh:
@@ -217,11 +291,15 @@ class DocumentViewSet(viewsets.ModelViewSet):
         )
 
 
+def _safe_name(title: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in " -_." else "_" for ch in title).strip()[:120] or "document"
+
+
 @extend_schema(responses={200: OpenApiTypes.BINARY})
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def document_download(request: Request, id: uuid.UUID) -> FileResponse:
-    """Serves locally rendered documents when ImageKit is not configured."""
+    """Serves locally rendered documents when Supabase Storage is not configured."""
     fmt = request.GET.get("fmt", "pdf")
     if fmt not in {"pdf", "docx"}:
         raise Http404

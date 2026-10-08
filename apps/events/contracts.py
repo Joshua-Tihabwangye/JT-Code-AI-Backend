@@ -73,6 +73,7 @@ KNOWN_EVENT_TYPES: tuple[str, ...] = (
     ),
     *(f"orchestration.delivery.{name}" for name in ("accepted", "retry_scheduled", "completed", "failed")),
     "safety.image_prompt_blocked",
+    "usage.cost.anomaly",
 )
 
 

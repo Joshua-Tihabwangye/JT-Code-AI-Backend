@@ -63,10 +63,13 @@ def run_dlq_drill(*, consumer_group: str = "jt-code.operations-drill") -> dict[s
     # 1. Every attempt fails, exactly like the consumer's in-place retries.
     for attempt in range(attempts):
         try:
-            process_event(consumer_group=consumer_group, envelope=envelope, topic=topic, partition=0, offset=attempt)
+            process_event(
+                consumer_group=consumer_group, envelope=envelope, topic=topic, partition=0, offset=attempt
+            )
         except DrillFailure as exc:
             errors.append(str(exc))
-    assert len(errors) == attempts, "the poison event must fail every attempt"
+    if len(errors) != attempts:
+        raise RuntimeError("DLQ drill: the poison event must fail every attempt")
     # 2. Dead-letter it.
     dead_letter = dead_letter_event(
         consumer_group=consumer_group,
@@ -86,7 +89,8 @@ def run_dlq_drill(*, consumer_group: str = "jt-code.operations-drill") -> dict[s
     replayed = (
         OutboxEvent.objects.filter(topic=topic, payload__drill_id=drill_id).order_by("-created_at").first()
     )
-    assert replayed is not None, "replay must enqueue a new outbox event"
+    if replayed is None:
+        raise RuntimeError("DLQ drill: replay must enqueue a new outbox event")
     replay_envelope = build_envelope(
         event_id=str(replayed.id), event_type=POISON_EVENT, payload=replayed.payload, headers=replayed.headers
     )
@@ -115,7 +119,9 @@ def run_dlq_drill(*, consumer_group: str = "jt-code.operations-drill") -> dict[s
             consumer_group=consumer_group, event_id=replay_envelope.event_id
         ).count()
         == 1,
-        "markedReplayed": DeadLetterEvent.objects.filter(id=dead_letter.id, replayed_at__isnull=False).exists(),
+        "markedReplayed": DeadLetterEvent.objects.filter(
+            id=dead_letter.id, replayed_at__isnull=False
+        ).exists(),
         "recoverySeconds": round(time.monotonic() - started, 3),
     }
 
@@ -130,7 +136,7 @@ def _bucket(latency_ms: float) -> str:
     return "inf"
 
 
-@shared_task(acks_late=True)
+@shared_task(acks_late=True)  # type: ignore[untyped-decorator]
 def drill_ping(run_id: str, queue: str, sent_at: float) -> None:
     """No-op work item; records its end-to-end latency in the shared cache (Redis)."""
     latency_ms = max(0.0, (time.time() - sent_at) * 1000)
@@ -201,7 +207,7 @@ def run_kafka_saturation(*, events: int, timeout: float) -> dict[str, Any]:
     )
     consumer.subscribe([topic])
     consumer.poll(5)  # join the group before producing so "latest" includes our events
-    records = []
+    records: list[tuple[str, str, EventEnvelope, dict[str, str] | None]] = []
     for index in range(events):
         envelope = build_envelope(
             event_id=str(uuid.uuid4()),
@@ -221,13 +227,17 @@ def run_kafka_saturation(*, events: int, timeout: float) -> dict[str, Any]:
             continue
         import json
 
-        body = json.loads(message.value())
+        body = json.loads(message.value() or b"{}")
         latencies.append((time.time() - float(body["data"]["sent_at"])) * 1000)
     consumer.close()
     latencies.sort()
 
     def pct(q: float) -> float | None:
-        return round(latencies[min(len(latencies) - 1, math.ceil(len(latencies) * q) - 1)], 1) if latencies else None
+        return (
+            round(latencies[min(len(latencies) - 1, math.ceil(len(latencies) * q) - 1)], 1)
+            if latencies
+            else None
+        )
 
     consume_seconds = max(time.time() - produce_started, 1e-6)
     return {

@@ -17,6 +17,7 @@ Validation enforces the integration contract on every definition:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -243,11 +244,15 @@ def register_after_migrate(sender: Any = None, **kwargs: Any) -> None:
 
 
 def invalidate_routing() -> None:
-    cache.delete(_CACHE_KEY)
+    # The cache is an optimisation; an unreachable Redis must not fail migrate or registration.
+    with contextlib.suppress(Exception):
+        cache.delete(_CACHE_KEY)
 
 
 def _routing() -> dict[str, Any]:
-    cached = cache.get(_CACHE_KEY)
+    cached = None
+    with contextlib.suppress(Exception):
+        cached = cache.get(_CACHE_KEY)
     if cached is not None:
         return dict(cached)
     from apps.orchestration.models import WorkflowDefinition
@@ -260,7 +265,8 @@ def _routing() -> dict[str, Any]:
         for event_type in row.event_types:
             events.setdefault(event_type, []).append(str(row.id))
     routing = {"tasks": tasks, "events": events}
-    cache.set(_CACHE_KEY, routing, timeout=60)
+    with contextlib.suppress(Exception):
+        cache.set(_CACHE_KEY, routing, timeout=60)
     return routing
 
 

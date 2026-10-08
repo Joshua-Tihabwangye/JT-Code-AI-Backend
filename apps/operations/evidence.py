@@ -27,6 +27,15 @@ class RunHandle:
         self.failures.append(message)
 
 
+def _plain(parameters: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep JSON-safe option values only (``call_command`` passes streams such as ``stdout``)."""
+    return {
+        key: value
+        for key, value in (parameters or {}).items()
+        if isinstance(value, str | int | float | bool | type(None) | list | tuple)
+    }
+
+
 @contextmanager
 def recorded(kind: str, parameters: dict[str, Any] | None = None) -> Iterator[RunHandle]:
     """Persist a run; it passes unless the block raises or calls ``handle.fail``."""
@@ -34,7 +43,7 @@ def recorded(kind: str, parameters: dict[str, Any] | None = None) -> Iterator[Ru
         kind=kind,
         environment=environment_name(),
         git_sha=os.environ.get("GIT_SHA", "") or os.environ.get("GITHUB_SHA", ""),
-        parameters=parameters or {},
+        parameters=_plain(parameters),
     )
     handle = RunHandle(run)
     try:
@@ -48,3 +57,18 @@ def recorded(kind: str, parameters: dict[str, Any] | None = None) -> Iterator[Ru
         run.status = VerificationRun.Status.FAILED if handle.failures else VerificationRun.Status.PASSED
         run.finished_at = timezone.now()
         run.save(update_fields=["summary", "failures", "status", "finished_at"])
+
+
+def record_result(
+    kind: str, *, passed: bool, summary: dict[str, Any], failures: list[str] | None = None
+) -> None:
+    """Store a completed run in one step (for commands that compute their verdict first)."""
+    VerificationRun.objects.create(
+        kind=kind,
+        status=VerificationRun.Status.PASSED if passed else VerificationRun.Status.FAILED,
+        environment=environment_name(),
+        git_sha=os.environ.get("GIT_SHA", "") or os.environ.get("GITHUB_SHA", ""),
+        summary=summary,
+        failures=failures or [],
+        finished_at=timezone.now(),
+    )

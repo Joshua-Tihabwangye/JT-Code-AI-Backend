@@ -100,7 +100,7 @@ class DatasetViewSet(viewsets.ModelViewSet):
                 raise serializers.ValidationError({"asset": "The asset was not found."})
             if asset.status != Asset.Status.READY:
                 raise serializers.ValidationError({"asset": "The asset is not ready."})
-            if not asset.imagekit_file_path or not asset.checksum_sha256:
+            if not asset.storage_key or not asset.checksum_sha256:
                 raise serializers.ValidationError(
                     {"asset": "The asset has not passed integrity verification."}
                 )
@@ -266,13 +266,13 @@ class AnalysisRunViewSet(viewsets.ModelViewSet):
         """Stream the result CSV through the API (run visibility applies)."""
         from django.http import StreamingHttpResponse
 
-        from apps.assets.imagekit import stream_file
+        from apps.assets.supabase_storage import stream_file
 
         run = self.get_object()
         asset = run.result_asset
         if run.status != AnalysisRun.Status.COMPLETED or asset is None or asset.status != Asset.Status.READY:
             return Response({"detail": "The result is not available."}, status=status.HTTP_404_NOT_FOUND)
-        response = StreamingHttpResponse(stream_file(asset.imagekit_file_path), content_type="text/csv")
+        response = StreamingHttpResponse(stream_file(asset.storage_key), content_type="text/csv")
         response["Content-Disposition"] = f'attachment; filename="analysis-{run.id}.csv"'
         response["X-Content-Type-Options"] = "nosniff"
         return response

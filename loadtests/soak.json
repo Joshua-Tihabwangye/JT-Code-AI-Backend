@@ -1,0 +1,96 @@
+{
+  "name": "soak",
+  "kind": "soak_test",
+  "stages": [
+    {
+      "duration": 300,
+      "users": 200
+    },
+    {
+      "duration": 14400,
+      "users": 200
+    },
+    {
+      "duration": 60,
+      "users": 0
+    }
+  ],
+  "requests": [
+    {
+      "name": "me",
+      "weight": 20,
+      "method": "GET",
+      "path": "/api/v1/me/"
+    },
+    {
+      "name": "conversations",
+      "weight": 15,
+      "method": "GET",
+      "path": "/api/v1/conversations/"
+    },
+    {
+      "name": "files",
+      "weight": 10,
+      "method": "GET",
+      "path": "/api/v1/files/"
+    },
+    {
+      "name": "jobs",
+      "weight": 8,
+      "method": "GET",
+      "path": "/api/v1/jobs/"
+    },
+    {
+      "name": "usage",
+      "weight": 6,
+      "method": "GET",
+      "path": "/api/v1/usage/"
+    },
+    {
+      "name": "wallet",
+      "weight": 5,
+      "method": "GET",
+      "path": "/api/v1/wallets/me/"
+    },
+    {
+      "name": "plans",
+      "weight": 4,
+      "method": "GET",
+      "path": "/api/v1/plans/"
+    },
+    {
+      "name": "collections",
+      "weight": 6,
+      "method": "GET",
+      "path": "/api/v1/knowledge/collections/"
+    },
+    {
+      "name": "knowledge_search",
+      "weight": 10,
+      "method": "POST",
+      "path": "/api/v1/knowledge/search/",
+      "json": {
+        "query": "How do I rotate API keys?",
+        "topK": 5
+      }
+    },
+    {
+      "name": "chat_stream",
+      "weight": 3,
+      "method": "GET",
+      "path": "/api/v1/chat/requests/{chatRequestId}/stream/",
+      "stream": true
+    }
+  ],
+  "thinkTimeSeconds": [
+    2,
+    5
+  ],
+  "thresholds": {
+    "errorRate": 0.01,
+    "p95Ms": 800,
+    "p99Ms": 2000,
+    "streamFirstEventP95Ms": 5000,
+    "maxDegradation": 1.5
+  }
+}

@@ -16,6 +16,9 @@ class Conversation(models.Model):
         related_name="conversations",
     )
     title = models.CharField(max_length=255, default="New conversation")
+    # The model alias the client selected for this conversation (display/default only).
+    model = models.CharField(max_length=100, blank=True)
+    pinned = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     archived_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

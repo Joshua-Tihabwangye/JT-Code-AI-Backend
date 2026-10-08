@@ -146,9 +146,9 @@ class SettingsExportView(APIView):
             "assets": [
                 {
                     "id": str(a.id),
-                    "imagekit_file_id": a.imagekit_file_id,
-                    "imagekit_file_path": a.imagekit_file_path,
-                    "secure_url": a.secure_url,
+                    "storage_object_id": a.storage_object_id,
+                    "storage_key": a.storage_key,
+                    "storage_bucket": a.storage_bucket,
                     "resource_type": a.resource_type,
                     "format": a.format,
                     "bytes": a.bytes,

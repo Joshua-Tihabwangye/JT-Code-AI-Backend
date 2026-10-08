@@ -66,12 +66,14 @@ INSTALLED_APPS = [
     "apps.analytics",
     "apps.usage",
     "apps.orchestration",
+    "apps.operations",
 ]
 
 MIDDLEWARE = [
     "apps.core.middleware.RequestContextMiddleware",
     "apps.core.metrics.MetricsMiddleware",
     "apps.core.edge.EdgeProtectionMiddleware",
+    "apps.core.edge.ReadOnlyModeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "apps.core.edge.SecurityHeadersMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -203,6 +205,10 @@ CELERY_TASK_TIME_LIMIT = 600
 CELERY_TASK_SOFT_TIME_LIMIT = 540
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BEAT_SCHEDULE = {
+    "detect-cost-anomalies": {
+        "task": "apps.usage.tasks.detect_cost_anomalies",
+        "schedule": 3600.0,
+    },
     "sweep-n8n-workflows": {
         "task": "apps.orchestration.tasks.sweep_workflows",
         "schedule": 60.0,
@@ -278,12 +284,12 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 3600.0,
         "options": {"expires": 3600},
     },
-    "reconcile-imagekit-assets": {
+    "reconcile-supabase-storage-assets": {
         "task": "apps.assets.tasks.reconcile_assets",
         "schedule": 3600.0,
         "options": {"expires": 3600},
     },
-    "sweep-imagekit-orphans": {
+    "sweep-supabase-storage-orphans": {
         "task": "apps.assets.tasks.sweep_orphans",
         "schedule": 86400.0,
         "options": {"expires": 21600},
@@ -381,8 +387,10 @@ CELERY_TASK_RESULT_EXPIRES = 3600
 CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 3600}
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 SUPABASE_URL = env("SUPABASE_URL")
+SUPABASE_INTERNAL_URL = env("SUPABASE_INTERNAL_URL", SUPABASE_URL)
 SUPABASE_JWKS_URL = env("SUPABASE_JWKS_URL")
 SUPABASE_JWT_SECRET = env("SUPABASE_JWT_SECRET")
+SUPABASE_JWT_VERIFICATION = env("SUPABASE_JWT_VERIFICATION", "jwks").lower()
 SUPABASE_JWT_AUDIENCE = env("SUPABASE_JWT_AUDIENCE")
 SUPABASE_JWT_ISSUER = env("SUPABASE_JWT_ISSUER")
 SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
@@ -390,22 +398,22 @@ SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
 SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY")
 SUPABASE_ALLOW_ANONYMOUS_USERS = env_bool("SUPABASE_ALLOW_ANONYMOUS_USERS", False)
 
-IMAGEKIT_PUBLIC_KEY = env("IMAGEKIT_PUBLIC_KEY")
-IMAGEKIT_PRIVATE_KEY = env("IMAGEKIT_PRIVATE_KEY")
-IMAGEKIT_ENDPOINT_URL = env("IMAGEKIT_ENDPOINT_URL")
-IMAGEKIT_UPLOAD_FOLDER = env("IMAGEKIT_UPLOAD_FOLDER", "jt-code")
-IMAGEKIT_MAX_UPLOAD_BYTES = int(env("IMAGEKIT_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
-IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS = int(env("IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS", "300"))
-IMAGEKIT_SIGNED_URL_TTL_SECONDS = int(env("IMAGEKIT_SIGNED_URL_TTL_SECONDS", "900"))
-IMAGEKIT_API_TIMEOUT_SECONDS = float(env("IMAGEKIT_API_TIMEOUT_SECONDS", "30"))
+# Asset bytes live in a private Supabase Storage bucket.  The service-role key
+# is already represented by SUPABASE_SECRET_KEY and must remain server-only.
+SUPABASE_STORAGE_BUCKET = env("SUPABASE_STORAGE_BUCKET", "jt-code-assets")
+SUPABASE_STORAGE_PREFIX = env("SUPABASE_STORAGE_PREFIX", "jt-code")
+# Empty means ``${SUPABASE_URL}/storage/v1``; override only for a trusted proxy.
+SUPABASE_STORAGE_API_URL = env("SUPABASE_STORAGE_API_URL")
+SUPABASE_STORAGE_PUBLIC_API_URL = env("SUPABASE_STORAGE_PUBLIC_API_URL")
+ASSET_MAX_UPLOAD_BYTES = int(env("ASSET_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+ASSET_UPLOAD_AUTH_TTL_SECONDS = int(env("ASSET_UPLOAD_AUTH_TTL_SECONDS", "300"))
+ASSET_SIGNED_URL_TTL_SECONDS = int(env("ASSET_SIGNED_URL_TTL_SECONDS", "900"))
+SUPABASE_STORAGE_TIMEOUT_SECONDS = float(env("SUPABASE_STORAGE_TIMEOUT_SECONDS", "30"))
 ASSET_DELETE_GRACE_DAYS = int(env("ASSET_DELETE_GRACE_DAYS", "7"))
 ASSET_ORPHAN_GRACE_HOURS = int(env("ASSET_ORPHAN_GRACE_HOURS", "24"))
-IMAGEKIT_RECONCILE_PAGE_SIZE = int(env("IMAGEKIT_RECONCILE_PAGE_SIZE", "100"))
-IMAGEKIT_RECONCILE_MAX_PAGES = int(env("IMAGEKIT_RECONCILE_MAX_PAGES", "100"))
+ASSET_RECONCILE_PAGE_SIZE = int(env("ASSET_RECONCILE_PAGE_SIZE", "100"))
+ASSET_RECONCILE_MAX_PAGES = int(env("ASSET_RECONCILE_MAX_PAGES", "100"))
 ASSET_LOCAL_FALLBACK_ENABLED = env_bool("ASSET_LOCAL_FALLBACK_ENABLED", False)
-# ImageKit API bases (override only for a proxy or a regional endpoint).
-IMAGEKIT_UPLOAD_API_BASE = env("IMAGEKIT_UPLOAD_API_BASE", "https://upload.imagekit.io/api")
-IMAGEKIT_API_BASE = env("IMAGEKIT_API_BASE", "https://api.imagekit.io/v1")
 # Upload content types are verified against the file's magic bytes. SVG is
 # deliberately absent: it can carry script.
 _DEFAULT_ASSET_TYPES = (
@@ -416,9 +424,9 @@ _DEFAULT_ASSET_TYPES = (
 )
 ASSET_ALLOWED_CONTENT_TYPES = tuple(env_list("ASSET_ALLOWED_CONTENT_TYPES", _DEFAULT_ASSET_TYPES))
 # Reconcile verifies READY assets in batches, re-checking each at most this often.
-IMAGEKIT_RECONCILE_BATCH_SIZE = int(env("IMAGEKIT_RECONCILE_BATCH_SIZE", "200"))
-IMAGEKIT_RECONCILE_INTERVAL_HOURS = int(env("IMAGEKIT_RECONCILE_INTERVAL_HOURS", "24"))
-IMAGEKIT_RECONCILE_MAX_DEPTH = int(env("IMAGEKIT_RECONCILE_MAX_DEPTH", "6"))
+ASSET_RECONCILE_BATCH_SIZE = int(env("ASSET_RECONCILE_BATCH_SIZE", "200"))
+ASSET_RECONCILE_INTERVAL_HOURS = int(env("ASSET_RECONCILE_INTERVAL_HOURS", "24"))
+ASSET_RECONCILE_MAX_DEPTH = int(env("ASSET_RECONCILE_MAX_DEPTH", "6"))
 ASSET_DELETE_MAX_ATTEMPTS = int(env("ASSET_DELETE_MAX_ATTEMPTS", "10"))
 
 # Phase 12 analytics workers run only a bounded declarative transform language.
@@ -443,7 +451,7 @@ ANALYTICS_SANDBOX_MEMORY_MB = int(env("ANALYTICS_SANDBOX_MEMORY_MB", "1536"))
 ANALYTICS_SANDBOX_CPU_SECONDS = int(env("ANALYTICS_SANDBOX_CPU_SECONDS", "240"))
 ANALYTICS_SANDBOX_TIMEOUT_SECONDS = int(env("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250"))
 # Plotly specs up to this size are also kept inline on the visualization row;
-# the full spec is always stored as an ImageKit asset.
+# the full spec is always stored as a private Supabase Storage asset.
 ANALYTICS_INLINE_SPEC_BYTES = int(env("ANALYTICS_INLINE_SPEC_BYTES", "262144"))
 
 KAFKA_BOOTSTRAP_SERVERS = env("KAFKA_BOOTSTRAP_SERVERS")
@@ -509,6 +517,10 @@ AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(env("AI_CIRCUIT_BREAKER_COOLDOWN_SECON
 # Gemini (Generative Language REST API).
 GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
 GEMINI_DEFAULT_MODEL = env("GEMINI_DEFAULT_MODEL", "gemini-2.5-flash")
+# Images: Imagen generates, a Gemini image model edits, the chat model describes.
+IMAGE_PROVIDER = env("IMAGE_PROVIDER")  # "gemini" (default) or "echo" (development/tests only)
+GEMINI_IMAGE_MODEL = env("GEMINI_IMAGE_MODEL", "imagen-3.0-generate-002")
+GEMINI_IMAGE_EDIT_MODEL = env("GEMINI_IMAGE_EDIT_MODEL", "gemini-2.5-flash-image")
 GEMINI_SAFETY_THRESHOLD = env("GEMINI_SAFETY_THRESHOLD", "BLOCK_MEDIUM_AND_ABOVE")
 # Llama via any hosted or self-hosted OpenAI-compatible endpoint.
 LLAMA_API_BASE = env("LLAMA_API_BASE")
@@ -775,6 +787,20 @@ OTEL_SERVICE_VERSION = SENTRY_RELEASE
 OTEL_ENVIRONMENT = env("OTEL_ENVIRONMENT", SENTRY_ENVIRONMENT or "development")
 OTEL_TRACES_SAMPLE_RATIO = env_float("OTEL_TRACES_SAMPLE_RATIO", 0.1)
 
+# Cost anomaly detection (Phase 19): last hour's provider cost against the trailing baseline.
+USAGE_ANOMALY_BASELINE_DAYS = int(env("USAGE_ANOMALY_BASELINE_DAYS", "14"))
+USAGE_ANOMALY_Z = env_float("USAGE_ANOMALY_Z", 4.0)
+USAGE_ANOMALY_MIN_USD = env_float("USAGE_ANOMALY_MIN_USD", 5.0)
+# Planned database failover/restore: reject writes with 503 + Retry-After, keep serving reads.
+READ_ONLY_MODE = env_bool("READ_ONLY_MODE", False)
+# Kafka partitions per topic for hot topics, e.g. "chat.request.accepted=12,jobs.job.created=12".
+KAFKA_TOPIC_PARTITIONS_OVERRIDES = {
+    name.strip(): int(count)
+    for item in env_list("KAFKA_TOPIC_PARTITIONS_OVERRIDES")
+    for name, _, count in [item.partition("=")]
+    if name.strip() and count.strip().isdigit()
+}
+
 # Edge security (Phase 15). See apps/core/edge.py and infra/terraform/modules/cloudflare_edge.
 TRUSTED_PROXY_HOPS = int(env("TRUSTED_PROXY_HOPS", "0"))
 CLOUDFLARE_ORIGIN_SECRET = env("CLOUDFLARE_ORIGIN_SECRET")
@@ -808,6 +834,7 @@ AUDIT_ROUTE_RULES: tuple[tuple[str, str, str, str], ...] = (
     (r"^api/v1/(plans/.+/subscribe|subscriptions|wallets|payment-methods)/", "billing", "medium", "*"),
     (r"^api/v1/billing/", "billing", "medium", "*"),
     (r"^api/v1/(organizations|settings/organization|settings/account|settings/export)", "admin", "high", "*"),
+    (r"^api/v1/accounts/me/password/", "security", "high", "*"),
     (r"^api/v1/(settings/consents|consents|retention-rules)/", "configuration", "medium", "*"),
     (r"^api/v1/(files|knowledge)/", "file_operation", "low", "DELETE"),
     (r"^api/v1/files/.+/(restore|access)/", "file_operation", "low", "*"),

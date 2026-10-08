@@ -1,13 +1,25 @@
 from drf_spectacular.utils import extend_schema_serializer
 from rest_framework import serializers
 
-from apps.documents.models import Document
+from apps.documents.models import Document, DocumentVersion
+
+
+class DocumentVersionSerializer(serializers.ModelSerializer):
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+
+    class Meta:
+        model = DocumentVersion
+        fields = ("id", "version", "content", "createdAt")
+        read_only_fields = fields
 
 
 @extend_schema_serializer(component_name="RenderedDocument")
 class DocumentSerializer(serializers.ModelSerializer):
+    """The frontend ``AppDocument`` shape plus rendering state."""
+
     createdAt = serializers.DateTimeField(source="created_at", read_only=True)
     updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+    versions = DocumentVersionSerializer(many=True, read_only=True)
 
     class Meta:
         model = Document
@@ -19,6 +31,8 @@ class DocumentSerializer(serializers.ModelSerializer):
             "content",
             "status",
             "version",
+            "favorite",
+            "versions",
             "provenance",
             "download_url",
             "rendered_asset",

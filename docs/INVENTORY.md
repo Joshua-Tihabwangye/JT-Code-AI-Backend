@@ -23,7 +23,7 @@ Resolved from `pyproject.toml` / `requirements.txt`.
 | PyJWT[crypto] | Supabase JWT verification (JWKS) |
 | redis / celery[redis] | Cache transport + background jobs |
 | confluent-kafka | Kafka producer/consumer (events) |
-| ImageKit REST API | Asset storage and CDN (ADR-002) |
+| Supabase Storage REST API | Private asset storage and signed delivery (ADR-002) |
 | sentry-sdk[django] | Error monitoring + tracing |
 | gunicorn / uvicorn[standard] / whitenoise | ASGI/WSGI serving + static |
 | openai | OpenAI + OpenAI-compatible Llama chat/embedding |
@@ -48,9 +48,10 @@ Canonical list (defaults in code, values in `.env.example`). Groups:
 **Authentication (Supabase):** `SUPABASE_URL`, `SUPABASE_JWT_SECRET`,
 `SUPABASE_JWT_AUDIENCE`, `SUPABASE_JWT_ISSUER`, `SUPABASE_WEBHOOK_SIGNING_SECRET`
 
-**Storage (assets):** `IMAGEKIT_PUBLIC_KEY`, `IMAGEKIT_PRIVATE_KEY`,
-`IMAGEKIT_ENDPOINT_URL`, `IMAGEKIT_UPLOAD_FOLDER`, `IMAGEKIT_MAX_UPLOAD_BYTES`,
-`IMAGEKIT_UPLOAD_AUTH_TTL_SECONDS`.
+**Storage (assets):** `SUPABASE_STORAGE_BUCKET`, `SUPABASE_STORAGE_PREFIX`,
+`SUPABASE_STORAGE_API_URL`, `ASSET_MAX_UPLOAD_BYTES`,
+`ASSET_UPLOAD_AUTH_TTL_SECONDS`. The server-only `SUPABASE_SECRET_KEY` is also
+used to issue private upload and delivery capabilities.
 
 **Redis/Celery:** `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 
@@ -151,7 +152,7 @@ Admin/schema/docs: `/admin/`, `/api/v1/schema/`, `/api/v1/docs/` (legacy schema 
 | Supabase Auth | verify JWT/JWKS, user webhook | `apps.identity` |
 | Supabase PostgreSQL | primary relational database | `config.settings` |
 | Supabase PostgreSQL pgvector | active vector store; ADR-003 supersedes Pinecone | `apps.knowledge` |
-| ImageKit | active asset bytes/CDN provider | `apps.assets` |
+| Supabase Storage | active private asset-byte provider | `apps.assets` |
 | Redis | cache + Celery transport | `config.settings` |
 | Kafka | outbox-published events | `apps.events` |
 | Celery / Celery Beat | background jobs + schedule | `config/celery.py` |

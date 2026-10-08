@@ -81,7 +81,7 @@ flowchart LR
 
 1. An editor/admin creates a tenant-owned collection and source. The API only
    exposes fully implemented source types: inline text, HTTPS URL, and a
-   registered ready ImageKit asset. Source configuration and ACL structure are
+   registered ready Supabase Storage asset. Source configuration and ACL structure are
    validated before persistence.
 2. Sync materializes a source into one idempotent `Document` using its external
    id and queues `process_document` on the ingestion worker.

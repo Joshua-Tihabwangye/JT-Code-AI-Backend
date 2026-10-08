@@ -25,7 +25,7 @@ DOCS_DIR = PROJECT_ROOT / "docs"
 
 MANDATORY_ADRS = {
     "ADR-001": "ADR-001-supabase-auth-and-django-authorization.md",
-    "ADR-002": "ADR-002-imagekit-asset-architecture.md",
+    "ADR-002": "ADR-002-supabase-storage-architecture.md",
     "ADR-003": "ADR-003-agentic-rag-vector-store.md",
     "ADR-004": "ADR-004-ai-gateway.md",
     "ADR-005": "ADR-005-kafka-celery-n8n-boundaries.md",

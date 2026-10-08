@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     HOME=/tmp
 
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10001 app \
  && useradd --uid 10001 --gid app --no-create-home --home-dir /tmp --shell /usr/sbin/nologin app
 WORKDIR /app

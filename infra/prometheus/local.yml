@@ -1,4 +1,4 @@
-# Prometheus for `docker compose --profile observability` (development DEBUG serves /metrics without a token).
+# Prometheus in the local Docker stack (development DEBUG serves /metrics without a token).
 global:
   scrape_interval: 15s
 rule_files: [/etc/prometheus/alerts.yml]
