@@ -68,7 +68,7 @@ tenacity>=8.2,<9
 structlog>=24.0,<25
 
 # Phase 12 analytics and isolated visualization workers
-pandas>=2.2,<3
+pandas>=2.2,<4
 plotly>=6.0,<7
 matplotlib>=3.9,<4
 
