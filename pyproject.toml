@@ -56,7 +56,7 @@ exclude = ["tests*", "converted_files*", "generated_images*", "rendered_document
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3,<9",
+  "pytest>=8.3,<10",
   "pytest-django>=4.11,<5",
   "pytest-cov>=6,<7",
   "pytest-xdist>=3.6,<4",
