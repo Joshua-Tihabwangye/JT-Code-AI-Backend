@@ -219,54 +219,6 @@ services:
       timeout: 5s
       retries: 12
 
-
-  supabase-meta:
-    image: supabase/postgres-meta:v0.99.0
-    restart: unless-stopped
-    environment:
-      PG_META_PORT: "8080"
-      PG_META_DB_HOST: supabase-db
-      PG_META_DB_PORT: "5432"
-      PG_META_DB_NAME: postgres
-      PG_META_DB_USER: postgres
-      PG_META_DB_PASSWORD: ${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}
-      CRYPTO_KEY: ${JT_CODE_LOCAL_SUPABASE_PG_META_CRYPTO_KEY:?Set the PG meta crypto key in .env}
-    depends_on:
-      supabase-db:
-        condition: service_healthy
-
-  supabase-studio:
-    image: supabase/studio:2026.09.07-sha-7996410
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:54323:3000"
-    environment:
-      HOSTNAME: "0.0.0.0"
-      STUDIO_PG_META_URL: http://supabase-meta:8080
-      POSTGRES_HOST: supabase-db
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: postgres
-      POSTGRES_PASSWORD: ${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}
-      POSTGRES_USER_READ_WRITE: postgres
-      PG_META_CRYPTO_KEY: ${JT_CODE_LOCAL_SUPABASE_PG_META_CRYPTO_KEY:?Set the PG meta crypto key in .env}
-      PGRST_DB_SCHEMAS: public,graphql_public
-      PGRST_DB_EXTRA_SEARCH_PATH: public
-      DEFAULT_ORGANIZATION_NAME: JT-Code
-      DEFAULT_PROJECT_NAME: JT-Code Local
-      SUPABASE_URL: http://supabase-gateway:8000
-      SUPABASE_PUBLIC_URL: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}
-      SUPABASE_ANON_KEY: ${JT_CODE_LOCAL_SUPABASE_ANON_KEY}
-      SUPABASE_SERVICE_KEY: ${JT_CODE_LOCAL_SUPABASE_SERVICE_ROLE_KEY}
-      AUTH_JWT_SECRET: ${JT_CODE_LOCAL_SUPABASE_JWT_SECRET:-local-supabase-jwt-secret-change-before-production-1234567890}
-    depends_on:
-      supabase-db:
-        condition: service_healthy
-      supabase-meta:
-        condition: service_started
-      supabase-gateway:
-        condition: service_healthy
-
-
   mailpit:
     image: axllent/mailpit:v1.24
     restart: unless-stopped
@@ -452,7 +404,6 @@ services:
     restart: unless-stopped
     command: ["-config.file=/etc/tempo.yaml"]
     volumes: [./infra/otel/tempo-local.yaml:/etc/tempo.yaml:ro]
-
 
 volumes:
   redis-data: {}
