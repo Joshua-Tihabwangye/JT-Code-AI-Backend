@@ -53,4 +53,4 @@ Run this drill against a real Redis-backed staging environment before production
 
 ## Redis key isolation
 
-The Django cache uses `jt-code:cache`; rate limits use `jt-code:rate-limit`; job locks use `jt-code:job-lock`. Keep these prefixes distinct if a shared Redis cluster is used.
+The Django cache uses `jt-code:cache` and rate limits use `jt-code:rate-limit`. Locks are PostgreSQL row locks (`select_for_update(skip_locked=True)`), not Redis keys. In staging/production the Celery broker (`CELERY_BROKER_URL`) must be a separate Redis instance with `maxmemory-policy noeviction`, while the cache instance (`REDIS_URL`) uses `allkeys-lru`; settings validation and `manage.py verify_messaging --strict` (run by the `migrate` role) enforce this.

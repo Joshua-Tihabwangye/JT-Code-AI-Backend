@@ -111,6 +111,15 @@ variable "registry_token" {
   sensitive = true
 }
 
+variable "kafka_role_credentials" {
+  description = "Kafka logins for the consumer and admin roles (the producer login is KAFKA_SASL_* in external_secrets)."
+  type = map(object({
+    username = string
+    password = string
+  }))
+  sensitive = true
+}
+
 variable "external_secrets" {
   description = "Third-party credentials for jt-code-secrets (see infra/k8s/secret-keys.txt)."
   type        = map(string)

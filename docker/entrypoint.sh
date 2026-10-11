@@ -44,9 +44,15 @@ case "$role" in
     exec python manage.py run_kafka_consumer "$@"
     ;;
   migrate)
-    # Idempotent: applies migrations, verifies private asset storage, and registers workflows.
+    # Idempotent: applies migrations, verifies private asset storage, registers workflows,
+    # provisions Kafka topics, then gates the deploy on Redis/Kafka and Supabase checks.
     python manage.py migrate --noinput
     python manage.py configure_asset_storage
+    python manage.py ensure_kafka_topics --grow
+    case "${DJANGO_SETTINGS_MODULE:-}" in
+      *.staging|*.production) python manage.py verify_messaging --strict ;;
+      *) python manage.py verify_messaging ;;
+    esac
     exec python manage.py verify_supabase --format=json
     ;;
   n8n-push)

@@ -15,6 +15,9 @@ from rest_framework.views import APIView
 
 logger = logging.getLogger(__name__)
 
+# Dependencies whose outage the application absorbs (DEPENDENCY_FAILURE_PLAN.md).
+_INFORMATIONAL_CHECKS = frozenset({"kafka"})
+
 
 def _check(name: str, operation: Callable[[], None]) -> str:
     try:
@@ -67,7 +70,9 @@ class ReadyView(APIView):
                 AdminClient(kafka_client_config()).list_topics(timeout=2)
 
             checks["kafka"] = _check("kafka", kafka)
-        ready = all(value == "ok" for value in checks.values())
+        # Kafka is reported but never gates readiness: the outbox keeps events durable through a
+        # Kafka outage, and pulling every API pod would turn that into a full outage.
+        ready = all(value == "ok" for name, value in checks.items() if name not in _INFORMATIONAL_CHECKS)
         logger.info("readiness probe completed", extra={"ready": ready, "checks": checks})
         return Response(
             {"status": "ok" if ready else "degraded", "checks": checks}, status=200 if ready else 503

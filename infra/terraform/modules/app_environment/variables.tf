@@ -12,6 +12,15 @@ variable "secrets" {
   sensitive   = true
 }
 
+variable "kafka_role_credentials" {
+  description = "Least-privilege Kafka logins: keys \"consumer\" (read topics, own groups) and \"admin\" (create/configure topics)."
+  type = map(object({
+    username = string
+    password = string
+  }))
+  sensitive = true
+}
+
 variable "secret_keys_file" {
   type = string
 }

@@ -35,6 +35,10 @@ COMMON_ENV = [
     {"name": "PROMETHEUS_MULTIPROC_DIR", "value": "/tmp/prometheus"},
 ]
 ENV_FROM = [{"configMapRef": {"name": "jt-code-config"}}, {"secretRef": {"name": "jt-code-secrets"}}]
+# Least-privilege Kafka principals (infra/terraform app_environment): each holds
+# KAFKA_SASL_USERNAME/KAFKA_SASL_PASSWORD for one role and overrides the shared producer login.
+KAFKA_CONSUMER_SECRET = "jt-code-kafka-consumer"  # pragma: allowlist secret
+KAFKA_ADMIN_SECRET = "jt-code-kafka-admin"  # pragma: allowlist secret
 
 
 def volumes(scratch):
@@ -61,6 +65,7 @@ def deployment(
     scratch=(),
     strategy=None,
     spread=False,
+    secrets=(),
 ):
     vols, mounts = volumes(scratch)
     container = {
@@ -68,7 +73,8 @@ def deployment(
         "image": image,
         "imagePullPolicy": "IfNotPresent",
         "args": args,
-        "envFrom": ENV_FROM,
+        # Later sources win on duplicate keys, so a role secret overrides the shared credentials.
+        "envFrom": [*ENV_FROM, *({"secretRef": {"name": secret}} for secret in secrets)],
         "env": [*COMMON_ENV, *env],
         "resources": resources,
         "securityContext": CONTAINER_SECURITY,
@@ -333,12 +339,32 @@ beat = deployment(
     resources=res("50m", "192Mi", "500m", "384Mi"),
     strategy={"type": "Recreate"},
 )
+CONSUMERS = ["consumer-integrations"]
 consumer = deployment(
     "jt-code-consumer-integrations",
     "consumer-integrations",
     args=["consumer", "integrations.webhook.received", "--consumer-name", "integration-webhooks"],
     grace=60,
     resources=res("50m", "256Mi", "500m", "512Mi"),
+    env=[{"name": "CELERY_METRICS_PORT", "value": "9808"}],
+    ports=[{"name": "metrics", "containerPort": 9808, "protocol": "TCP"}],
+    secrets=[KAFKA_CONSUMER_SECRET],
+    probes={
+        # run_kafka_consumer touches this file every 10 s while its poll loop runs.
+        "livenessProbe": {
+            "exec": {
+                "command": [
+                    "sh",
+                    "-c",
+                    "test $(( $(date +%s) - $(stat -c %Y /tmp/kafka-consumer.heartbeat) )) -lt 120",
+                ]
+            },
+            "initialDelaySeconds": 60,
+            "periodSeconds": 30,
+            "timeoutSeconds": 5,
+            "failureThreshold": 3,
+        }
+    },
 )
 write("beat.yaml", [beat])
 write("consumers.yaml", [consumer])
@@ -373,7 +399,12 @@ resources_list.append("streamlit.yaml")
 
 # Migrations (run by the deploy pipeline before the rollout) -------------------------------
 migrate_pod = deployment(
-    "x", "migrate", args=["migrate"], grace=30, resources=res("100m", "384Mi", "1", "768Mi")
+    "x",
+    "migrate",
+    args=["migrate"],
+    grace=30,
+    resources=res("100m", "384Mi", "1", "768Mi"),
+    secrets=[KAFKA_ADMIN_SECRET],  # provisions topics (ensure_kafka_topics) and reads their configs
 )
 migrate_spec = migrate_pod["spec"]["template"]["spec"]
 migrate_spec["restartPolicy"] = "Never"
@@ -392,6 +423,17 @@ write("migrate-job.yaml", [migrate])
 resources_list.append("migrate-job.yaml")
 
 # Network policies ------------------------------------------------------------------------
+EGRESS_TCP_PORTS = (
+    443,  # HTTPS: Supabase APIs, AI providers, Stripe, n8n, GitHub, Sentry, tool egress (HTTPS only)
+    5432,  # Supabase PostgreSQL (direct / session pooler)
+    6543,  # Supabase transaction pooler
+    6379,  # Redis
+    6380,  # Redis over TLS (common managed port)
+    9092,  # Kafka
+    9093,  # Kafka SASL_SSL (common managed port)
+    9094,
+    9096,  # Kafka SASL/SCRAM on Amazon MSK
+)
 policies = [
     {
         "apiVersion": "networking.k8s.io/v1",
@@ -441,15 +483,33 @@ policies = [
         },
     },
     {
-        # Egress stays open (Supabase, Redis, Kafka, AI providers, n8n, Stripe)
-        # except the cloud metadata endpoint, a classic SSRF target.
+        # Egress is limited to the service ports the application uses; the managed services'
+        # addresses are not known here, so the destination stays any address except the cloud
+        # metadata endpoint (a classic SSRF target). A provider on a non-standard port gets an
+        # extra, additive NetworkPolicy in its overlay (see docs/DEPLOYMENT.md).
         "apiVersion": "networking.k8s.io/v1",
         "kind": "NetworkPolicy",
         "metadata": {"name": "deny-cloud-metadata"},
         "spec": {
             "podSelector": {},
             "policyTypes": ["Egress"],
-            "egress": [{"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": ["169.254.169.254/32"]}}]}],
+            "egress": [
+                {
+                    "to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": ["169.254.169.254/32"]}}],
+                    "ports": [
+                        *({"port": port, "protocol": "TCP"} for port in EGRESS_TCP_PORTS),
+                        # DNS: kube-dns, or NodeLocal DNSCache on a link-local address.
+                        {"port": 53, "protocol": "UDP"},
+                        {"port": 53, "protocol": "TCP"},
+                    ],
+                },
+                {
+                    "to": [
+                        {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}
+                    ],
+                    "ports": [{"port": 4317, "protocol": "TCP"}, {"port": 4318, "protocol": "TCP"}],
+                },
+            ],
         },
     },
 ]
@@ -622,7 +682,7 @@ monitoring_docs = [
         "spec": {
             "selector": {
                 "matchExpressions": [
-                    {"key": "app.kubernetes.io/component", "operator": "In", "values": list(WORKERS)}
+                    {"key": "app.kubernetes.io/component", "operator": "In", "values": [*WORKERS, *CONSUMERS]}
                 ]
             },
             "podMetricsEndpoints": [{"port": "metrics", "interval": "30s"}],

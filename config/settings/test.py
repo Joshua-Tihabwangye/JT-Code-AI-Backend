@@ -14,10 +14,6 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
         "KEY_PREFIX": "jt-code:rate-limit",
     },
-    "job_locks": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "KEY_PREFIX": "jt-code:job-lock",
-    },
 }
 DATABASES = runtime_connection_settings(  # noqa: F405
     database_url=env("TEST_DATABASE_URL", required=True)  # noqa: F405

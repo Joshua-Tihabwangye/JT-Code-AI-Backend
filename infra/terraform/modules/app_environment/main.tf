@@ -48,6 +48,36 @@ resource "kubernetes_secret" "app" {
   }
 }
 
+# Mounted after jt-code-secrets by the consumer and migrate pods only, so their
+# KAFKA_SASL_* override the shared producer login (scripts/k8s/gen_base.py).
+resource "kubernetes_secret" "kafka_role" {
+  for_each = toset(["consumer", "admin"])
+  metadata {
+    name      = "jt-code-kafka-${each.key}"
+    namespace = kubernetes_namespace.this.metadata[0].name
+    labels    = { "app.kubernetes.io/part-of" = "jt-code" }
+  }
+  data = {
+    KAFKA_SASL_USERNAME = var.kafka_role_credentials[each.key].username
+    KAFKA_SASL_PASSWORD = var.kafka_role_credentials[each.key].password
+  }
+
+  lifecycle {
+    precondition {
+      condition     = alltrue([for role in ["consumer", "admin"] : contains(keys(var.kafka_role_credentials), role)])
+      error_message = "kafka_role_credentials needs \"consumer\" and \"admin\" entries."
+    }
+    precondition {
+      condition = length(distinct([
+        nonsensitive(var.secrets["KAFKA_SASL_USERNAME"]),
+        nonsensitive(var.kafka_role_credentials["consumer"].username),
+        nonsensitive(var.kafka_role_credentials["admin"].username),
+      ])) == 3
+      error_message = "The producer, consumer and admin Kafka roles must use three different principals."
+    }
+  }
+}
+
 resource "kubernetes_secret" "registry" {
   metadata {
     name      = "ghcr-pull"

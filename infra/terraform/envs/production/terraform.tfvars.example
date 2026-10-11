@@ -14,3 +14,6 @@ registry_username        = "joshua-tihabwangye"
 # cloudflare_api_token, supabase_access_token, grafana_admin_password, registry_token and
 # external_secrets: set TF_VAR_<name> (external_secrets as a JSON object with the keys of
 # infra/k8s/secret-keys.txt that Terraform does not generate).
+# kafka_role_credentials: TF_VAR_kafka_role_credentials as JSON,
+#   {"consumer": {"username": "...", "password": "..."}, "admin": {"username": "...", "password": "..."}}
+# Three distinct Kafka principals; the ACLs each needs are in docs/EVENT_PLATFORM.md.

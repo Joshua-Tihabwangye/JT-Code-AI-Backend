@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import signal
 import time
 from typing import Any
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # Errors that can never succeed on redelivery; everything else is retried first.
 _PERMANENT_ERRORS = (EventContractError, UnhandledEventError)
+_LAG_INTERVAL_SECONDS = 30
+_HEARTBEAT_INTERVAL_SECONDS = 10
 
 
 class Command(BaseCommand):
@@ -30,6 +33,36 @@ class Command(BaseCommand):
         parser.add_argument("topics", nargs="+")
         parser.add_argument("--consumer-name", required=True)
         parser.add_argument("--group-id", help="Explicit group ID; must use the configured prefix.")
+        parser.add_argument(
+            "--metrics-port",
+            type=int,
+            default=None,
+            help="Serve Prometheus metrics on this port (default: CELERY_METRICS_PORT; 0 disables).",
+        )
+        parser.add_argument(
+            "--heartbeat-file",
+            default="/tmp/kafka-consumer.heartbeat",  # nosec B108 - per-pod emptyDir, read by the liveness probe
+            help="Touched while the poll loop runs; the liveness probe checks its age.",
+        )
+
+    @staticmethod
+    def _record_lag(consumer, group_id: str) -> None:
+        """Publish messages-behind per assigned partition (high watermark minus committed offset)."""
+        from apps.core.metrics import KAFKA_CONSUMER_LAG
+
+        assignment = consumer.assignment()
+        if not assignment:
+            return
+        for tp in consumer.committed(assignment, timeout=5):
+            low, high = consumer.get_watermark_offsets(tp, timeout=2, cached=False)
+            # A negative offset means nothing is committed yet: everything retained is unconsumed.
+            lag = high - (tp.offset if tp.offset >= 0 else low)
+            KAFKA_CONSUMER_LAG.labels(group_id, tp.topic, str(tp.partition)).set(max(lag, 0))
+
+    @staticmethod
+    def _touch(path: str) -> None:
+        with open(path, "a"):
+            os.utime(path, None)
 
     @staticmethod
     def _headers(message) -> dict[str, str]:
@@ -116,11 +149,28 @@ class Command(BaseCommand):
             self.stdout.write(f"Received signal {signum}; finishing the current message.")
 
         previous = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+        from apps.core.metrics import KAFKA_CONSUMED, KAFKA_CONSUMER_LAST_POLL, start_metrics_server
+
+        metrics_port = options["metrics_port"]
+        start_metrics_server(settings.CELERY_METRICS_PORT if metrics_port is None else metrics_port)
+        heartbeat = options["heartbeat_file"]
         consumer.subscribe(topics)
         self.stdout.write(f"Consuming {topics} as {group_id}")
+        last_lag = last_beat = 0.0
         try:
             while not stopping:
                 message = consumer.poll(1.0)
+                now = time.time()
+                KAFKA_CONSUMER_LAST_POLL.labels(group_id).set(now)
+                if heartbeat and now - last_beat >= _HEARTBEAT_INTERVAL_SECONDS:
+                    self._touch(heartbeat)
+                    last_beat = now
+                if now - last_lag >= _LAG_INTERVAL_SECONDS:
+                    last_lag = now
+                    try:
+                        self._record_lag(consumer, group_id)
+                    except Exception:  # noqa: BLE001 - lag is telemetry; never stop consuming over it
+                        logger.warning("kafka consumer lag unavailable", extra={"dependency": "kafka"})
                 if message is None:
                     continue
                 if error := message.error():
@@ -153,6 +203,7 @@ class Command(BaseCommand):
                 # A commit failure is not a message failure: let it propagate so the
                 # consumer restarts; redelivery is absorbed by ConsumedEvent/DLQ idempotency.
                 consumer.commit(message=message, asynchronous=False)
+                KAFKA_CONSUMED.labels(group_id, message.topic(), disposition).inc()
                 self.stdout.write(f"{disposition} {message.topic()} offset={message.offset()}")
         finally:
             consumer.close()

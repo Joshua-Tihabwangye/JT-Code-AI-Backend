@@ -205,8 +205,10 @@ _DUMMY = {
     "SUPABASE_JWT_AUDIENCE": "authenticated",
     "SUPABASE_SECRET_KEY": "sb_secret_0123456789abcdef",  # pragma: allowlist secret
     "REDIS_URL": "rediss://redis.example.net:6380/0",
-    "CELERY_BROKER_URL": "rediss://redis.example.net:6380/1",
-    "CELERY_RESULT_BACKEND": "rediss://redis.example.net:6380/2",
+    # The broker is its own non-evicting instance; KEDA watches its queues.
+    "CELERY_BROKER_URL": "rediss://redis-broker.example.net:6380/0",
+    "CELERY_RESULT_BACKEND": "rediss://redis-broker.example.net:6380/1",
+    "KEDA_REDIS_ADDRESS": "redis-broker.example.net:6380",
     "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.net:9093",
     "SUPABASE_STORAGE_BUCKET": "jt-code-assets",
     "STRIPE_SECRET_KEY": "sk_live_0123456789abcdef",  # pragma: allowlist secret
@@ -289,6 +291,8 @@ def test_local_compose_launcher_lists_and_opens_browser_endpoints():
         "http://127.0.0.1:8501",
         "http://127.0.0.1:9090",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:5540",
     ):
         assert endpoint in launcher
     assert "up --build --detach" in launcher

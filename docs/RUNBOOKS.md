@@ -90,6 +90,40 @@ A consumer is rejecting events.
    once, and the consumer deduplicates.
 3. The procedure is rehearsed by `python manage.py dlq_drill` (release-gated evidence).
 
+## kafkaconsumerlaghigh
+
+A consumer group is behind the newest events on a topic (`jt_kafka_consumer_lag`).
+
+1. Check the consumer logs for retries (`kafka handler attempt failed`) and the
+   dead-letter count: slow or failing handlers hold the partition.
+2. Check the database: handlers commit in PostgreSQL, so lock waits or a slow
+   pooler stall consumption.
+3. If the handlers are healthy but traffic grew, add consumer replicas (up to the
+   topic's partition count) and grow partitions with
+   `python manage.py ensure_kafka_topics --grow` after raising
+   `KAFKA_TOPIC_PARTITIONS_OVERRIDES` (CAPACITY_PLAN.md).
+
+## kafkaconsumerstalled
+
+The consumer process is up but its poll loop has stopped advancing.
+
+1. The liveness probe restarts a pod whose heartbeat is older than two minutes;
+   if the alert persists, the pod is crash-looping. Read its logs.
+2. Common causes: Kafka credentials rotated (SASL failure), the consumer's ACLs
+   changed, or the brokers are unreachable on the allowed egress ports.
+3. Offsets are committed only after the database transaction, so a restart
+   loses nothing; redeliveries are absorbed by `ConsumedEvent`.
+
+## kafkaconsumerabsent
+
+No consumer pod is exporting metrics.
+
+1. `kubectl get deploy jt-code-consumer-integrations`: check replicas and events.
+2. Confirm the `jt-code-kafka-consumer` Secret exists (Terraform) and the pod
+   can start (`kubectl describe pod`).
+3. Until it recovers, verified inbound webhooks stay `pending`; they are processed
+   when the consumer returns (Kafka retains them for `KAFKA_TOPIC_RETENTION_MS`).
+
 ## jobsstuckqueued
 
 1. Check the queue depth panel and whether KEDA is scaling the worker

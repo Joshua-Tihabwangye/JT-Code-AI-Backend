@@ -78,6 +78,7 @@ module "environment" {
   registry_username       = var.registry_username
   registry_token          = var.registry_token
   external_secrets        = var.external_secrets
+  kafka_role_credentials  = var.kafka_role_credentials
 }
 
 output "namespace" {
