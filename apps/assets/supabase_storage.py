@@ -133,22 +133,22 @@ def ensure_private_bucket() -> None:
         headers=_admin_headers(),
         timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
     )
-	    missing_bucket = response.status_code == 404
-
+    # Older Storage API versions answer a missing bucket with 404; newer ones with 400 NoSuchBucket.
+    missing_bucket = response.status_code == 404
     if response.status_code == 400:
         try:
             error_payload = response.json()
         except ValueError:
             error_payload = {}
-
-        missing_bucket = (
-            isinstance(error_payload, dict)
-            and error_payload.get("code") == "NoSuchBucket"
-        )
-
+        missing_bucket = isinstance(error_payload, dict) and error_payload.get("code") == "NoSuchBucket"
     if missing_bucket:
         created = httpx.post(
-    if created.status_code not in {200, 201, 409}:
+            _api("bucket/"),
+            json=limits,
+            headers=_admin_headers(),
+            timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
+        )
+        if created.status_code not in {200, 201, 409}:
             created.raise_for_status()
         return
     response.raise_for_status()
@@ -165,13 +165,13 @@ def ensure_private_bucket() -> None:
     )
     updated.raise_for_status()
 
+
 def create_signed_upload(key: str) -> tuple[str, str]:
     """Return a one-use direct-upload URL and its ``x-signature`` token."""
     key = normalize_key(key)
     ensure_private_bucket()
     response = httpx.post(
         _api(f"object/upload/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"),
-
         json={"upsert": "false"},
         headers=_admin_headers(),
         timeout=settings.SUPABASE_STORAGE_TIMEOUT_SECONDS,
@@ -189,9 +189,7 @@ def create_signed_upload(key: str) -> tuple[str, str]:
     return _public_api(f"object/upload/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"), token
 
 
-def generate_signed_delivery_url(
-    key: str, *, expires_in: int | None = None, external: bool = True
-) -> str:
+def generate_signed_delivery_url(key: str, *, expires_in: int | None = None, external: bool = True) -> str:
     """Generate a short-lived read URL for a private object."""
     key = normalize_key(key)
     ttl = int(expires_in or settings.ASSET_SIGNED_URL_TTL_SECONDS)

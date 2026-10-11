@@ -23,6 +23,8 @@ x-app-base: &app-base
     CELERY_RESULT_BACKEND: redis://redis:6379/2
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+    # The local Redpanda is a single broker; the base default of 3 replicas cannot be satisfied.
+    KAFKA_TOPIC_REPLICATION_FACTOR: "1"
     N8N_BASE_URL: http://n8n:5678
     N8N_WEBHOOK_BASE_URL: http://n8n:5678
     N8N_CALLBACK_BASE_URL: http://api:8000/api/v1
@@ -281,6 +283,8 @@ services:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     restart: unless-stopped
+    # Loopback only (no auth): lets host-run `make run` / `make worker` use REDIS_URL from .env.
+    ports: ["127.0.0.1:6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
