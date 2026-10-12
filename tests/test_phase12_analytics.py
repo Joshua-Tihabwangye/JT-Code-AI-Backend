@@ -155,7 +155,9 @@ def test_asset_reader_uses_signed_egress_and_verifies_integrity(analytics_org, m
     monkeypatch.setattr(settings, "SUPABASE_STORAGE_API_URL", "https://project.supabase.co/storage/v1")
     monkeypatch.setattr(
         "apps.assets.supabase_storage.generate_signed_delivery_url",
-        lambda _path: "https://project.supabase.co/storage/v1/object/sign/signed.csv?token=short-lived",
+        lambda _path, **_kwargs: (
+            "https://project.supabase.co/storage/v1/object/sign/signed.csv?token=short-lived"
+        ),
     )
     seen = {}
 

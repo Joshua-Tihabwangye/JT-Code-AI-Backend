@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# Start the Docker-first local stack, print browser endpoints immediately, and
-# open each UI only after its HTTP endpoint is reachable.
+# Start the production Docker Compose stack (docker-compose.prod.yml + .env.production),
+# print its dashboards and open each one once its HTTP endpoint is reachable.
+# Local development no longer uses Docker: see scripts/native/stack.sh (make native-up).
 set -Eeuo pipefail
 
-readonly ENDPOINTS=(
-  "API documentation|http://127.0.0.1:8000/api/docs/"
-  "Supabase Auth health|http://127.0.0.1:54321/auth/v1/health"
-  "n8n|http://127.0.0.1:5678"
-  "Mailpit|http://127.0.0.1:8025"
-  "Streamlit|http://127.0.0.1:8501"
-  "Prometheus|http://127.0.0.1:9090"
-  "Grafana|http://127.0.0.1:3000"
+# AUTO_OPEN_ONLY=1 skips `up` and only opens the dashboards (used by scripts/prod_tunnel.sh).
+STACK="${JT_CODE_STACK:-production}"
+if [[ "$STACK" != "production" ]]; then
+  printf 'The local Docker stack was retired; run the native stack instead: make native-up\n' >&2
+  exit 64
+fi
+COMPOSE_ARGS=(-f docker-compose.prod.yml --env-file .env.production)
+ENDPOINTS=(
+  "API readiness|http://127.0.0.1:8000/api/v1/health/ready/"
+  "Grafana|http://127.0.0.1:3000/login"
+  "Prometheus targets|http://127.0.0.1:9090/targets"
   "Kafka Console|http://127.0.0.1:8080"
   "RedisInsight|http://127.0.0.1:5540"
+  "Supabase Studio|http://127.0.0.1:54323"
 )
 
 print_endpoints() {
@@ -104,10 +109,16 @@ open_ready_endpoints() {
 }
 
 main() {
+  if [[ ! -f .env.production && "${AUTO_OPEN_ONLY:-0}" != "1" ]]; then
+    printf 'Missing .env.production: cp .env.production.example .env.production and fill it in.\n' >&2
+    exit 1
+  fi
   print_endpoints
   compose_command
-  printf 'Starting the Docker Compose stack...\n'
-  "${COMPOSE_COMMAND[@]}" up --build --detach "$@"
+  if [[ "${AUTO_OPEN_ONLY:-0}" != "1" ]]; then
+    printf 'Starting the %s Docker Compose stack...\n' "$STACK"
+    "${COMPOSE_COMMAND[@]}" "${COMPOSE_ARGS[@]}" up --build --detach --remove-orphans "$@"
+  fi
 
   if [[ "${AUTO_OPEN_BROWSER:-1}" == "0" ]]; then
     printf 'Browser auto-open disabled (AUTO_OPEN_BROWSER=0).\n'

@@ -83,7 +83,9 @@ def test_complete_upload_verifies_content_and_persists_private_storage_identity(
 
 @pytest.mark.django_db
 @override_settings(**STORAGE, ASSET_MAX_UPLOAD_BYTES=10)
-def test_signature_rejects_disallowed_types_oversize_and_wrong_storage_key(authenticated_client, monkeypatch):
+def test_signature_rejects_disallowed_types_oversize_and_wrong_storage_key(
+    authenticated_client, org, monkeypatch
+):
     monkeypatch.setattr(
         "apps.assets.views.create_signed_upload", lambda key: ("https://storage.test/upload", "token")
     )

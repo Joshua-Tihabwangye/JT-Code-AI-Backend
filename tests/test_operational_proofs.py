@@ -29,8 +29,8 @@ def _strict_env() -> dict[str, str]:
         "SUPABASE_JWT_AUDIENCE": "authenticated",
         "SUPABASE_WEBHOOK_SIGNING_SECRET": "supabase-webhook-secret",
         "REDIS_URL": "rediss://redis.example.com:6379/0",
-        "CELERY_BROKER_URL": "rediss://redis.example.com:6379/1",
-        "CELERY_RESULT_BACKEND": "rediss://redis.example.com:6379/2",
+        "CELERY_BROKER_URL": "rediss://broker.example.com:6379/0",
+        "CELERY_RESULT_BACKEND": "rediss://broker.example.com:6379/1",
         "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.com:9093",
         "KAFKA_SECURITY_PROTOCOL": "SASL_SSL",
         "KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
@@ -66,6 +66,7 @@ def _strict_env() -> dict[str, str]:
         "config.settings.production",
     ),
 )
+@pytest.mark.usefixtures("hermetic_env")
 def test_django_settings_profile_starts_with_valid_environment(settings_module):
     result = subprocess.run(
         [sys.executable, "manage.py", "check", f"--settings={settings_module}"],
@@ -73,7 +74,8 @@ def test_django_settings_profile_starts_with_valid_environment(settings_module):
         env=_strict_env(),
         capture_output=True,
         text=True,
-        timeout=30,
+        # Imports the whole project in a fresh interpreter; generous for loaded `-n` runs.
+        timeout=120,
         check=False,
     )
 

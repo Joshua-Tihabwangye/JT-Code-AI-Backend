@@ -27,9 +27,7 @@ def _fetch_jwks(*, force_refresh: bool = False) -> dict[str, Any]:
         return _JWKS_CACHE  # type: ignore[return-value]
 
     auth_base_url = settings.SUPABASE_INTERNAL_URL or settings.SUPABASE_URL
-    jwks_url = settings.SUPABASE_JWKS_URL or (
-        auth_base_url.rstrip("/") + "/auth/v1/.well-known/jwks.json"
-    )
+    jwks_url = settings.SUPABASE_JWKS_URL or (auth_base_url.rstrip("/") + "/auth/v1/.well-known/jwks.json")
     with httpx.Client(timeout=10.0) as client:
         response = client.get(jwks_url)
         response.raise_for_status()

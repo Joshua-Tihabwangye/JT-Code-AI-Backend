@@ -14,7 +14,7 @@ a prerequisite for local or initial hosted deployments.
 | Cluster add-ons, Supabase, namespace and secrets, DNS and WAF | `infra/terraform/{modules,envs}` | Terraform ≥ 1.6 |
 | Workloads | `infra/k8s/{base,components,overlays}` | Kustomize, kubectl |
 | Pipeline | `.github/workflows/{ci,deploy}.yml`, `scripts/deploy/` | GitHub Actions |
-| Local full stack | `docker-compose.yml` (self-hosted Supabase included) | Docker Compose |
+| Local stack (no Docker) | `scripts/native/`, `infra/native/` | systemd user units ([NATIVE_LOCAL_DEVELOPMENT.md](NATIVE_LOCAL_DEVELOPMENT.md)) |
 
 ## Images
 
@@ -192,26 +192,13 @@ GitHub configuration per environment (`staging`, `production`):
 * variables `STAGING_URL` / `PUBLIC_URL`;
 * required reviewers on `production`.
 
-## Local full stack
+## Local stack
 
-```bash
-make compose-up
-```
+Local development does not use Docker. `make native-setup` (first run) and
+`make native-up` start PostgreSQL 18 + pgvector and Redis as system services,
+and Kafka, Supabase Auth/Storage/REST with their gateway on :54321, Mailpit,
+n8n, the API, Celery and Streamlit as memory-capped systemd user units. The
+same bootstrap steps as the Compose `migrate` role (migrate, configure_asset_storage,
+ensure_kafka_topics --grow, verify_messaging, verify_supabase) run between the
+infrastructure and the application. See [NATIVE_LOCAL_DEVELOPMENT.md](NATIVE_LOCAL_DEVELOPMENT.md).
 
-This succeeds without a .env file. To override the documented localhost-only
-defaults, copy docker/.env.docker.example to .env and use its
-JT_CODE_LOCAL_* variables; do not reuse a managed-Supabase .env for this
-self-hosted stack. The launcher prints all browser-facing localhost ports
-before startup and opens each ready UI in Chrome or the default browser. Use
-make compose-up-no-browser when browser tabs are not wanted.
-
-The default stack runs API/workers, Redis, Redpanda, self-hosted Supabase
-(Postgres with pgvector, Auth, PostgREST, private Storage and its local
-gateway), n8n backed by its own Postgres, Mailpit, Prometheus, Grafana and
-Tempo. All host ports bind to loopback. Sentry has no container: add its DSN
-only when an external Sentry project is ready.
-
-The one-shot migrate service waits for Supabase, applies Django migrations and
-creates or verifies the private SUPABASE_STORAGE_BUCKET. On a later migration,
-run docker compose run --rm migrate. The n8n UI opens on :5678; create an API
-key there once and put it in N8N_API_KEY before using workflow deployment.
