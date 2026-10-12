@@ -97,10 +97,15 @@ class Command(BaseCommand):
                     "or queued jobs can be lost."
                 )
             if str(broker.get("aof_enabled", "0")) != "1":
-                warnings.append(
-                    "Redis broker has AOF persistence off; confirm the provider replicates or snapshots it "
-                    "(jobs are re-dispatched from PostgreSQL after a loss, but in-flight work is redone)."
-                )
+                if settings.SINGLE_HOST_DEPLOYMENT:
+                    # Self-hosted: nothing else replicates the broker, so AOF is its only durability.
+                    problems.append("Redis broker must run with appendonly yes on a single-host deployment.")
+                else:
+                    warnings.append(
+                        "Redis broker has AOF persistence off; confirm the provider replicates or "
+                        "snapshots it (jobs are re-dispatched from PostgreSQL after a loss, but "
+                        "in-flight work is redone)."
+                    )
         if cache and broker and cache.get("run_id") and cache.get("run_id") == broker.get("run_id"):
             problems.append(
                 "REDIS_URL and CELERY_BROKER_URL reach the same Redis server; use separate instances."

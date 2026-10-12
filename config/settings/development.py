@@ -5,6 +5,9 @@ from config.settings.validation import validate_settings
 SECRET_KEY = env("DJANGO_SECRET_KEY", "unsafe-local-development-key-change-me")  # noqa: F405
 DEBUG = env_bool("DJANGO_DEBUG", True)  # noqa: F405
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")  # noqa: F405
+# Docker Compose: Prometheus, health checks and sibling containers call the API by its service
+# name or loopback (DJANGO_INTERNAL_HOSTS, set by the compose files), not the public host.
+ALLOWED_HOSTS = [*ALLOWED_HOSTS, *env_list("DJANGO_INTERNAL_HOSTS")]  # noqa: F405
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173")  # noqa: F405
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")  # noqa: F405
 DATABASES, CACHES, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND = runtime_connection_settings(

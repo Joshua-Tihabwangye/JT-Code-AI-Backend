@@ -80,47 +80,28 @@ jt-code backend/
 
 - Python 3.14 (pinned in `.python-version`; CI uses the same patch release)
 - Poetry (recommended) or pip
-- PostgreSQL 17+ with pgvector, Redis, and Kafka (managed or locally installed)
+- PostgreSQL 18 with pgvector and Redis (system packages); Kafka and the Supabase services are installed in user space by `make native-install`
 
-### Local Development
+### Local Development (native, no Docker)
+
+Everything runs directly on the host: PostgreSQL 18 + pgvector and Redis as
+system services, and Kafka (KRaft), Supabase Auth/Storage/REST + gateway,
+Mailpit, n8n, the API, Celery and Streamlit as memory-capped `systemd --user`
+units. See [docs/NATIVE_LOCAL_DEVELOPMENT.md](docs/NATIVE_LOCAL_DEVELOPMENT.md).
 
 ```bash
-# Navigate to backend directory
-cd "jt-code backend"
+python -m venv .venv && .venv/bin/pip install -e '.[dev]'
+cp .env.example .env            # then edit secrets; native-configure fills connection settings
 
-# Run full setup (installs deps, runs migrations, creates superuser, collects static)
-./scripts/setup_dev.sh
+make native-setup               # first run: install binaries (user space), write configs + units,
+                                # one sudo step (pgvector, redis-server, roles/databases), start
+make native-up                  # later runs: infra -> migrate/topics/checks -> app
+make native-status              # units, memory, endpoint health
+make native-logs SERVICE=api    # follow one unit (omit SERVICE for all)
+make native-down                # stop (PostgreSQL/Redis system services keep running)
 
-# Or manually:
-cp .env.example .env
-# Edit .env with your configuration
-
-# With Poetry (recommended)
-poetry install --with dev
-poetry run python manage.py migrate
-poetry run python manage.py createsuperuser
-
-# With pip
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-python manage.py migrate
-python manage.py createsuperuser
-
-# Ensure PostgreSQL with pgvector, Redis, and Kafka are available using your managed or local services.
-
-# Run migrations
-python manage.py migrate
-
-# Start development server
-python manage.py runserver
-
-# In separate terminals:
-# Celery worker
-celery -A config worker -l INFO
-
-# Celery beat scheduler
-celery -A config beat -l INFO
+# Foreground alternative for the API (stop the unit first: systemctl --user stop jt-code-api)
+make run
 ```
 
 The API will be available at:
@@ -162,7 +143,7 @@ See `.env.example` for all available variables. Key variables:
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated allowed hosts | Yes |
 | `DATABASE_URL` | PostgreSQL connection URL | Yes |
 | `SUPABASE_URL` | Supabase project URL | Yes |
-| `SUPABASE_JWT_SECRET` | Local Docker HS256 token verifier; unset for hosted JWKS | Local only |
+| `SUPABASE_JWT_SECRET` | Native local GoTrue HS256 token verifier; unset for hosted JWKS | Local only |
 | `SUPABASE_WEBHOOK_SIGNING_SECRET` | Supabase webhook signing secret | Yes |
 | `SUPABASE_STORAGE_BUCKET` | Private Supabase Storage bucket for application assets | Yes |
 | `SUPABASE_STORAGE_PREFIX` | Environment-specific tenant object-key prefix | Yes |
@@ -291,12 +272,9 @@ clean infrastructure) is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
   - Pushes to `main` build, sign and scan the images, then deploy their
     digests to staging.
   - Production is a manually approved promotion of the same digests.
-- **Local full stack:** `make compose-up` starts self-hosted Supabase in
-  Docker alongside the API, workers, n8n, Kafka, Redis and local
-  observability. It lists the browser-facing endpoints immediately and opens
-  each one when ready; use `make compose-up-no-browser` to only list them.
-  It has localhost-only defaults; copy `docker/.env.docker.example` to
-  `.env` only to override its `JT_CODE_LOCAL_*` values.
+- **Local stack:** native processes, no Docker (`make native-up`, see
+  [docs/NATIVE_LOCAL_DEVELOPMENT.md](docs/NATIVE_LOCAL_DEVELOPMENT.md)).
+  `docker-compose.prod.yml` is only for the single-host production server.
 
 ## Architecture
 

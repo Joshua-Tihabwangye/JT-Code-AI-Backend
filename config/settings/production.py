@@ -11,4 +11,8 @@ ALLOWED_HOSTS = BASE_ALLOWED_HOSTS
 if POD_IP := env("POD_IP"):  # noqa: F405
     ALLOWED_HOSTS = [*ALLOWED_HOSTS, POD_IP]
 
+# Docker Compose: Prometheus, health checks and sibling containers call the API by its service
+# name or loopback (DJANGO_INTERNAL_HOSTS, set by the compose files), not the public host.
+ALLOWED_HOSTS = [*ALLOWED_HOSTS, *env_list("DJANGO_INTERNAL_HOSTS")]  # noqa: F405
+
 validate_settings("production")

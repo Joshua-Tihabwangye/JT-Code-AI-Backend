@@ -5,7 +5,8 @@ receivers:
   otlp:
     protocols:
       http:
-        endpoint: 0.0.0.0:4318
+        # Containers listen on all interfaces; the native stack sets OTEL_COLLECTOR_BIND=127.0.0.1.
+        endpoint: ${env:OTEL_COLLECTOR_BIND:-0.0.0.0}:4318
 
 processors:
   memory_limiter:
@@ -39,6 +40,8 @@ service:
   telemetry:
     metrics:
       level: basic
+      # Pipeline health (spans received/exported/failed), scraped by Prometheus.
+      address: ${env:OTEL_COLLECTOR_BIND:-0.0.0.0}:8888
   pipelines:
     traces:
       receivers: [otlp]

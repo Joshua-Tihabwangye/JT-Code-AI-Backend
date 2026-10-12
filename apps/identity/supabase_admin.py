@@ -36,6 +36,44 @@ def delete_auth_user(supabase_user_id: str) -> None:
         raise SupabaseAdminError(f"Supabase refused user deletion (HTTP {response.status_code}).")
 
 
+def create_auth_user(email: str, password: str) -> tuple[str, bool]:
+    """Create a confirmed email/password user; return ``(user_id, created)``.
+
+    An existing user with the same email is reused (its password is not changed).
+    """
+    base = _supabase_api_base_url()
+    try:
+        response = httpx.post(
+            f"{base}/auth/v1/admin/users",
+            json={"email": email, "password": password, "email_confirm": True},
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+        if response.status_code in (200, 201):
+            return str(response.json()["id"]), True
+        if response.status_code != 422:
+            raise SupabaseAdminError(f"Supabase refused user creation (HTTP {response.status_code}).")
+        page = 1
+        while True:
+            listing = httpx.get(
+                f"{base}/auth/v1/admin/users",
+                params={"page": page, "per_page": 200},
+                headers=_admin_headers(),
+                timeout=10.0,
+            )
+            listing.raise_for_status()
+            users = listing.json().get("users", [])
+            for user in users:
+                if str(user.get("email", "")).lower() == email.lower():
+                    return str(user["id"]), False
+            if len(users) < 200:
+                break
+            page += 1
+    except httpx.HTTPError as exc:
+        raise SupabaseAdminError(f"Supabase admin request failed: {exc}") from exc
+    raise ValueError(response.json().get("msg") or "Supabase rejected the email or password.")
+
+
 def verify_password(email: str, password: str) -> bool:
     """True when Supabase Auth accepts ``email``/``password`` (password grant)."""
     url = f"{_supabase_api_base_url()}/auth/v1/token?grant_type=password"

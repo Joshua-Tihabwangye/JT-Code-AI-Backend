@@ -1,4 +1,4 @@
-.PHONY: images compose-up compose-up-no-browser compose-down k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images compose-up-prod compose-down-prod prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -30,10 +30,20 @@ help:
 	@echo "  check         Run all checks (lint + format + typecheck + test)"
 	@echo "  ci-local      Run the same gates as GitHub Actions where possible"
 	@echo "  restore-drill Run local Phase 3 restore verification"
+	@echo "Native local stack (no Docker; docs/NATIVE_LOCAL_DEVELOPMENT.md):"
+	@echo "  native-setup  First run: install + configure + bootstrap (sudo once) + up"
+	@echo "  native-up     Start infra, migrate/topics/checks, then the app (systemd user units)"
+	@echo "  native-down   Stop every native unit (PostgreSQL/Redis system services keep running)"
+	@echo "  native-status Units, memory use and endpoint health"
+	@echo "  native-logins Every local login: database (pgAdmin), Redis, Grafana admin"
+	@echo "  native-redisinsight  Open the RedisInsight desktop app (Redis viewer)"
+	@echo "  native-logs [SERVICE=api]  Follow logs (all units, or one)"
+	@echo "  native-restart [SERVICE=worker]  Restart the app processes, or one unit"
+	@echo "  native-observability-up / -down  Prometheus, Grafana, Tempo, OTel (opt-in)"
 	@echo "Infrastructure (Phase 17):"
 	@echo "  images        Build the API, office and Streamlit images"
-	@echo "  compose-up    Local full stack; lists and opens browser-facing endpoints"
-	@echo "  compose-up-no-browser  Same stack, without opening browser tabs"
+	@echo "  compose-up-prod  Production stack (docker-compose.prod.yml + .env.production); opens dashboards"
+	@echo "  prod-tunnel SERVER=user@host  SSH tunnel to a remote server's dashboards; opens them"
 	@echo "  k8s-generate  Regenerate infra/k8s/base and components"
 	@echo "  k8s-render    Render the staging and production overlays"
 	@echo "  k8s-validate  Render + kubeconform-validate every overlay"
@@ -146,6 +156,55 @@ clean:
 	find . -type d -name 'htmlcov' -exec rm -rf {} + 2>/dev/null || true
 	rm -f coverage.xml .coverage
 
+# Native local stack (no Docker) -------------------------------------------------
+# Kafka, Supabase Auth/REST/Storage, Mailpit, n8n and the app run as memory-capped
+# systemd user units; PostgreSQL 18 (+pgvector) and Redis are system services.
+NATIVE_STACK = bash scripts/native/stack.sh
+
+native-setup: native-install native-configure native-bootstrap native-up
+
+native-install:
+	@bash scripts/native/install.sh core
+
+native-install-observability:
+	@bash scripts/native/install.sh observability
+
+native-configure:
+	.venv/bin/python scripts/native/configure.py --write-env
+
+native-bootstrap:
+	@bash scripts/native/bootstrap_system.sh
+
+native-up:
+	@$(NATIVE_STACK) up
+
+native-down:
+	@$(NATIVE_STACK) down
+
+native-restart:
+	@$(NATIVE_STACK) restart $(SERVICE)
+
+native-status:
+	@$(NATIVE_STACK) status
+
+native-logins native-db-info:
+	@$(NATIVE_STACK) logins
+
+native-redisinsight:
+	@$(NATIVE_STACK) redisinsight
+
+native-logs:
+	@$(NATIVE_STACK) logs $(SERVICE)
+
+native-migrate:
+	@$(NATIVE_STACK) bootstrap
+
+native-observability-up:
+	@$(NATIVE_STACK) observability-up
+
+native-observability-down:
+	@$(NATIVE_STACK) observability-down
+
 # Infrastructure (Phase 17) ------------------------------------------------------
 KUSTOMIZE ?= kustomize
 KUBECONFORM ?= kubeconform
@@ -156,14 +215,14 @@ images:
 	docker build --target office -t jt-code-api-office:local .
 	docker build -t jt-code-streamlit:local streamlit_app
 
-compose-up:
-	@bash scripts/compose_up.sh
+compose-up-prod:
+	@JT_CODE_STACK=production bash scripts/compose_up.sh
 
-compose-up-no-browser:
-	@AUTO_OPEN_BROWSER=0 bash scripts/compose_up.sh
+compose-down-prod:
+	docker compose -f docker-compose.prod.yml --env-file .env.production down
 
-compose-down:
-	docker compose down
+prod-tunnel:
+	@bash scripts/prod_tunnel.sh $(SERVER)
 
 k8s-generate:
 	python scripts/k8s/gen_base.py

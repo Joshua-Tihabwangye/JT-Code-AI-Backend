@@ -1,0 +1,33 @@
+# Local Supabase gateway (replaces docker/supabase/nginx.conf for the native stack).
+# Presents the hosted Supabase route shape on http://localhost:54321.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:54321 {
+	bind 127.0.0.1 [::1]
+	request_body {
+		max_size 32MB
+	}
+
+	handle /health {
+		respond "ok" 200
+	}
+	handle_path /auth/v1/* {
+		reverse_proxy 127.0.0.1:${GOTRUE_PORT} {
+			header_up X-Forwarded-Prefix /auth/v1
+		}
+	}
+	handle_path /storage/v1/* {
+		reverse_proxy 127.0.0.1:${STORAGE_PORT}
+	}
+	handle_path /rest/v1/* {
+		reverse_proxy 127.0.0.1:${POSTGREST_PORT}
+	}
+	handle {
+		header Content-Type application/json
+		respond `{"message":"Unknown local Supabase route"}` 404
+	}
+}

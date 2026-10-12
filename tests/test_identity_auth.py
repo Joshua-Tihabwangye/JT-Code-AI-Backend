@@ -120,6 +120,7 @@ def test_es256_jwks_token_authenticates(api_client, monkeypatch):
     monkeypatch.setattr(auth_module, "_fetch_jwks", fake_jwks)
     monkeypatch.setattr(auth_module.settings, "SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setattr(auth_module.settings, "SUPABASE_JWT_SECRET", "")
+    monkeypatch.setattr(auth_module.settings, "SUPABASE_JWT_VERIFICATION", "jwks")
 
     # The real Supabase project publishes its verify key as a JWK; PyJWT decodes
     # the raw JWK dict via PyJWK, exactly as authentication.py does.
@@ -149,6 +150,8 @@ def test_es256_jwks_token_authenticates(api_client, monkeypatch):
 @pytest.mark.django_db
 def test_jwks_failure_does_not_fall_back_to_hmac(api_client, user, monkeypatch):
     monkeypatch.setattr(auth_module.settings, "SUPABASE_URL", "https://project.supabase.co")
+    # Test settings default to hs256; JWKS mode must not fall back to the shared secret.
+    monkeypatch.setattr(auth_module.settings, "SUPABASE_JWT_VERIFICATION", "jwks")
     monkeypatch.setattr(auth_module, "_fetch_jwks", lambda: (_ for _ in ()).throw(ValueError("offline")))
     api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {_make_token()}")
 

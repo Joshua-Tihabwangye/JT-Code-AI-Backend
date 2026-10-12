@@ -84,8 +84,8 @@ jobs:
           CSRF_TRUSTED_ORIGINS: https://app.example.test
           DATABASE_URL: postgresql://db_user:db_password@db.example.test:5432/jtcode?sslmode=verify-full
           REDIS_URL: rediss://redis.example.test:6380/0
-          CELERY_BROKER_URL: rediss://redis.example.test:6380/1
-          CELERY_RESULT_BACKEND: rediss://redis.example.test:6380/2
+          CELERY_BROKER_URL: rediss://broker.example.test:6380/0
+          CELERY_RESULT_BACKEND: rediss://broker.example.test:6380/1
           KAFKA_BOOTSTRAP_SERVERS: kafka.example.test:9093
           KAFKA_SECURITY_PROTOCOL: SASL_SSL
           KAFKA_SASL_MECHANISM: SCRAM-SHA-512

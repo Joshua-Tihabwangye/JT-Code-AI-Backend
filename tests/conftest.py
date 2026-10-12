@@ -20,6 +20,23 @@ from django.conf import settings  # noqa: E402
 TEST_WALLET_CREDITS = 1_000_000
 
 
+@pytest.fixture
+def hermetic_env(monkeypatch):
+    """Hide the developer's local .env from tests that build an explicit environment.
+
+    config.settings.base loads .env into os.environ, so strict-profile validation
+    would otherwise see local values (http URLs, HS256 secrets) the test never set.
+    Subprocesses inherit JT_CODE_SKIP_DOTENV and skip loading .env themselves.
+    """
+    from dotenv import dotenv_values
+
+    for key, value in dotenv_values(PROJECT_ROOT / ".env").items():
+        # CI exports TEST_DATABASE_URL for real; the test profile requires it.
+        if key != "TEST_DATABASE_URL" and os.environ.get(key) == value:
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("JT_CODE_SKIP_DOTENV", "1")
+
+
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
     """Rate-limit counters (per IP/user/tenant) must not leak between tests."""

@@ -12,7 +12,10 @@ from kombu import Queue
 from config.logging import LOGGING  # noqa: F401
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(BASE_DIR / ".env")
+# JT_CODE_SKIP_DOTENV=1 keeps a developer's local .env out of processes that must
+# see only their explicit environment (the strict-profile tests' subprocesses).
+if os.environ.get("JT_CODE_SKIP_DOTENV") != "1":
+    load_dotenv(BASE_DIR / ".env")
 
 
 def env(name: str, default: str | None = None, *, required: bool = False) -> str:
@@ -759,6 +762,8 @@ SPECTACULAR_SETTINGS = {
     },
 }
 HEALTHCHECK_EXTERNAL_DEPENDENCIES = env_bool("HEALTHCHECK_EXTERNAL_DEPENDENCIES", False)
+# One server runs the app, Redis and Kafka on a private Docker network (docker-compose.prod.yml).
+SINGLE_HOST_DEPLOYMENT = env_bool("SINGLE_HOST_DEPLOYMENT", False)
 
 SENTRY_DSN = env("SENTRY_DSN")
 SENTRY_ENVIRONMENT = env("SENTRY_ENVIRONMENT")

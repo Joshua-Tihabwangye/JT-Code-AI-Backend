@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from django.conf import settings
@@ -183,10 +183,15 @@ def create_signed_upload(key: str) -> tuple[str, str]:
     if not token:
         raise SupabaseStorageError("Supabase Storage did not return a signed upload token.")
     if relative_url.startswith("http://") or relative_url.startswith("https://"):
-        return relative_url, token
-    # Storage returns a relative route on hosted projects.  Build the canonical
-    # endpoint ourselves so the frontend never needs the service key.
-    return _public_api(f"object/upload/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}"), token
+        upload_url = relative_url
+    else:
+        # Storage returns a relative route on hosted projects.  Build the canonical
+        # endpoint ourselves so the frontend never needs the service key.
+        upload_url = _public_api(f"object/upload/sign/{_object_path(settings.SUPABASE_STORAGE_BUCKET, key)}")
+    # Storage verifies the upload signature only from the ?token= query parameter.
+    if "token=" not in urlsplit(upload_url).query:
+        upload_url += ("&" if "?" in upload_url else "?") + urlencode({"token": token})
+    return upload_url, token
 
 
 def generate_signed_delivery_url(key: str, *, expires_in: int | None = None, external: bool = True) -> str:

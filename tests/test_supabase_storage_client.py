@@ -47,7 +47,10 @@ def test_create_signed_upload_uses_service_key_only_server_side(settings, monkey
     url, token = supabase_storage.create_signed_upload("jt-code/test/org/uploads/path.png")
 
     assert token == "one-object-token"
-    assert url.endswith("/object/upload/sign/jt-code-assets/jt-code/test/org/uploads/path.png")
+    # Storage only accepts the upload signature as the ?token= query parameter.
+    assert url.endswith(
+        "/object/upload/sign/jt-code-assets/jt-code/test/org/uploads/path.png?token=one-object-token"
+    )
     assert captured["headers"]["Authorization"] == "Bearer sb_secret_test"
     assert captured["headers"]["apikey"] == "sb_secret_test"
     assert captured["json"] == {"upsert": "false"}

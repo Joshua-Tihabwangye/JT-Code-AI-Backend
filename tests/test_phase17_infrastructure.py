@@ -113,12 +113,11 @@ def test_every_routed_queue_is_declared_and_consumed_exactly_once():
     assert set(consumed) == declared, declared ^ set(consumed)
     assert all(len(owners) == 1 for owners in consumed.values()), consumed
 
-    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
-    compose_queues = set()
-    for service in compose["services"].values():
-        queues = (service.get("environment") or {}).get("CELERY_QUEUES", "")
-        compose_queues |= {queue for queue in queues.split(",") if queue}
-    assert compose_queues == declared
+    # Local development runs one host worker for every queue (native stack and `make worker`).
+    native = _native_configure()
+    assert set(native.WORKER_QUEUES.split(",")) == declared
+    make_worker = re.search(r"^worker:\n\tcelery .* -Q (\S+)", (ROOT / "Makefile").read_text(), re.M)
+    assert make_worker and set(make_worker.group(1).split(",")) == declared
 
 
 # Kubernetes ------------------------------------------------------------------------------
@@ -259,48 +258,120 @@ def test_terraform_owns_namespace_secret_and_validates_required_keys():
     assert not list((ROOT / "infra/terraform").rglob("*.tfvars")), "tfvars must never be committed"
 
 
-def test_local_compose_runs_a_self_hosted_supabase_runtime():
-    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
-    services = compose["services"]
-    assert services["supabase-db"]["image"].startswith("supabase/postgres:")
-    assert "supabase-auth" in services
-    assert "supabase-storage" in services
-    assert "supabase-gateway" in services
-    assert services["n8n-db"]["image"].startswith("postgres:")
-    for name, service in compose["services"].items():
-        for port in service.get("ports", []):
-            assert str(port).startswith("127.0.0.1:"), f"{name} must not listen on all interfaces"
-    assert services["worker"]["env_file"] == [{"path": ".env", "required": False}]
-    # Compose expands variables before a service's env_file is loaded. These
-    # startup-critical passwords must therefore have Compose-level defaults.
-    supabase_password = services["supabase-db"]["environment"]["POSTGRES_PASSWORD"]
-    n8n_password = services["n8n-db"]["environment"]["POSTGRES_PASSWORD"]
-    assert "${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-" in supabase_password
-    assert "${JT_CODE_LOCAL_N8N_DB_PASSWORD:-" in n8n_password
-    storage_probe = services["supabase-storage"]["healthcheck"]["test"]
-    assert "http://127.0.0.1:5000/status" in storage_probe
+def _native_configure():
+    """Import scripts/native/configure.py (the native local stack generator) as a module."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("native_configure", ROOT / "scripts/native/configure.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolve annotations through sys.modules[cls.__module__].
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_local_compose_launcher_lists_and_opens_browser_endpoints():
-    launcher = (ROOT / "scripts/compose_up.sh").read_text()
+def _native_units():
+    native = _native_configure()
+    fake = {name: "x" * 32 for name in ("JT_KAFKA_CLUSTER_ID", "JT_SUPABASE_ANON_KEY")}
+    return native.build_units(fake)
+
+
+def test_local_development_runs_without_docker():
+    assert not (ROOT / "docker-compose.yml").exists(), (
+        "local development is native; production uses docker-compose.prod.yml"
+    )
+    makefile = (ROOT / "Makefile").read_text()
+    assert "compose-up:" not in makefile and "compose-down:" not in makefile
+    assert "native-up:" in makefile and "native-setup:" in makefile
+    assert "JT_CODE_STACK:-production" in (ROOT / "scripts/compose_up.sh").read_text()
+
+
+def test_native_stack_listens_on_loopback_only_and_caps_memory():
+    units = _native_units()
+    names = {unit.name for unit in units}
+    assert {
+        "jt-code-kafka",
+        "jt-code-supabase-auth",
+        "jt-code-supabase-rest",
+        "jt-code-supabase-storage",
+        "jt-code-supabase-gateway",
+        "jt-code-mailpit",
+        "jt-code-n8n",
+        "jt-code-api",
+        "jt-code-worker",
+        "jt-code-beat",
+        "jt-code-consumer",
+        "jt-code-streamlit",
+    } <= names
+    for unit in units:
+        rendered = unit.render()
+        assert re.search(r"^MemoryMax=\d+[MG]$", rendered, re.M), f"{unit.name} needs a memory ceiling"
+        assert "0.0.0.0" not in rendered, f"{unit.name} must not listen on all interfaces"
+        assert unit.target.startswith("jt-code-") and unit.target.endswith(".target")
+    # Each process serving Prometheus metrics needs its own port on a shared host.
+    metrics_ports = re.findall(
+        r"(?:CELERY_METRICS_PORT=|--metrics-port )(\d+)", "".join(u.render() for u in units)
+    )
+    assert len(metrics_ports) == len(set(metrics_ports)) == 2
+    native = ROOT / "infra/native"
+    assert "bind 127.0.0.1" in (native / "Caddyfile").read_text()
+    kafka = (native / "kafka.properties").read_text()
+    assert "listeners=PLAINTEXT://127.0.0.1:9092" in kafka
+    assert "advertised.listeners=PLAINTEXT://localhost:9092" in kafka
+    # Like production: topics come only from ensure_kafka_topics.
+    assert "auto.create.topics.enable=false" in kafka
+    assert "GOTRUE_API_HOST=127.0.0.1" in (native / "gotrue.env").read_text()
+    assert 'server-host = "127.0.0.1"' in (native / "postgrest.conf").read_text()
+    assert "SERVER_HOST=127.0.0.1" in (native / "storage.env").read_text()
+    assert "N8N_LISTEN_ADDRESS=127.0.0.1" in (native / "n8n.env").read_text()
+
+
+def test_native_bootstrap_provisions_pgvector_and_supabase_roles():
+    bootstrap = (ROOT / "scripts/native/bootstrap_system.sh").read_text()
+    assert "postgresql-$PG_MAJOR-pgvector" in bootstrap and "redis-server" in bootstrap
+    # pgvector in template1 so the per-worker pytest databases have it too.
+    assert "for db in template1 jt_code jt_code_test" in bootstrap
+    for role in (
+        "anon",
+        "authenticated",
+        "service_role",
+        "authenticator",
+        "supabase_auth_admin",
+        "supabase_storage_admin",
+    ):
+        assert f"'{role}'" in bootstrap
+    # Storage SET ROLEs to the request's JWT role on its own connection.
+    assert "GRANT anon, authenticated, service_role TO supabase_storage_admin;" in bootstrap
+    # The app role owns its databases but is not a superuser.
+    assert "ALTER ROLE jt_code LOGIN CREATEDB CREATEROLE NOSUPERUSER" in bootstrap
+    # A separate local admin login (pgAdmin) so the app role never needs superuser.
+    assert "ALTER ROLE jt_admin LOGIN SUPERUSER" in bootstrap
+
+
+def test_native_stack_launcher_bootstraps_like_the_migrate_role():
+    stack = (ROOT / "scripts/native/stack.sh").read_text()
     for endpoint in (
         "http://127.0.0.1:8000/api/docs/",
         "http://127.0.0.1:54321/auth/v1/health",
-        "http://127.0.0.1:5678",
+        "http://127.0.0.1:54321/storage/v1/status",
         "http://127.0.0.1:8025",
+        "http://127.0.0.1:5678/healthz",
         "http://127.0.0.1:8501",
         "http://127.0.0.1:9090",
         "http://127.0.0.1:3000",
-        "http://127.0.0.1:8080",
-        "http://127.0.0.1:5540",
     ):
-        assert endpoint in launcher
-    assert "up --build --detach" in launcher
-    assert "google-chrome" in launcher
-    assert "AUTO_OPEN_BROWSER" in launcher
-    makefile = (ROOT / "Makefile").read_text()
-    assert "compose-up-no-browser:" in makefile
-    assert "bash scripts/compose_up.sh" in makefile
+        assert endpoint in stack
+    entrypoint = (ROOT / "docker/entrypoint.sh").read_text()
+    for step in (
+        "migrate --noinput",
+        "configure_asset_storage",
+        "ensure_kafka_topics --grow",
+        "verify_messaging",
+        "verify_supabase",
+    ):
+        assert step in entrypoint and step in stack, step
+    assert stack.index("infra_up\n    bootstrap\n    app_up") > 0
 
 
 def test_container_entrypoint_prepares_prometheus_directory_before_manage_commands():

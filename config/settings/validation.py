@@ -16,6 +16,7 @@ _PLACEHOLDER_SECRETS = (
     "your-supabase-jwt-secret",
     "your-api-key",
     "placeholder",
+    "change-before-production",  # the old local Docker defaults; keep rejecting them
 )
 _REQUIRED_STRICT = (
     "DJANGO_SECRET_KEY",
@@ -73,6 +74,7 @@ _SECRET_ENV = (
 )
 _BOOL_ENV = (
     "DJANGO_DEBUG",
+    "SINGLE_HOST_DEPLOYMENT",
     "AI_GATEWAY_FALLBACK_ENABLED",
     "HEALTHCHECK_EXTERNAL_DEPENDENCIES",
     "SUPABASE_ALLOW_ANONYMOUS_USERS",
@@ -284,11 +286,23 @@ def _check_secret(problems: list[str], name: str) -> None:
         )
 
 
+def _single_host() -> bool:
+    """App, Redis and Kafka share one server's private Docker network (docker-compose.prod.yml)."""
+    return _val("SINGLE_HOST_DEPLOYMENT", "false").lower() in {"1", "true", "yes", "on"}
+
+
 def _check_tls_url(problems: list[str], name: str) -> None:
     value = _val(name)
     if not value:
         return
     parsed = urlparse(value)
+    if _single_host():
+        # Traffic never leaves the host, so TLS is optional; authentication is not.
+        if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+            problems.append(f"{name} must be a redis:// or rediss:// URL.")
+        elif not parsed.password:
+            problems.append(f"{name} must include a password (redis://:<password>@host:port/db).")
+        return
     if parsed.scheme != "rediss" or not parsed.hostname:
         problems.append(f"{name} must use a TLS redis URL (rediss://) in deployable environments.")
 
@@ -315,13 +329,23 @@ def _check_messaging(problems: list[str], *, strict: bool) -> None:
             problems.append(
                 "KAFKA_TOPIC_MIN_INSYNC_REPLICAS must be between 1 and KAFKA_TOPIC_REPLICATION_FACTOR."
             )
-        if strict and int(replicas) < 3:
-            problems.append("KAFKA_TOPIC_REPLICATION_FACTOR must be at least 3 in deployable environments.")
-        if strict and not 2 <= int(insync) < int(replicas):
-            problems.append(
-                "KAFKA_TOPIC_MIN_INSYNC_REPLICAS must be at least 2 and below the replication factor "
-                "in deployable environments, so acks=all writes survive the loss of one broker."
-            )
+        if strict and _single_host():
+            # One broker can hold one copy; anything else would make every topic creation fail.
+            if (int(replicas), int(insync)) != (1, 1):
+                problems.append(
+                    "SINGLE_HOST_DEPLOYMENT runs one Kafka broker: set KAFKA_TOPIC_REPLICATION_FACTOR=1 "
+                    "and KAFKA_TOPIC_MIN_INSYNC_REPLICAS=1."
+                )
+        elif strict:
+            if int(replicas) < 3:
+                problems.append(
+                    "KAFKA_TOPIC_REPLICATION_FACTOR must be at least 3 in deployable environments."
+                )
+            if not 2 <= int(insync) < int(replicas):
+                problems.append(
+                    "KAFKA_TOPIC_MIN_INSYNC_REPLICAS must be at least 2 and below the replication factor "
+                    "in deployable environments, so acks=all writes survive the loss of one broker."
+                )
     if not strict:
         return
     # One Redis instance has one eviction policy: a cache needs eviction, a broker must never evict.
@@ -435,7 +459,10 @@ def _check_observability(problems: list[str], *, strict: bool) -> None:
     if (token := _val("METRICS_AUTH_TOKEN")) and len(token) < 32:
         problems.append("METRICS_AUTH_TOKEN must be at least 32 characters.")
     if (endpoint := _val("OTEL_EXPORTER_OTLP_ENDPOINT")) and urlparse(endpoint).scheme != "https":
-        problems.append("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS in deployable environments.")
+        # An in-host collector reached by its Compose service name never leaves the host.
+        host = urlparse(endpoint).hostname or ""
+        if not (_single_host() and host and "." not in host):
+            problems.append("OTEL_EXPORTER_OTLP_ENDPOINT must use HTTPS in deployable environments.")
 
 
 def _check_n8n(problems: list[str], *, strict: bool) -> None:
@@ -529,6 +556,8 @@ def validate_environment(profile: str) -> list[str]:
         problems.append("DJANGO_ALLOWED_HOSTS is required in production/staging.")
     elif any(host == "*" for host in hosts):
         problems.append('DJANGO_ALLOWED_HOSTS may not contain "*" in production/staging.')
+    if any("*" in host or "/" in host for host in _origins(_val("DJANGO_INTERNAL_HOSTS"))):
+        problems.append("DJANGO_INTERNAL_HOSTS must list exact host names (service names or loopback).")
 
     callback_hosts = _origins(_val("WEBHOOK_ALLOWED_HOSTS"))
     if not callback_hosts:
@@ -541,7 +570,9 @@ def validate_environment(profile: str) -> list[str]:
     if database_url and (database.scheme not in {"postgres", "postgresql"} or not database.hostname):
         problems.append("DATABASE_URL must be a PostgreSQL connection string.")
     sslmode = parse_qs(database.query).get("sslmode", [""])[0].lower()
-    if database_url and sslmode not in {"require", "verify-ca", "verify-full"}:
+    # A self-hosted database reached by its Compose service name never leaves the host.
+    in_host_database = _single_host() and bool(database.hostname) and "." not in (database.hostname or "")
+    if database_url and not in_host_database and sslmode not in {"require", "verify-ca", "verify-full"}:
         problems.append(
             "DATABASE_URL must set sslmode to require, verify-ca, or verify-full in deployable environments."
         )
@@ -555,11 +586,21 @@ def validate_environment(profile: str) -> list[str]:
     for name in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
         _check_tls_url(problems, name)
     protocol = _val("KAFKA_SECURITY_PROTOCOL").upper()
-    if protocol != "SASL_SSL":
+    if _single_host():
+        if protocol not in {"SASL_SSL", "SASL_PLAINTEXT"}:
+            problems.append(
+                "KAFKA_SECURITY_PROTOCOL must be SASL_PLAINTEXT or SASL_SSL (Kafka requires a login)."
+            )
+    elif protocol != "SASL_SSL":
         problems.append("KAFKA_SECURITY_PROTOCOL must be SASL_SSL in deployable environments.")
     verification_mode = _val("SUPABASE_JWT_VERIFICATION", "jwks").lower()
     if verification_mode not in {"jwks", "hs256"}:
         problems.append("SUPABASE_JWT_VERIFICATION must be jwks or hs256.")
+    elif verification_mode == "hs256" and _single_host():
+        # Self-hosted Supabase signs sessions with one shared HS256 secret (GoTrue, PostgREST, Storage).
+        jwt_secret = _val("SUPABASE_JWT_SECRET")
+        if len(jwt_secret) < 32 or any(marker in jwt_secret.lower() for marker in _PLACEHOLDER_SECRETS):
+            problems.append("SUPABASE_JWT_SECRET must be a random secret of at least 32 characters.")
     elif verification_mode != "jwks":
         problems.append("SUPABASE_JWT_VERIFICATION must be jwks in deployable environments.")
     supabase_url, issuer = _val("SUPABASE_URL"), _val("SUPABASE_JWT_ISSUER")
@@ -576,7 +617,7 @@ def validate_environment(profile: str) -> list[str]:
     secret_key = _val("SUPABASE_SECRET_KEY")
     if secret_key.startswith("sb_publishable_"):
         problems.append("SUPABASE_SECRET_KEY must be the server secret key, not the publishable key.")
-    if _val("SUPABASE_JWT_SECRET"):
+    if _val("SUPABASE_JWT_SECRET") and verification_mode == "jwks":
         problems.append(
             "SUPABASE_JWT_SECRET must be unset in deployable environments; tokens are verified with JWKS."
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from django.conf import settings
 
 from config.settings.validation import validate_environment
@@ -25,8 +26,8 @@ def _strict_env() -> dict[str, str]:
         "SUPABASE_JWT_AUDIENCE": "authenticated",
         "SUPABASE_WEBHOOK_SIGNING_SECRET": "supabase-webhook-secret",
         "REDIS_URL": "rediss://redis.example.com:6380/0",
-        "CELERY_BROKER_URL": "rediss://redis.example.com:6380/1",
-        "CELERY_RESULT_BACKEND": "rediss://redis.example.com:6380/2",
+        "CELERY_BROKER_URL": "rediss://broker.example.com:6380/0",
+        "CELERY_RESULT_BACKEND": "rediss://broker.example.com:6380/1",
         "KAFKA_BOOTSTRAP_SERVERS": "kafka.example.com:9093",
         "KAFKA_SECURITY_PROTOCOL": "SASL_SSL",
         "KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
@@ -60,6 +61,7 @@ def test_django_logging_configuration_is_loaded():
     assert settings.LOGGING["formatters"]["json"]["()"] == "apps.core.logging.JSONFormatter"
 
 
+@pytest.mark.usefixtures("hermetic_env")
 def test_production_validation_accepts_complete_strict_env(monkeypatch):
     for key, value in _strict_env().items():
         monkeypatch.setenv(key, value)
@@ -67,6 +69,7 @@ def test_production_validation_accepts_complete_strict_env(monkeypatch):
     assert validate_environment("production") == []
 
 
+@pytest.mark.usefixtures("hermetic_env")
 def test_production_validation_requires_supabase_as_identity_source(monkeypatch):
     for key, value in _strict_env().items():
         monkeypatch.setenv(key, value)
@@ -79,6 +82,7 @@ def test_production_validation_requires_supabase_as_identity_source(monkeypatch)
     assert any("not the publishable key" in problem for problem in problems)
 
 
+@pytest.mark.usefixtures("hermetic_env")
 def test_production_validation_accepts_stronger_postgres_tls_modes(monkeypatch):
     for key, value in _strict_env().items():
         monkeypatch.setenv(key, value)

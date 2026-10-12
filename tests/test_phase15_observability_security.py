@@ -173,6 +173,34 @@ def test_http_metrics_use_route_templates_and_state_gauges_are_exported(client, 
     assert "jt_metrics_collector_up 1.0" in body
 
 
+# Not transaction=True: the scrape threads only read counts, and a flush here would
+# break serialized-rollback tests that run later on the same worker.
+@pytest.mark.django_db
+def test_standalone_metrics_server_scrapes_do_not_strand_database_connections(settings, monkeypatch):
+    """prometheus_client serves each scrape on a new thread; each one must close its connection."""
+    import threading
+
+    from django.db import connections
+
+    from apps.core import metrics
+
+    settings.METRICS_STATE_CACHE_SECONDS = 0
+    monkeypatch.setattr(metrics._STATE_COLLECTOR, "close_connections_after_collect", True)
+    results: list[tuple[bool, bool]] = []
+
+    def scrape() -> None:
+        families = list(metrics._STATE_COLLECTOR.collect())
+        up = next(f for f in families if f.name == "jt_metrics_collector_up")
+        results.append((up.samples[0].value == 1.0, connections["default"].connection is None))
+
+    for _ in range(3):
+        thread = threading.Thread(target=scrape)
+        thread.start()
+        thread.join()
+
+    assert results == [(True, True)] * 3
+
+
 def _exported_metric_names() -> set[str]:
     from apps.core.metrics import render_metrics
 
@@ -195,7 +223,12 @@ def _promql_expressions() -> list[tuple[str, str]]:
         assert dashboard["uid"] and dashboard["title"] and dashboard["panels"], path.name
         for panel in dashboard["panels"]:
             assert panel["targets"], f"{path.name}: {panel['title']} has no query"
-            expressions.extend((f"{path.name}:{panel['title']}", t["expr"]) for t in panel["targets"])
+            expressions.extend(
+                (f"{path.name}:{panel['title']}", t["expr"])
+                for t in panel["targets"]
+                # Tempo panels query traces with TraceQL, not exported metrics.
+                if t.get("datasource", {}).get("type") != "tempo"
+            )
     alerts = yaml.safe_load((ROOT / "infra/prometheus/alerts.yml").read_text())
     for group in alerts["groups"]:
         for rule in group["rules"]:
@@ -228,7 +261,7 @@ def test_grafana_and_prometheus_provisioning_is_well_formed():
     assert api_job["authorization"]["credentials_file"]  # the token is never inlined
     assert "attributes/scrub" in collector["service"]["pipelines"]["traces"]["processors"]
     uids = [json.loads(p.read_text())["uid"] for p in (ROOT / "infra/grafana/dashboards").glob("*.json")]
-    assert len(uids) == len(set(uids)) == 4
+    assert len(uids) == len(set(uids)) == 5
 
 
 # Tracing --------------------------------------------------------------------

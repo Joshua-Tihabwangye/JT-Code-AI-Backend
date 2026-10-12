@@ -24,6 +24,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from django.conf import settings
+from django.db import connections
 from django.http import HttpRequest, HttpResponse
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -218,6 +219,11 @@ def _state_queries() -> Iterable[
 class DatabaseStateCollector(Collector):
     """Expose business-state gauges; failures surface as ``jt_metrics_collector_up 0``."""
 
+    # Set by start_metrics_server: prometheus_client's HTTP server answers every scrape
+    # on a new thread, and Django keeps one (persistent) connection per thread, so each
+    # scrape would otherwise strand a database connection until max_connections runs out.
+    close_connections_after_collect = False
+
     def collect(self) -> Iterable[Metric]:
         ttl = float(getattr(settings, "METRICS_STATE_CACHE_SECONDS", 15))
         now = time.monotonic()
@@ -226,15 +232,19 @@ class DatabaseStateCollector(Collector):
             return
         families: list[Metric] = []
         healthy = 1.0
-        for name, documentation, labels, query in _state_queries():
-            family = GaugeMetricFamily(name, documentation, labels=labels)
-            try:
-                for values, value in query():
-                    family.add_metric(list(values), float(value))
-            except Exception:  # noqa: BLE001 - a broken query must not break the whole scrape
-                healthy = 0.0
-                continue
-            families.append(family)
+        try:
+            for name, documentation, labels, query in _state_queries():
+                family = GaugeMetricFamily(name, documentation, labels=labels)
+                try:
+                    for values, value in query():
+                        family.add_metric(list(values), float(value))
+                except Exception:  # noqa: BLE001 - a broken query must not break the whole scrape
+                    healthy = 0.0
+                    continue
+                families.append(family)
+        finally:
+            if self.close_connections_after_collect:
+                connections.close_all()  # only this scrape thread's connections
         up = GaugeMetricFamily("jt_metrics_collector_up", "1 when every state query succeeded.")
         up.add_metric([], healthy)
         families.append(up)
@@ -271,6 +281,7 @@ def start_metrics_server(port: int) -> None:
     if port:
         from prometheus_client import start_http_server
 
+        _STATE_COLLECTOR.close_connections_after_collect = True
         start_http_server(port, registry=_registry())
 
 
