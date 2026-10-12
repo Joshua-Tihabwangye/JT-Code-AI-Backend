@@ -38,6 +38,8 @@ spec:
             name: jt-code-config
         - secretRef:
             name: jt-code-secrets
+        - secretRef:
+            name: jt-code-kafka-admin
         env:
         - name: POD_IP
           valueFrom:

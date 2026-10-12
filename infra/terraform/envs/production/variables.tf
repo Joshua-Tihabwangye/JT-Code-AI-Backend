@@ -95,6 +95,14 @@ variable "registry_token" {
   sensitive = true
 }
 
+variable "kafka_role_credentials" {
+  type = map(object({
+    username = string
+    password = string
+  }))
+  sensitive = true
+}
+
 variable "external_secrets" {
   type      = map(string)
   sensitive = true

@@ -40,6 +40,7 @@ spec:
       - worker-ingestion
       - worker-documents
       - worker-analytics
+      - consumer-integrations
   podMetricsEndpoints:
   - port: metrics
     interval: 30s
@@ -136,6 +137,34 @@ spec:
       annotations:
         summary: Kafka consumers are dead-lettering events.
         runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#deadlettergrowth
+    - alert: KafkaConsumerLagHigh
+      expr: sum by (group, topic) (jt_kafka_consumer_lag) > 1000
+      for: 15m
+      labels:
+        severity: ticket
+      annotations:
+        summary: Consumer group {{ $labels.group }} is falling behind on {{ $labels.topic
+          }}.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#kafkaconsumerlaghigh
+    - alert: KafkaConsumerStalled
+      expr: time() - max by (group) (jt_kafka_consumer_last_poll_timestamp_seconds)
+        > 300
+      for: 5m
+      labels:
+        severity: page
+      annotations:
+        summary: Consumer group {{ $labels.group }} has not polled Kafka for over
+          five minutes.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#kafkaconsumerstalled
+    - alert: KafkaConsumerAbsent
+      expr: absent(jt_kafka_consumer_last_poll_timestamp_seconds)
+      for: 15m
+      labels:
+        severity: page
+      annotations:
+        summary: No Kafka consumer is reporting metrics; inbound webhooks are not
+          being processed.
+        runbook_url: https://github.com/Joshua-Tihabwangye/jt-code-backend/blob/main/docs/RUNBOOKS.md#kafkaconsumerabsent
     - alert: JobsStuckQueued
       expr: jt_jobs_active{status="queued"} > 200
       for: 15m

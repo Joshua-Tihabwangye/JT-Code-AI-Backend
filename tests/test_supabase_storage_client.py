@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from apps.assets import supabase_storage
 
 
@@ -107,3 +109,32 @@ def test_server_uses_internal_storage_but_returns_the_public_gateway(settings, m
 
     assert captured["url"].startswith("http://supabase-gateway:8000/storage/v1/")
     assert url.startswith("http://localhost:54321/storage/v1/")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "payload"),
+    [(404, {}), (400, {"statusCode": "404", "code": "NoSuchBucket", "message": "Bucket not found"})],
+)
+def test_missing_bucket_is_created_private_for_old_and_new_storage_apis(
+    settings, monkeypatch, status_code, payload
+):
+    _configure(settings)
+    lookup = Response(payload)
+    lookup.status_code = status_code
+    created = {}
+
+    def post(url, **kwargs):
+        created.update(url=url, **kwargs)
+        return Response()
+
+    def put(url, **kwargs):
+        raise AssertionError("a newly created bucket must not be updated")
+
+    monkeypatch.setattr(supabase_storage.httpx, "get", lambda url, **kwargs: lookup)
+    monkeypatch.setattr(supabase_storage.httpx, "post", post)
+    monkeypatch.setattr(supabase_storage.httpx, "put", put)
+    supabase_storage.ensure_private_bucket()
+
+    assert created["url"].endswith("/storage/v1/bucket/")
+    assert created["json"]["id"] == "jt-code-assets"
+    assert created["json"]["public"] is False

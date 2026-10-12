@@ -86,13 +86,14 @@ module "platform" {
 }
 
 module "app" {
-  depends_on        = [module.platform]
-  source            = "../app_environment"
-  environment       = var.environment
-  namespace         = "jt-code-${var.environment}"
-  secret_keys_file  = "${local.repo_root}/infra/k8s/secret-keys.txt"
-  registry_username = var.registry_username
-  registry_token    = var.registry_token
+  depends_on             = [module.platform]
+  source                 = "../app_environment"
+  environment            = var.environment
+  namespace              = "jt-code-${var.environment}"
+  secret_keys_file       = "${local.repo_root}/infra/k8s/secret-keys.txt"
+  registry_username      = var.registry_username
+  registry_token         = var.registry_token
+  kafka_role_credentials = var.kafka_role_credentials
   secrets = merge(
     module.supabase.settings,
     { for key, value in random_password.generated : key => value.result },

@@ -155,10 +155,11 @@ def runtime_connection_settings(
             "KEY_PREFIX": key_prefix,
         }
 
+    # REDIS_URL is the evicting cache instance; the Celery broker must be a separate,
+    # non-evicting instance in deployable profiles (validation.py, verify_messaging).
     caches = {
         "default": redis_cache("jt-code:cache", 300),
         "rate_limits": redis_cache("jt-code:rate-limit", 3600),
-        "job_locks": redis_cache("jt-code:job-lock", 900),
     }
     return database, caches, redis_url, broker_url, result_url
 
@@ -469,6 +470,8 @@ KAFKA_CONSUMER_MAX_ATTEMPTS = int(env("KAFKA_CONSUMER_MAX_ATTEMPTS", "5"))
 KAFKA_CONSUMER_RETRY_MAX_SECONDS = int(env("KAFKA_CONSUMER_RETRY_MAX_SECONDS", "30"))
 KAFKA_TOPIC_PARTITIONS = int(env("KAFKA_TOPIC_PARTITIONS", "3"))
 KAFKA_TOPIC_REPLICATION_FACTOR = int(env("KAFKA_TOPIC_REPLICATION_FACTOR", "3"))
+# With acks=all, a write is durable once this many replicas have it; RF 3 / ISR 2 survives one broker loss.
+KAFKA_TOPIC_MIN_INSYNC_REPLICAS = int(env("KAFKA_TOPIC_MIN_INSYNC_REPLICAS", "2"))
 KAFKA_TOPIC_RETENTION_MS = int(env("KAFKA_TOPIC_RETENTION_MS", str(7 * 24 * 3600 * 1000)))
 
 AI_PROVIDER = env("AI_PROVIDER", "disabled")

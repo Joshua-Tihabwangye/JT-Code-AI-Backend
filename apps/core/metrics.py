@@ -68,6 +68,23 @@ WEBHOOKS = Counter("jt_webhooks_received_total", "Inbound webhooks by outcome.",
 SECURITY_EVENTS = Counter("jt_security_events_total", "Security-relevant rejections.", ["kind"])
 AUDIT_EVENTS = Counter("jt_audit_events_total", "Audit events recorded.", ["category", "severity"])
 OUTBOX_PUBLISHED = Counter("jt_outbox_published_total", "Outbox events published to Kafka.", ["outcome"])
+KAFKA_CONSUMED = Counter(
+    "jt_kafka_consumer_messages_total",
+    "Kafka messages handled by disposition.",
+    ["group", "topic", "disposition"],
+)
+KAFKA_CONSUMER_LAG = Gauge(
+    "jt_kafka_consumer_lag",
+    "Messages behind the partition high watermark, per assigned partition.",
+    ["group", "topic", "partition"],
+    multiprocess_mode="max",
+)
+KAFKA_CONSUMER_LAST_POLL = Gauge(
+    "jt_kafka_consumer_last_poll_timestamp_seconds",
+    "Unix time of the consumer's most recent poll; stops advancing when the loop stalls.",
+    ["group"],
+    multiprocess_mode="max",
+)
 COST_ANOMALIES = Counter("jt_cost_anomalies_total", "Hourly provider-cost anomalies.", ["scope"])
 WORKFLOW_DISPATCHES = Counter(
     "jt_workflow_dispatches_total", "n8n workflow dispatch attempts.", ["workflow", "outcome"]
@@ -249,6 +266,14 @@ def render_metrics() -> bytes:
     return generate_latest(_registry())
 
 
+def start_metrics_server(port: int) -> None:
+    """Serve ``/metrics`` on ``port`` for non-HTTP processes (Celery workers, Kafka consumers)."""
+    if port:
+        from prometheus_client import start_http_server
+
+        start_http_server(port, registry=_registry())
+
+
 def metrics_view(request: HttpRequest) -> HttpResponse:
     """Prometheus exposition, protected by ``Authorization: Bearer <METRICS_AUTH_TOKEN>``.
 
@@ -307,11 +332,7 @@ def connect_celery_signals() -> None:
     signals.task_retry.connect(retry, weak=False, dispatch_uid="jt-metrics-retry")
 
     def start_exporter(**_: Any) -> None:
-        port = int(getattr(settings, "CELERY_METRICS_PORT", 0) or 0)
-        if port:
-            from prometheus_client import start_http_server
-
-            start_http_server(port, registry=_registry())
+        start_metrics_server(int(getattr(settings, "CELERY_METRICS_PORT", 0) or 0))
 
     signals.worker_ready.connect(start_exporter, weak=False, dispatch_uid="jt-metrics-exporter")
 

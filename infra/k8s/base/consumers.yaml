@@ -46,6 +46,8 @@ spec:
             name: jt-code-config
         - secretRef:
             name: jt-code-secrets
+        - secretRef:
+            name: jt-code-kafka-consumer
         env:
         - name: POD_IP
           valueFrom:
@@ -53,6 +55,8 @@ spec:
               fieldPath: status.podIP
         - name: PROMETHEUS_MULTIPROC_DIR
           value: /tmp/prometheus
+        - name: CELERY_METRICS_PORT
+          value: '9808'
         resources:
           requests:
             cpu: 50m
@@ -70,6 +74,21 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        ports:
+        - name: metrics
+          containerPort: 9808
+          protocol: TCP
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - test $(( $(date +%s) - $(stat -c %Y /tmp/kafka-consumer.heartbeat) ))
+              -lt 120
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
       volumes:
       - name: tmp
         emptyDir:

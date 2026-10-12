@@ -153,6 +153,7 @@ _INT_ENV = (
     "KAFKA_CONSUMER_RETRY_MAX_SECONDS",
     "KAFKA_TOPIC_PARTITIONS",
     "KAFKA_TOPIC_REPLICATION_FACTOR",
+    "KAFKA_TOPIC_MIN_INSYNC_REPLICAS",
     "KAFKA_TOPIC_RETENTION_MS",
     "ANALYTICS_MAX_INLINE_BYTES",
     "ANALYTICS_MAX_DATASET_BYTES",
@@ -290,6 +291,48 @@ def _check_tls_url(problems: list[str], name: str) -> None:
     parsed = urlparse(value)
     if parsed.scheme != "rediss" or not parsed.hostname:
         problems.append(f"{name} must use a TLS redis URL (rediss://) in deployable environments.")
+
+
+def _redis_instance(url: str) -> tuple[str, int] | None:
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return None
+    try:
+        port = parsed.port or 6379
+    except ValueError:
+        return None
+    return parsed.hostname.lower(), port
+
+
+def _check_messaging(problems: list[str], *, strict: bool) -> None:
+    """Kafka durability and Redis role separation (cache vs. Celery broker)."""
+    replicas, insync = (
+        _val("KAFKA_TOPIC_REPLICATION_FACTOR", "3"),
+        _val("KAFKA_TOPIC_MIN_INSYNC_REPLICAS", "2"),
+    )
+    if replicas.isdigit() and insync.isdigit():
+        if int(insync) < 1 or int(insync) > int(replicas):
+            problems.append(
+                "KAFKA_TOPIC_MIN_INSYNC_REPLICAS must be between 1 and KAFKA_TOPIC_REPLICATION_FACTOR."
+            )
+        if strict and int(replicas) < 3:
+            problems.append("KAFKA_TOPIC_REPLICATION_FACTOR must be at least 3 in deployable environments.")
+        if strict and not 2 <= int(insync) < int(replicas):
+            problems.append(
+                "KAFKA_TOPIC_MIN_INSYNC_REPLICAS must be at least 2 and below the replication factor "
+                "in deployable environments, so acks=all writes survive the loss of one broker."
+            )
+    if not strict:
+        return
+    # One Redis instance has one eviction policy: a cache needs eviction, a broker must never evict.
+    cache, broker = _redis_instance(_val("REDIS_URL")), _redis_instance(_val("CELERY_BROKER_URL"))
+    if cache and broker and cache == broker:
+        problems.append(
+            "CELERY_BROKER_URL must use a separate Redis instance from REDIS_URL in deployable environments "
+            "(the cache evicts keys; the broker must use maxmemory-policy noeviction)."
+        )
+    if (keda := _val("KEDA_REDIS_ADDRESS")) and broker and _redis_instance(f"rediss://{keda}") != broker:
+        problems.append("KEDA_REDIS_ADDRESS must be the host:port of the Celery broker (CELERY_BROKER_URL).")
 
 
 _GEMINI_THRESHOLDS = frozenset(
@@ -467,6 +510,7 @@ def validate_environment(profile: str) -> list[str]:
     _check_tools(problems, strict=strict)
     _check_observability(problems, strict=strict)
     _check_n8n(problems, strict=strict)
+    _check_messaging(problems, strict=strict)
     if not strict:
         return problems
 

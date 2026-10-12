@@ -27,14 +27,14 @@ The originating request's `request_id`/`trace_id` are captured into the outbox r
 
 ## Topic provisioning
 
-Do not rely on broker auto-creation. Before the first deploy, and whenever `KNOWN_EVENT_TYPES` grows, run:
+Do not rely on broker auto-creation (it is disabled locally too). The `migrate` container role runs `ensure_kafka_topics --grow` on every deploy, then `verify_messaging` (with `--strict` in staging/production, which fails the deploy on any problem). To run it by hand:
 
 ```bash
 python manage.py ensure_kafka_topics --dry-run   # list missing topics
 python manage.py ensure_kafka_topics             # create them
 ```
 
-Topics are created with `KAFKA_TOPIC_PARTITIONS`, `KAFKA_TOPIC_REPLICATION_FACTOR`, and `KAFKA_TOPIC_RETENTION_MS`. The event key is the aggregate ID, so per-aggregate order holds within a partition; a retried outbox row can still be delivered after a later event for the same key, so consumers must tolerate reordering (use state checks, as the webhook handler does).
+Topics are created with `KAFKA_TOPIC_PARTITIONS`, `KAFKA_TOPIC_REPLICATION_FACTOR`, `KAFKA_TOPIC_RETENTION_MS` and `min.insync.replicas = KAFKA_TOPIC_MIN_INSYNC_REPLICAS` (omitted when 1). Existing topics have their retention, cleanup policy and `min.insync.replicas` reconciled; a topic with fewer replicas than configured fails the command, because raising the replication factor needs an operator-run partition reassignment. Staging/production require replication factor ≥ 3 and 2 ≤ min.insync.replicas < replication factor, so `acks=all` writes survive one broker loss. The event key is the aggregate ID, so per-aggregate order holds within a partition; a retried outbox row can still be delivered after a later event for the same key, so consumers must tolerate reordering (use state checks, as the webhook handler does).
 
 ## Publishing and failure policy
 
@@ -90,3 +90,19 @@ Investigate `DeadLetterEvent` through Django admin. Replay is a deliberate opera
 4. Stop Kafka temporarily; confirm `OutboxEvent.available_at` moves forward with backoff and the event is not lost.
 
 Run this drill against staging Kafka. The automated tests exercise these state transitions at the Kafka client boundary and intentionally do not require a Docker or broker process.
+
+## Operating and monitoring
+
+- **Dashboards (local Docker):** Redpanda Console at http://127.0.0.1:8080 shows topics, messages, consumer groups with lag, and broker health. Prometheus scrapes the broker (`kafka:9644/public_metrics`) and the consumer (`consumer:9808`).
+- **Consumer metrics:** `jt_kafka_consumer_messages_total{group,topic,disposition}`, `jt_kafka_consumer_lag{group,topic,partition}` (every 30 s) and `jt_kafka_consumer_last_poll_timestamp_seconds{group}`. Alerts: `KafkaConsumerLagHigh`, `KafkaConsumerStalled`, `KafkaConsumerAbsent`, plus the outbox and dead-letter alerts.
+- **Liveness:** the consumer touches `/tmp/kafka-consumer.heartbeat` every 10 s; an orchestrator restarts it when the file is older than two minutes.
+
+## Access control (least privilege)
+
+Use three Kafka principals. With Kubernetes they are wired by `infra/terraform` (`kafka_role_credentials`) and `scripts/k8s/gen_base.py`; with Docker, give the consumer and migrate containers their own `KAFKA_SASL_USERNAME`/`KAFKA_SASL_PASSWORD`.
+
+| Principal | Used by | ACLs (prefixed on `KAFKA_TOPIC_PREFIX.` / `KAFKA_CONSUMER_GROUP_PREFIX.`) |
+| --- | --- | --- |
+| producer | API, workers, beat (outbox publisher) | Topic: `WRITE`, `DESCRIBE`; Cluster: `IDEMPOTENT_WRITE` |
+| consumer | `run_kafka_consumer` | Topic: `READ`, `DESCRIBE`; Group: `READ` |
+| admin | `migrate` (`ensure_kafka_topics`, `verify_messaging`) | Topic: `CREATE`, `DESCRIBE`, `DESCRIBE_CONFIGS`, `ALTER_CONFIGS`, `ALTER`; Cluster: `DESCRIBE`, `DESCRIBE_CONFIGS` |

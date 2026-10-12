@@ -15,8 +15,12 @@ over canonical state.
 
 - **Django/PostgreSQL is the single source of truth.** Redis, Kafka and n8n
   never hold canonical business state.
-- **Redis** = cache + Celery transport only. No durable business state lives in
-  Redis (keys prefixed `jt-code`). It is not a database.
+- **Redis** = cache + Celery transport + short-lived coordination: rate-limit
+  counters, webhook replay nonces, AI circuit-breaker state and chat-status
+  publish/subscribe for SSE. No durable business state lives in Redis (keys
+  prefixed `jt-code`); it is not a database. Deployable environments use two
+  instances: an evicting cache (`REDIS_URL`, `allkeys-lru`) and a non-evicting
+  Celery broker (`CELERY_BROKER_URL`, `noeviction`).
 - **Celery** = Django-owned background jobs and schedules. Durable job state
   lives in `apps/jobs.Job` (status, progress, retry, cancel); Celery Beat
   drives the schedule (`config/settings/base.py`); tasks must be idempotent and
@@ -27,7 +31,9 @@ over canonical state.
   that mutates state, then published by the outbox publisher task
   (`apps.events.tasks.publish_outbox_batch`) to Kafka topics prefixed
   `KAFKA_TOPIC_PREFIX`. Consumers (`apps.events.management.commands.run_kafka_consumer`)
-  must be idempotent and manual-commit.
+  must be idempotent and manual-commit. Today one consumer is deployed
+  (`integrations.webhook.received`); the other topics are a durable, replayable
+  record for downstream consumers that are added per use case.
 - **n8n** = external workflow orchestration only. Django signs
   Django→n8n requests and verifies n8n→Django callbacks; workflow events are
   published back through Kafka; failures relay to Sentry

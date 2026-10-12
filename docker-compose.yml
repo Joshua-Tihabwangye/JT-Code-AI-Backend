@@ -23,6 +23,9 @@ x-app-base: &app-base
     CELERY_RESULT_BACKEND: redis://redis:6379/2
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+    # The local Redpanda is a single broker; the base default of 3 replicas cannot be satisfied.
+    KAFKA_TOPIC_REPLICATION_FACTOR: "1"
+    KAFKA_TOPIC_MIN_INSYNC_REPLICAS: "1"
     N8N_BASE_URL: http://n8n:5678
     N8N_WEBHOOK_BASE_URL: http://n8n:5678
     N8N_CALLBACK_BASE_URL: http://api:8000/api/v1
@@ -62,7 +65,6 @@ x-bootstrap-dependencies: &bootstrap-dependencies
 x-runtime-dependencies: &runtime-dependencies
   <<: *bootstrap-dependencies
   migrate: {condition: service_completed_successfully}
-  kafka-init: {condition: service_completed_successfully}
 
 x-app: &app
   <<: *app-base
@@ -281,6 +283,8 @@ services:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     restart: unless-stopped
+    # Loopback only (no auth): lets host-run `make run` / `make worker` use REDIS_URL from .env.
+    ports: ["127.0.0.1:6379:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -294,6 +298,8 @@ services:
       - redpanda start --mode dev-container --smp 1 --overprovisioned
       - --kafka-addr internal://0.0.0.0:9092
       - --advertise-kafka-addr internal://kafka:9092
+      # Like production: topics come only from ensure_kafka_topics (run by migrate), never auto-created.
+      - --set redpanda.auto_create_topics_enabled=false
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
@@ -301,13 +307,6 @@ services:
       timeout: 5s
       retries: 12
     volumes: [kafka-data:/var/lib/redpanda/data]
-
-  kafka-init:
-    <<: *app-base
-    command: ["manage", "ensure_kafka_topics"]
-    restart: "no"
-    depends_on:
-      kafka: {condition: service_healthy}
 
   migrate:
     <<: *app-base
@@ -352,7 +351,7 @@ services:
 
   consumer:
     <<: *app
-    command: ["consumer", "integrations.webhook.received", "--consumer-name", "integration-webhooks"]
+    command: ["consumer", "integrations.webhook.received", "--consumer-name", "integration-webhooks", "--metrics-port", "9808"]
 
   n8n-db:
     image: postgres:16.10-alpine
@@ -419,6 +418,37 @@ services:
     depends_on:
       api: {condition: service_healthy}
 
+  # Dashboards for the self-hosted brokers (bound to localhost only).
+  kafka-console:
+    # Redpanda Console: topics, messages, consumer groups and lag, broker health.
+    image: redpandadata/console:v2.7.2
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDPANDA_ADMINAPI_ENABLED: "true"
+      REDPANDA_ADMINAPI_URLS: http://kafka:9644
+    depends_on:
+      kafka: {condition: service_healthy}
+    ports: ["127.0.0.1:8080:8080"]
+
+  redisinsight:
+    # RedisInsight: browse keys, memory, slow log and live commands. Add the database as host "redis", port 6379.
+    image: redis/redisinsight:2.58.0
+    restart: unless-stopped
+    volumes: [redisinsight-data:/data]
+    depends_on:
+      redis: {condition: service_healthy}
+    ports: ["127.0.0.1:5540:5540"]
+
+  redis-exporter:
+    # Prometheus metrics for Redis (memory, clients, keys, evictions), charted in Grafana.
+    image: oliver006/redis_exporter:v1.66.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis: {condition: service_healthy}
+
   prometheus:
     image: prom/prometheus:v2.55.0
     restart: unless-stopped
@@ -456,6 +486,7 @@ services:
 
 volumes:
   redis-data: {}
+  redisinsight-data: {}
   kafka-data: {}
   n8n-data: {}
   n8n-db-data: {}

@@ -11,6 +11,8 @@ readonly ENDPOINTS=(
   "Streamlit|http://127.0.0.1:8501"
   "Prometheus|http://127.0.0.1:9090"
   "Grafana|http://127.0.0.1:3000"
+  "Kafka Console|http://127.0.0.1:8080"
+  "RedisInsight|http://127.0.0.1:5540"
 )
 
 print_endpoints() {

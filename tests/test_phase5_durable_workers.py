@@ -213,7 +213,8 @@ def test_retry_backoff_is_bounded_and_jittered(monkeypatch):
 
 
 def test_redis_namespaces_and_worker_safety_settings_are_configured():
-    assert {"default", "rate_limits", "job_locks"} <= set(settings.CACHES)
+    # Locks live in PostgreSQL (select_for_update/skip_locked), not Redis.
+    assert set(settings.CACHES) == {"default", "rate_limits"}
     assert settings.CACHES["rate_limits"]["KEY_PREFIX"].endswith("rate-limit")
     assert settings.CELERY_TASK_ACKS_LATE is True
     assert settings.CELERY_TASK_REJECT_ON_WORKER_LOST is True
