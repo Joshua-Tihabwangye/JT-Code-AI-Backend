@@ -353,6 +353,9 @@ class VisualsRequestSerializer(serializers.Serializer):
     mode = serializers.ChoiceField(choices=["light", "dark"], default="light")
     today = serializers.DateField(required=False)
     dashboardId = serializers.UUIDField(required=False)
+    # What calculated measures may reference: what-if parameter values and other calculations.
+    parameters = serializers.DictField(child=serializers.FloatField(), required=False)
+    calculations = serializers.ListField(child=serializers.JSONField(), required=False, max_length=100)
 
 
 class AutoDashboardSerializer(serializers.Serializer):

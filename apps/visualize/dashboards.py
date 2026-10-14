@@ -69,7 +69,10 @@ def render(
     theme: Any,
     mode: str,
     today: dt.date,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """``context`` carries what calculated measures may reference: ``parameters`` (what-if values
+    by name) and ``calculations`` (expressions by name)."""
     started = time.monotonic()
     resolved = themes.resolve(theme, mode)
     outputs: dict[str, dict[str, Any]] = {}
@@ -82,10 +85,11 @@ def render(
     }
     by_dataset: dict[str, list[dict[str, Any]]] = {}
     for visual in visuals:
-        if visual.get("type") == "text":
+        if visual.get("type") in visual_plan.LOCAL_TYPES:
+            # Text, parameter controls, buttons and navigators are drawn by the browser.
             outputs[visual["id"]] = {
                 "id": visual["id"],
-                "type": "text",
+                "type": visual.get("type"),
                 "status": "ok",
                 "title": visual.get("title", ""),
             }
@@ -98,7 +102,7 @@ def render(
     for dataset_id, group in by_dataset.items():
         dataset = datasets[dataset_id]
         try:
-            _render_dataset(dataset, group, filters, resolved, today, outputs, stats)
+            _render_dataset(dataset, group, filters, resolved, today, outputs, stats, context or {})
         except AnalysisError as exc:
             for visual in group:
                 outputs.setdefault(visual["id"], _error(visual, str(exc)))
@@ -118,6 +122,7 @@ def _render_dataset(
     today: dt.date,
     outputs: dict[str, dict[str, Any]],
     stats: dict[str, int],
+    context: dict[str, Any],
 ) -> None:
     kinds = _kinds(dataset)
     token = store.dataset_token(dataset)
@@ -126,7 +131,7 @@ def _render_dataset(
     planned: list[tuple[dict[str, Any], dict[str, Any], dict[str, str]]] = []
     for visual in visuals:
         try:
-            queries = visual_plan.plan(visual, kinds, scoped, today)
+            queries = visual_plan.plan(visual, kinds, scoped, today, context)
         except visual_plan.PlanError as exc:
             outputs[visual["id"]] = _error(visual, str(exc))
             continue
@@ -135,7 +140,8 @@ def _render_dataset(
     theme_key = _digest(theme)
     pending: list[tuple[dict[str, Any], dict[str, Any], dict[str, str], str]] = []
     for visual, queries, keys in planned:
-        visual_key = "viz-v:" + _digest(visual, keys, theme_key, order)
+        # The queries are part of the key: a calculation's output changes with its parameters.
+        visual_key = "viz-v:" + _digest(visual, keys, queries, theme_key, order)
         cached = cache.get(visual_key)
         if cached is not None:
             outputs[visual["id"]] = cached
@@ -180,15 +186,26 @@ def _render_dataset(
         }
         for visual, queries, keys, _ in pending
     ]
-    request: dict[str, Any] = {"items": items, "theme": theme, "categoryOrder": order, "kinds": kinds}
-    if needed:
-        output = services.engine("viz_visuals", dataset, **request)
+    # Each Python visual runs in its own engine process, so a slow or failing script only
+    # affects its own tile; everything else shares one run.
+    batches = [[i for i in items if i["visual"].get("type") != "python"]]
+    batches += [[i] for i in items if i["visual"].get("type") == "python"]
+    built: dict[Any, dict[str, Any]] = {}
+    for batch in batches:
+        if not batch:
+            continue
+        request: dict[str, Any] = {"items": batch, "theme": theme, "categoryOrder": order, "kinds": kinds}
+        missing = any(role not in item["results"] for item in batch for role in item["queries"])
+        try:
+            output = services.engine("viz_visuals", dataset if missing else None, **request)
+        except AnalysisError as exc:
+            if any(item["visual"].get("type") != "python" for item in batch):
+                raise
+            output = {"visuals": [_error(batch[0]["visual"], f"The script failed: {exc}")]}
         for key, value in (output.get("results") or {}).items():
             cache.set("viz-q:" + key, value, QUERY_TTL)
-    else:
-        output = services.engine("viz_visuals", None, **request)
-    stats["engineRuns"] += 1
-    built = {item.get("id"): item for item in output.get("visuals") or []}
+        stats["engineRuns"] += 1
+        built.update({item.get("id"): item for item in output.get("visuals") or []})
     for visual, _, _, visual_key in pending:
         result = built.get(visual["id"]) or _error(visual, "This visual could not be drawn.")
         outputs[visual["id"]] = result

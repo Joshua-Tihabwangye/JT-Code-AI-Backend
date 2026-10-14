@@ -28,15 +28,24 @@ from typing import Any
 import pandas as pd
 
 _HERE = Path(__file__).resolve().parent
-if "jt_viz_query" not in sys.modules:  # loaded by path inside the sandbox
-    import importlib.util
 
-    _spec = importlib.util.spec_from_file_location("jt_viz_query", _HERE / "viz_query.py")
-    assert _spec and _spec.loader
-    _module = importlib.util.module_from_spec(_spec)
-    sys.modules["jt_viz_query"] = _module
-    _spec.loader.exec_module(_module)
-_q = sys.modules["jt_viz_query"]
+
+def _sibling(name: str, filename: str) -> Any:
+    """A sibling engine module, loaded by path (the sandbox has no package on ``sys.path``)."""
+    if name not in sys.modules:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(name, _HERE / filename)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+_q = _sibling("jt_viz_query", "viz_query.py")
+_expr = _sibling("jt_viz_expr", "viz_expr.py")
+_x = _sibling("jt_viz_extras", "viz_extras.py")
 BLANK, frame, show_value_as, top_n = _q.BLANK, _q.frame, _q.show_value_as, _q.top_n
 
 AGG_LABEL = {
@@ -263,7 +272,9 @@ def _shape(visual, query, result, ctx, *, sort_by_value=True, top=True):
     grain = groups[0].get("grain") if groups else None
     for measure in measures:
         if measure.get("showValueAs"):
-            table[measure["id"]] = show_value_as(table, measure["id"], measure["showValueAs"], cat, leg)
+            table[measure["id"]] = show_value_as(
+                table, measure["id"], measure["showValueAs"], cat, leg, window=measure.get("window", 3)
+            )
     first = measures[0]["id"] if measures else None
     sort = _fmt(visual, "sort")
     if cat and first:
@@ -319,13 +330,53 @@ def _data(columns: list[str], rows: list[list[Any]]) -> dict[str, Any]:
     return {"columns": columns, "rows": rows[:500], "truncated": len(rows) > 500}
 
 
+PERCENT_MODES = {"pct_total", "pct_row", "pct_column", "pct_diff_prev", "yoy_pct"}
+
+
+def _is_pct(measure: dict[str, Any]) -> bool:
+    if measure.get("showValueAs"):
+        return measure["showValueAs"] in PERCENT_MODES
+    return measure.get("format") == "percent"
+
+
 def _pct(measures: list[dict[str, Any]]) -> bool:
-    return bool(measures) and measures[0].get("showValueAs") in {
-        "pct_total",
-        "pct_row",
-        "pct_column",
-        "pct_diff_prev",
-    }
+    return bool(measures) and _is_pct(measures[0])
+
+
+def _materialize(query: dict[str, Any], result: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Evaluate calculated measures over the aggregated rows: the result then has one column per
+    measure the visual shows, exactly like a query without calculations."""
+    output = query.get("output")
+    if not output or query.get("rows"):
+        return query, result
+    columns = list(result.get("columns") or [])
+    rows = list(result.get("rows") or [])
+    index = {name: position for position, name in enumerate(columns)}
+    groups = len(query["groupBy"])
+
+    def number(value: Any) -> float:
+        try:
+            return float(value)
+        except TypeError, ValueError:
+            return math.nan
+
+    built: list[list[Any]] = [list(row[:groups]) for row in rows]
+    for measure in output:
+        if measure.get("agg") == "calc":
+            leaves = {
+                (agg, field): [number(row[index[leaf]]) for row in rows]
+                for agg, field, leaf in measure["leaves"]
+            }
+            values = [
+                None if math.isnan(v) else float(v)
+                for v in _expr.evaluate(measure["expr"], leaves, len(rows))
+            ]
+        else:
+            values = [row[index[measure["id"]]] for row in rows]
+        for target, value in zip(built, values, strict=True):
+            target.append(value)
+    names = [f"g{i}" for i in range(groups)] + [m["id"] for m in output]
+    return {**query, "measures": output}, {**result, "columns": names, "rows": built}
 
 
 # --- Builders -----------------------------------------------------------------------------------
@@ -334,10 +385,14 @@ def _pct(measures: list[dict[str, Any]]) -> bool:
 def build_cards(visual, queries, results, ctx):
     query, result = queries["main"], results["main"]
     row = (result.get("rows") or [[None] * len(query["measures"])])[0]
-    cards = [
-        {"label": measure_label(m), "value": value, "display": compact(value)}
-        for m, value in zip(query["measures"], row, strict=False)
-    ]
+    conditional = _fmt(visual, "conditional")
+    cards = []
+    for m, value in zip(query["measures"], row, strict=False):
+        card = {"label": measure_label(m), "value": value, "display": compact(value, _is_pct(m))}
+        style = _x.paint(_x.rules_for(conditional, m["id"]), [value], ctx.theme)[0]
+        if style.get("color") or style.get("bg"):
+            card["color"] = style.get("color") or style.get("bg")
+        cards.append(card)
     out = {
         "cards": cards,
         "data": _data([c["label"] for c in cards], [[c["value"] for c in cards]]),
@@ -359,8 +414,11 @@ def build_kpi(visual, queries, results, ctx):
     kpi: dict[str, Any] = {
         "label": _title(visual, measure_label(measure)),
         "value": value,
-        "display": compact(value),
+        "display": compact(value, _is_pct(measure)),
     }
+    style = _x.paint(_x.rules_for(_fmt(visual, "conditional"), measure["id"]), [value], ctx.theme)[0]
+    if style.get("color") or style.get("bg"):
+        kpi["color"] = style.get("color") or style.get("bg")
     trend = results.get("trend")
     if trend and trend.get("rows"):
         points = [(row[0], row[1]) for row in trend["rows"] if row[0] is not None and row[1] is not None]
@@ -445,6 +503,8 @@ def build_category(visual, queries, results, ctx):
     """bar, column, line, area and combo."""
     vtype = visual["type"]
     query = queries["main"]
+    if _small_multiples(visual) and len(query["groupBy"]) > 1:
+        return build_multiples(visual, query, results["main"], ctx)
     table, cat, leg, measures, notes = _shape(
         visual, query, results["main"], ctx, sort_by_value=vtype in {"bar", "column"}
     )
@@ -488,6 +548,7 @@ def build_category(visual, queries, results, ctx):
             series.append(
                 {
                     "name": measure_label(measure),
+                    "measure": measure["id"],
                     "values": values,
                     "color": ctx.color(index),
                     "secondary": measure["id"] in secondary_ids
@@ -567,6 +628,16 @@ def build_category(visual, queries, results, ctx):
                     entry["areaStyle"] = {"opacity": 0.55}
             if item.get("secondary"):
                 entry["yAxisIndex"] = 1
+        rules = _x.rules_for(_fmt(visual, "conditional"), item.get("measure", "")) if kind == "bar" else []
+        if rules:
+            # Colour by value: each bar gets the colour its rule (or scale) gives.
+            styles = _x.paint(rules, item["values"], ctx.theme)
+            entry["data"] = [
+                {"value": value, "itemStyle": {"color": style.get("bg") or style.get("color")}}
+                if value is not None and (style.get("bg") or style.get("color"))
+                else value
+                for value, style in zip(entry["data"], styles, strict=True)
+            ]
         if show_labels:
             entry["label"] = {
                 "show": True,
@@ -601,6 +672,12 @@ def build_category(visual, queries, results, ctx):
     option["series"] = out_series
     if percent and stack == "percent":
         value_axis["max"] = 1
+    if not leg and series:
+        future = _analytics(
+            visual, option, out_series, series[0], category_axis, horizontal, grain, raw_categories, ctx
+        )
+        if future:
+            notes.append(f"Forecast: {future} periods")
     columns = [nice(category_field)] + [s["name"] for s in series]
     rows = [[labels[i], *[s["values"][i] for s in series]] for i in range(len(labels))]
     default = (
@@ -615,6 +692,243 @@ def build_category(visual, queries, results, ctx):
         },
         "notes": notes,
         "autoTitle": default,
+    }
+
+
+# --- Analytics lines and small multiples -----------------------------------------------------------
+
+
+def _reference_lines(visual: dict[str, Any], values: list[Any], axis: str, ctx: Ctx) -> list[dict[str, Any]]:
+    marks = []
+    for index, line in enumerate(_x.lines(_fmt(visual, "analytics"))):
+        if line["kind"] in {"trend", "forecast"}:
+            continue
+        value = _x.reference_value(line, values)
+        if value is None:
+            continue
+        label = _x.line_label(line)
+        color = _x._color(
+            line.get("color"), ctx.theme.get("neutral", "#94A3B8") if index else ctx.s["mutedText"]
+        )
+        marks.append(
+            {
+                axis: round(value, 6),
+                "name": label,
+                "lineStyle": {"color": color, "type": "dashed", "width": 1.5},
+                "label": {
+                    "formatter": f"{label} {compact(value)}",
+                    "position": "insideEndTop",
+                    "color": color,
+                    "fontSize": 10,
+                },
+            }
+        )
+    return marks
+
+
+def _analytics(
+    visual, option, out_series, first, category_axis, horizontal, grain, raw_categories, ctx
+) -> int:
+    """Reference lines, a trend line and a forecast on a single-series category chart.
+
+    Returns the number of forecast periods added to the axis (0 when none)."""
+    lines = _x.lines(_fmt(visual, "analytics"))
+    if not lines or not out_series:
+        return 0
+    values = first["values"]
+    marks = _reference_lines(visual, values, "xAxis" if horizontal else "yAxis", ctx)
+    if marks:
+        out_series[0]["markLine"] = {"silent": True, "symbol": "none", "data": marks}
+    added = 0
+    for line in lines:
+        color = _x._color(line.get("color"), ctx.s["mutedText"])
+        if line["kind"] == "trend":
+            out_series.append(
+                {
+                    "type": "line",
+                    "name": _x.line_label(line),
+                    "data": _x.trend(values),
+                    "symbol": "none",
+                    "silent": True,
+                    "lineStyle": {"type": "dashed", "width": 1.5, "color": color},
+                    "itemStyle": {"color": color},
+                }
+            )
+        elif line["kind"] == "forecast" and grain and not horizontal and not added:
+            points, lower, upper = _x.forecast(values, int(line.get("horizon") or 3))
+            if not points:
+                continue
+            added = len(points)
+            last = pd.Timestamp(str(raw_categories[-1])[:19])
+            step = {
+                "year": pd.DateOffset(years=1),
+                "quarter": pd.DateOffset(months=3),
+                "month": pd.DateOffset(months=1),
+                "week": pd.DateOffset(weeks=1),
+            }.get(grain, pd.DateOffset(days=1))
+            future = [(last + step * (k + 1)).isoformat() for k in range(added)]
+            category_axis["data"] = list(category_axis["data"]) + [period_label(f, grain) for f in future]
+            for entry in out_series:
+                entry["data"] = list(entry["data"]) + [None] * added
+            size = len(values)
+            known = next((v for v in reversed(values) if v is not None), None)
+            label = _x.line_label(line)
+            accent = _x._color(line.get("color"), first["color"])
+            out_series.append(
+                {
+                    "type": "line",
+                    "name": label,
+                    "data": [None] * (size - 1) + [known] + [round(p, 6) for p in points],
+                    "symbol": "none",
+                    "lineStyle": {"type": "dashed", "width": 2, "color": accent},
+                    "itemStyle": {"color": accent},
+                }
+            )
+            out_series.append(
+                {
+                    "type": "line",
+                    "name": f"{label} low",
+                    "data": [None] * size + [round(v, 6) for v in lower],
+                    "stack": "forecast-band",
+                    "symbol": "none",
+                    "silent": True,
+                    "lineStyle": {"opacity": 0},
+                    "tooltip": {"show": False},
+                }
+            )
+            out_series.append(
+                {
+                    "type": "line",
+                    "name": f"{label} range",
+                    "data": [None] * size + [round(u - v, 6) for u, v in zip(upper, lower, strict=True)],
+                    "stack": "forecast-band",
+                    "symbol": "none",
+                    "silent": True,
+                    "lineStyle": {"opacity": 0},
+                    "areaStyle": {"color": accent, "opacity": 0.15},
+                    "tooltip": {"show": False},
+                }
+            )
+    legend = option.get("legend")
+    if isinstance(legend, dict) and legend.get("show") is not False:
+        legend["data"] = [
+            e["name"] for e in out_series if not str(e.get("name", "")).endswith((" low", " range"))
+        ]
+    return added
+
+
+def _small_multiples(visual: dict[str, Any]) -> bool:
+    data = visual.get("data") if isinstance(visual.get("data"), dict) else {}
+    wells = data.get("wells") if isinstance(data.get("wells"), dict) else {}
+    return bool(wells.get("smallMultiples")) and visual.get("type") in {"bar", "column", "line", "area"}
+
+
+MAX_PANELS = 9
+
+
+def build_multiples(visual, query, result, ctx):
+    """One small chart per member of the small-multiples field, on one shared scale."""
+    vtype = visual["type"]
+    table = frame(result)
+    if table.empty:
+        return _empty(visual)
+    groups, measures = query["groupBy"], query["measures"]
+    value = measures[0]["id"]
+    grain = groups[0].get("grain")
+    if measures[0].get("showValueAs"):
+        table[value] = show_value_as(
+            table, value, measures[0]["showValueAs"], "g0", "g1", window=measures[0].get("window", 3)
+        )
+    panel_totals = table.groupby("g1")[value].sum().sort_values(ascending=False)
+    panels = list(panel_totals.index[:MAX_PANELS])
+    notes = [f"Top {MAX_PANELS} panels"] if len(panel_totals) > MAX_PANELS else []
+    table = table[table["g1"].isin(panels)]
+    if grain:
+        categories = sorted(table["g0"].unique().tolist(), key=str)
+    else:
+        totals = table.groupby("g0")[value].sum().sort_values(ascending=False)
+        categories = list(totals.index[:TOP_N])
+        if len(totals) > TOP_N:
+            notes.append(f"Top {TOP_N}")
+    labels = _labels(categories, grain)
+    pivot = table.pivot_table(index="g0", columns="g1", values=value, aggfunc="sum", sort=False).reindex(
+        categories
+    )
+    finite = pivot.stack().dropna()
+    peak = float(finite.max()) if len(finite) else 1.0
+    floor = min(0.0, float(finite.min())) if len(finite) else 0.0
+    count = len(panels)
+    columns = 1 if count == 1 else 2 if count <= 4 else 3
+    rows_n = math.ceil(count / columns)
+    horizontal = vtype == "bar"
+    percent = _pct(measures)
+    option = _base(ctx, legend=False)
+    option["grid"], option["xAxis"], option["yAxis"], option["title"], series = [], [], [], [], []
+    width, height = 100 / columns, 100 / rows_n
+    for index, panel in enumerate(panels):
+        col, row = index % columns, index // columns
+        option["grid"].append(
+            {
+                "left": f"{col * width + 2:.2f}%",
+                "top": f"{row * height + 6:.2f}%",
+                "width": f"{width - 4:.2f}%",
+                "height": f"{height - 12:.2f}%",
+                "containLabel": True,
+            }
+        )
+        option["title"].append(
+            {
+                "text": str(panel),
+                "left": f"{col * width + 2:.2f}%",
+                "top": f"{row * height:.2f}%",
+                "textStyle": {"fontSize": 11, "fontWeight": 600, "color": ctx.s["text"]},
+            }
+        )
+        cat_axis = {**_category_axis(ctx, labels, rotate=False), "gridIndex": index}
+        cat_axis["axisLabel"] = {**cat_axis.get("axisLabel", {}), "show": row == rows_n - 1 or horizontal}
+        val_axis = {**_value_axis(ctx, percent=percent), "gridIndex": index, "max": peak, "min": floor}
+        val_axis["axisLabel"] = {**val_axis.get("axisLabel", {}), "show": col == 0}
+        if horizontal:
+            cat_axis["inverse"] = True
+            option["xAxis"].append(val_axis)
+            option["yAxis"].append(cat_axis)
+        else:
+            option["xAxis"].append(cat_axis)
+            option["yAxis"].append(val_axis)
+        data = [None if pd.isna(v) else round(float(v), 6) for v in pivot[panel].tolist()]
+        entry: dict[str, Any] = {
+            "type": "bar" if vtype in {"bar", "column"} else "line",
+            "name": str(panel),
+            "data": data,
+            "xAxisIndex": index,
+            "yAxisIndex": index,
+            "itemStyle": {"color": ctx.color(0)},
+        }
+        if entry["type"] == "bar":
+            entry.update({"barMaxWidth": 32, "barCategoryGap": "35%"})
+        else:
+            entry.update({"symbol": "none", "lineStyle": {"width": 2, "color": ctx.color(0)}})
+            if vtype == "area":
+                entry["areaStyle"] = {"opacity": 0.15}
+        series.append(entry)
+    option["series"] = series
+    category_field, panel_field = groups[0]["field"], groups[1]["field"]
+    rows = [
+        [labels[i], str(panel), None if pd.isna(pivot[panel].iloc[i]) else float(pivot[panel].iloc[i])]
+        for panel in panels
+        for i in range(len(categories))
+    ]
+    return {
+        "option": option,
+        "data": _data([nice(category_field), nice(panel_field), measure_label(measures[0])], rows),
+        "selectors": {
+            "category": _selectors(category_field, categories, grain),
+            "series": _selectors(panel_field, panels, groups[1].get("grain")),
+        },
+        "notes": notes,
+        "autoTitle": (
+            f"{measure_label(measures[0])} by {nice(category_field).lower()} and {nice(panel_field).lower()}"
+        ),
     }
 
 
@@ -846,6 +1160,28 @@ def build_scatter(visual, queries, results, ctx):
     option["yAxis"] = {**_value_axis(ctx, measure_label(measures[1])), "scale": True}
     option["grid"]["bottom"] = 24
     option["series"] = [{"type": "scatter", "symbolSize": 10, "data": points, "emphasis": {"focus": "self"}}]
+    ys = table[y].astype(float).tolist()
+    marks = _reference_lines(visual, ys, "yAxis", ctx)
+    if marks:
+        option["series"][0]["markLine"] = {"silent": True, "symbol": "none", "data": marks}
+    trend = next((line for line in _x.lines(_fmt(visual, "analytics")) if line["kind"] == "trend"), None)
+    xs = table[x].astype(float).tolist()
+    if trend and len(xs) > 1 and min(xs) != max(xs):
+        mean_x, mean_y = sum(xs) / len(xs), sum(ys) / len(ys)
+        slope = sum((a - mean_x) * (b - mean_y) for a, b in zip(xs, ys, strict=True)) / sum(
+            (a - mean_x) ** 2 for a in xs
+        )
+        color = _x._color(trend.get("color"), ctx.s["mutedText"])
+        option["series"].append(
+            {
+                "type": "line",
+                "name": _x.line_label(trend),
+                "data": [[v, round(mean_y + slope * (v - mean_x), 6)] for v in (min(xs), max(xs))],
+                "symbol": "none",
+                "silent": True,
+                "lineStyle": {"type": "dashed", "width": 1.5, "color": color},
+            }
+        )
     columns = ([nice(field)] if field else []) + [measure_label(m) for m in measures]
     rows = [[p["name"], *p["value"]] if field else p["value"] for p in points]
     return {
@@ -929,7 +1265,13 @@ def build_table(visual, queries, results, ctx):
     groups, measures = query["groupBy"], query["measures"]
     for measure in measures:
         if measure.get("showValueAs"):
-            table[measure["id"]] = show_value_as(table, measure["id"], measure["showValueAs"])
+            table[measure["id"]] = show_value_as(
+                table,
+                measure["id"],
+                measure["showValueAs"],
+                "g0" if groups and groups[0].get("grain") else None,
+                window=measure.get("window", 3),
+            )
     sort = _fmt(visual, "sort")
     if measures and sort.get("by") != "category":
         table = table.sort_values(
@@ -941,18 +1283,28 @@ def build_table(visual, queries, results, ctx):
             "key": m["id"],
             "label": measure_label(m),
             "align": "right",
-            "percent": bool(m.get("showValueAs", "").startswith("pct")),
+            "percent": _is_pct(m),
         }
         for m in measures
     ]
     rows = []
-    for _, record in table.head(500).iterrows():
+    shown = table.head(500)
+    conditional = _fmt(visual, "conditional")
+    painted = {
+        m["id"]: _x.paint(rules, shown[m["id"]].tolist(), ctx.theme)
+        for m in measures
+        if (rules := _x.rules_for(conditional, m["id"]))
+    }
+    for position, (_, record) in enumerate(shown.iterrows()):
         row = {}
         for i, g in enumerate(groups):
             row[f"g{i}"] = period_label(record[f"g{i}"], g.get("grain"))
         for m in measures:
             value = record[m["id"]]
             row[m["id"]] = None if pd.isna(value) else float(value)
+        styles = {key: styles[position] for key, styles in painted.items() if styles[position]}
+        if styles:
+            row["_style"] = styles
         rows.append(row)
     totals = {
         m["id"]: (
@@ -961,8 +1313,11 @@ def build_table(visual, queries, results, ctx):
         for m in measures
     }
     bars = {}
-    if _fmt(visual, "table").get("dataBars", True):
+    with_bars = {key for key, styles in painted.items() if any("bar" in style for style in styles)}
+    if _fmt(visual, "table").get("dataBars", True) or with_bars:
         for m in measures:
+            if not _fmt(visual, "table").get("dataBars", True) and m["id"] not in with_bars:
+                continue
             peak = table[m["id"]].abs().max()
             bars[m["id"]] = float(peak) if peak and not pd.isna(peak) else None
     return {
@@ -1005,20 +1360,26 @@ def build_matrix(visual, queries, results, ctx):
     finite = pivot.stack().dropna()
     low, high = (float(finite.min()), float(finite.max())) if len(finite) else (0.0, 1.0)
     accent = ctx.color(0)
+    rules = _x.rules_for(_fmt(visual, "conditional"), measures[0]["id"])
+    flat = [None if pd.isna(v) else float(v) for v in pivot.to_numpy().ravel().tolist()]
+    painted = _x.paint(rules, flat, ctx.theme) if rules else []
+    percent = _pct(measures)
     rows = []
-    for index, values in pivot.iterrows():
+    for row_index, (index, values) in enumerate(pivot.iterrows()):
         cells = []
-        for column in pivot.columns:
+        for column_index, column in enumerate(pivot.columns):
             cell = values[column]
             cell = None if pd.isna(cell) else float(cell)
             share = 0 if cell is None or high == low else (cell - low) / (high - low)
-            cells.append(
-                {
-                    "value": cell,
-                    "display": compact(cell),
-                    "shade": round(0.06 + 0.46 * share, 3) if cell is not None else 0,
-                }
-            )
+            entry = {
+                "value": cell,
+                "display": compact(cell, percent),
+                # Conditional formatting replaces the default heat shading.
+                "shade": 0 if rules else round(0.06 + 0.46 * share, 3) if cell is not None else 0,
+            }
+            if painted and painted[row_index * len(pivot.columns) + column_index]:
+                entry["style"] = painted[row_index * len(pivot.columns) + column_index]
+            cells.append(entry)
         total = sum(c["value"] for c in cells if c["value"] is not None)
         rows.append(
             {
@@ -1064,6 +1425,32 @@ def build_slicer(visual, queries, results, ctx):
             "autoTitle": nice(field),
         }
     field = query["groupBy"][0]["field"]
+    if len(query["groupBy"]) > 1:
+        fields = [g["field"] for g in query["groupBy"]]
+        tree: list[dict[str, Any]] = []
+        index: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for row in result.get("rows") or []:
+            path: tuple[Any, ...] = ()
+            siblings = tree
+            for depth, value in enumerate(row[: len(fields)]):
+                path = (*path, value)
+                node = index.get(path)
+                if node is None:
+                    node = {
+                        "value": value,
+                        "label": BLANK if value is None else str(value),
+                        "field": fields[depth],
+                        "count": 0,
+                        "children": [],
+                    }
+                    index[path] = node
+                    siblings.append(node)
+                node["count"] += int(row[-1] or 0)
+                siblings = node["children"]
+        return {
+            "autoTitle": " › ".join(nice(f) for f in fields),
+            "slicer": {"field": field, "label": nice(field), "fields": fields, "tree": tree[:500]},
+        }
     options = [
         {"value": row[0], "label": BLANK if row[0] is None else str(row[0]), "count": row[1]}
         for row in result.get("rows") or []
@@ -1133,6 +1520,94 @@ def build_chart(visual, queries, results, ctx, render, kinds):
     }
 
 
+def _with_defaults(option: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
+    """A script's ECharts option on the dashboard's look: theme colours, fonts, a compact grid and
+    tooltips — anything the script sets itself wins."""
+    base = _base(
+        ctx, legend=isinstance(option.get("legend"), dict), axis="xAxis" in option or "yAxis" in option
+    )
+    merged: dict[str, Any] = {**base, **option}
+    for key in ("grid", "tooltip", "textStyle"):
+        if isinstance(base.get(key), dict) and isinstance(option.get(key), dict):
+            merged[key] = {**base[key], **option[key]}
+    for axis_key in ("xAxis", "yAxis"):
+        axes = option.get(axis_key)
+        for axis in axes if isinstance(axes, list) else [axes]:
+            if isinstance(axis, dict):
+                axis.setdefault(
+                    "axisLabel", {"color": ctx.s["mutedText"], "fontSize": 10, "hideOverlap": True}
+                )
+                if axis.get("type") == "value":
+                    axis.setdefault("splitLine", {"lineStyle": {"color": ctx.s["gridline"]}})
+    merged.setdefault("color", ctx.colors)
+    return merged
+
+
+def build_python(visual, queries, results, ctx, kinds):
+    """A user's Python script, run on the visual's filtered rows (see ``viz_python``)."""
+    py = _sibling("jt_viz_python", "viz_python.py")
+    result = results["main"]
+    data = pd.DataFrame(result.get("rows") or [], columns=result.get("columns") or [])
+    for column in data.columns:
+        if kinds.get(column) == "numeric":
+            data[column] = pd.to_numeric(data[column], errors="coerce")
+        elif kinds.get(column) == "datetime":
+            data[column] = pd.to_datetime(data[column], errors="coerce")
+    notes = ["Evenly sampled rows"] if result.get("truncated") else []
+    try:
+        value, printed = py.run(_fmt(visual, "python").get("code"), data)
+        if isinstance(value, dict):
+            out: dict[str, Any] = {"option": _with_defaults(py.sanitize_option(value), ctx)}
+        else:
+            if isinstance(value, pd.Series):
+                value = value.reset_index() if value.index.name else value.to_frame()
+            if isinstance(value, pd.DataFrame):
+                shown = value.head(500)
+                columns = [str(c)[:80] for c in shown.columns]
+                keys = [f"c{i}" for i in range(len(columns))]
+                numeric = [pd.api.types.is_numeric_dtype(shown[c]) for c in shown.columns]
+                rows = []
+                for record in shown.itertuples(index=False):
+                    row = {}
+                    for key, cell, is_number in zip(keys, record, numeric, strict=True):
+                        if cell is None or (isinstance(cell, float) and math.isnan(cell)):
+                            row[key] = None
+                        elif is_number:
+                            row[key] = float(cell)
+                        else:
+                            row[key] = str(cell)[:200]
+                    rows.append(row)
+                out = {
+                    "table": {
+                        "columns": [
+                            {"key": k, "label": c, "align": "right" if n else "left"}
+                            for k, c, n in zip(keys, columns, numeric, strict=True)
+                        ],
+                        "rows": rows,
+                        "truncated": len(value.index) > 500,
+                    },
+                    "data": _data(columns, [[row[k] for k in keys] for row in rows]),
+                }
+            elif isinstance(value, (int, float)) or hasattr(value, "dtype"):
+                number = float(value)
+                label = _title(visual, "Result")
+                out = {
+                    "kpi": {"label": label, "value": number, "display": compact(number)},
+                    "data": _data([label], [[number]]),
+                }
+            else:
+                raise py.PythonVisualError(
+                    "Set `result` to an ECharts option (dict), a DataFrame or a number."
+                )
+    except py.PythonVisualError as exc:
+        return {"id": visual.get("id"), "type": "python", "status": "error", "message": str(exc)[:300]}
+    if printed:
+        out["console"] = printed
+    out["notes"] = notes
+    out["autoTitle"] = "Python visual"
+    return out
+
+
 def _apply_legend(visual: dict[str, Any], option: dict[str, Any]) -> None:
     legend = _fmt(visual, "legend")
     if not isinstance(option.get("legend"), dict) or not legend:
@@ -1158,12 +1633,17 @@ def build(
     visual: dict[str, Any], queries: dict[str, Any], results: dict[str, Any], ctx: Ctx, **geo: Any
 ) -> dict[str, Any]:
     vtype = visual.get("type")
+    for role in list(queries):
+        if role in results and queries[role].get("output"):
+            queries = {**queries}
+            results = {**results}
+            queries[role], results[role] = _materialize(queries[role], results[role])
     custom = [c for c in _fmt(visual, "colors").get("series") or [] if isinstance(c, str) and HEX.match(c)][
         :12
     ]
     if custom:
         ctx = ctx.with_colors(custom)
-    if vtype == "text":
+    if vtype in {"text", "parameter", "button", "navigator"}:
         out: dict[str, Any] = {}
     elif vtype in {"card", "multi_card"}:
         out = build_cards(visual, queries, results, ctx)
@@ -1189,6 +1669,8 @@ def build(
         out = build_slicer(visual, queries, results, ctx)
     elif vtype == "chart":
         out = build_chart(visual, queries, results, ctx, geo["render"], geo.get("kinds") or {})
+    elif vtype == "python":
+        out = build_python(visual, queries, results, ctx, geo.get("kinds") or {})
     else:
         return {
             "id": visual.get("id"),
@@ -1196,7 +1678,7 @@ def build(
             "status": "error",
             "message": "Unsupported visual type",
         }
-    if out.get("status") == "empty":
+    if out.get("status") in {"empty", "error"}:
         return out
     if isinstance(out.get("option"), dict):
         _apply_legend(visual, out["option"])

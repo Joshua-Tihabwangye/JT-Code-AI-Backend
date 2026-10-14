@@ -36,47 +36,78 @@ def _param(value: Any, kind: str) -> Any:
     return value
 
 
+def _mask(frame: Any, item: dict[str, Any], kinds: dict[str, str]) -> Any:
+    """One filter as a boolean mask (same semantics as ``store._condition``)."""
+    op, value = item["op"], item.get("value")
+    if op in {"or", "and"}:
+        mask = pd.Series(op == "and", index=frame.index)
+        for part in value:
+            mask = (mask | _mask(frame, part, kinds)) if op == "or" else (mask & _mask(frame, part, kinds))
+        return mask
+    column = frame[item["field"]]
+    kind = kinds.get(item["field"], "categorical")
+    if kind == "datetime":
+        column = pd.to_datetime(column, errors="coerce")
+    if op == "blank":
+        return column.isna()
+    if op == "not_blank":
+        return column.notna()
+    if op == "top":
+        by = value["by"]
+        keyed = pd.DataFrame(
+            {"key": column, "value": 1 if by["field"] == "*" else frame[by["field"]]}
+        ).dropna(subset=["key"])
+        grouped = keyed.groupby("key", dropna=True)["value"]
+        totals = (
+            grouped.size()
+            if by["field"] == "*"
+            else (
+                grouped.sum(min_count=1)
+                if by["agg"] == "sum"
+                else grouped.agg(GROUPED.get(by["agg"], by["agg"]))
+            )
+        )
+        ranked = totals.reset_index().sort_values(
+            ["value", "key"],
+            ascending=[value["direction"] == "bottom", True],
+            na_position="last",
+            kind="stable",
+        )
+        return column.isin(ranked["key"].head(int(value["n"])).tolist())
+    if op in {"in", "not_in"}:
+        values = [_param(v, kind) for v in value if v is not None]
+        hit = column.isin(values) | (column.isna() if None in value else False)
+        return hit if op == "in" else (column.notna() & ~hit)
+    if op == "between":
+        low, high = (_param(v, kind) for v in value)
+        return column.notna() & (column >= low) & (column <= high)
+    if op in {"contains", "starts_with", "ends_with"}:
+        text = column.astype("string").str.lower()
+        needle = str(value).lower()
+        hit = (
+            text.str.contains(needle, regex=False)
+            if op == "contains"
+            else text.str.startswith(needle)
+            if op == "starts_with"
+            else text.str.endswith(needle)
+        )
+        return hit.fillna(False).astype(bool)
+    param = _param(value, kind)
+    comparisons = {
+        "eq": column == param,
+        "ne": column.notna() & (column != param),
+        "gt": column > param,
+        "gte": column >= param,
+        "lt": column < param,
+        "lte": column <= param,
+    }
+    return comparisons[op].fillna(False).astype(bool)
+
+
 def apply_filters(frame: Any, filters: list[dict[str, Any]], kinds: dict[str, str]) -> Any:
     mask = pd.Series(True, index=frame.index)
     for item in filters:
-        column = frame[item["field"]]
-        kind = kinds.get(item["field"], "categorical")
-        if kind == "datetime":
-            column = pd.to_datetime(column, errors="coerce")
-        op, value = item["op"], item.get("value")
-        if op == "blank":
-            mask &= column.isna()
-        elif op == "not_blank":
-            mask &= column.notna()
-        elif op in {"in", "not_in"}:
-            values = [_param(v, kind) for v in value if v is not None]
-            hit = column.isin(values) | (column.isna() if None in value else False)
-            mask &= hit if op == "in" else (column.notna() & ~hit)
-        elif op == "between":
-            low, high = (_param(v, kind) for v in value)
-            mask &= column.notna() & (column >= low) & (column <= high)
-        elif op in {"contains", "starts_with", "ends_with"}:
-            text = column.astype("string").str.lower()
-            needle = str(value).lower()
-            hit = (
-                text.str.contains(needle, regex=False)
-                if op == "contains"
-                else text.str.startswith(needle)
-                if op == "starts_with"
-                else text.str.endswith(needle)
-            )
-            mask &= hit.fillna(False).astype(bool)
-        else:
-            param = _param(value, kind)
-            comparisons = {
-                "eq": column == param,
-                "ne": column.notna() & (column != param),
-                "gt": column > param,
-                "gte": column >= param,
-                "lt": column < param,
-                "lte": column <= param,
-            }
-            mask &= comparisons[op].fillna(False).astype(bool)
+        mask &= _mask(frame, item, kinds)
     return frame[mask]
 
 
@@ -197,9 +228,36 @@ def frame(result: dict[str, Any]) -> Any:
 
 
 def show_value_as(
-    table: Any, value: str, mode: str, row: str | None = None, column: str | None = None
+    table: Any,
+    value: str,
+    mode: str,
+    row: str | None = None,
+    column: str | None = None,
+    *,
+    window: int = 3,
 ) -> Any:
+    """“Show value as” over a visual's rows (``row`` is the axis, ``column`` the legend, if any).
+
+    Running totals, differences and moving averages follow the axis order, separately per legend
+    series; ``yoy_pct`` compares each period with the same period one year earlier."""
     series = table[value].astype(float)
+    if mode in {"running_total", "diff_prev", "pct_diff_prev", "moving_avg"} and column:
+        return series.groupby(table[column], sort=False, dropna=False).transform(
+            lambda part: show_value_as(part.to_frame("v"), "v", mode, window=window)
+        )
+    if mode == "moving_avg":
+        return series.rolling(max(2, int(window)), min_periods=1).mean()
+    if mode == "yoy_pct" and row:
+        dates = pd.to_datetime(table[row], errors="coerce")
+        keys = [table[column]] if column else []
+        current = pd.DataFrame({"d": dates, "v": series, **{f"k{i}": k for i, k in enumerate(keys)}})
+        previous = current.assign(d=current["d"] + pd.DateOffset(years=1)).rename(columns={"v": "p"})
+        on = ["d", *[f"k{i}" for i in range(len(keys))]]
+        merged = current.merge(previous.groupby(on, dropna=False)["p"].sum().reset_index(), on=on, how="left")
+        prior = merged["p"].to_numpy()
+        return pd.Series(
+            (series.to_numpy() - prior) / np.where(prior == 0, np.nan, np.abs(prior)), index=table.index
+        )
     if mode == "pct_total":
         total = series.sum()
         return series / total if total else series * np.nan

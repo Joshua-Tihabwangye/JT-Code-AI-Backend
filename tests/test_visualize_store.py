@@ -50,6 +50,56 @@ def _normal(rows):
 
 TRICKY_QUERIES = [
     {
+        "measures": [{"field": "*"}],
+        "filters": [
+            {
+                "op": "and",
+                "value": [
+                    {"field": "amount", "op": "gte", "value": 4},
+                    {"field": "note", "op": "starts_with", "value": "a"},
+                ],
+            },
+            {"field": "region", "op": "in", "value": []},
+        ],
+    },
+    {
+        "measures": [{"field": "*"}],
+        "filters": [
+            {
+                "op": "or",
+                "value": [
+                    {"field": "region", "op": "eq", "value": "West"},
+                    {"field": "amount", "op": "gt", "value": 10},
+                ],
+            }
+        ],
+    },
+    {
+        "groupBy": [{"field": "region"}],
+        "measures": [{"field": "amount"}],
+        "filters": [
+            {"field": "region", "op": "top", "value": {"n": 2, "by": {"field": "amount", "agg": "sum"}}}
+        ],
+    },
+    {
+        "groupBy": [{"field": "region"}],
+        "measures": [{"field": "*"}],
+        "filters": [
+            {"field": "region", "op": "top", "value": {"n": 1, "by": {"field": "*"}, "direction": "top"}}
+        ],
+    },
+    {
+        "measures": [{"field": "*"}],
+        "filters": [
+            {
+                "field": "note",
+                "op": "top",
+                "value": {"n": 1, "by": {"field": "amount", "agg": "avg"}, "direction": "bottom"},
+            },
+            {"field": "when", "op": "not_blank"},
+        ],
+    },
+    {
         "groupBy": [{"field": "region"}],
         "measures": [
             {"field": "*"},

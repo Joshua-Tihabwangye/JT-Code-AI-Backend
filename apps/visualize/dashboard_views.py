@@ -420,7 +420,15 @@ class VisualsView(APIView):
         datasets = self._datasets(request, visuals, data.get("dashboardId"))
         theme = data.get("theme") or themes.DEFAULT_THEME
         today = data.get("today") or timezone.localdate()
-        return Response(dashboards.render(datasets, visuals, filters, theme, data["mode"], today))
+        context = {
+            "parameters": {str(k)[:60]: v for k, v in list((data.get("parameters") or {}).items())[:50]},
+            "calculations": {
+                str(c.get("name"))[:60]: str(c.get("expression") or "")[:1000]
+                for c in data.get("calculations") or []
+                if isinstance(c, dict) and c.get("name")
+            },
+        }
+        return Response(dashboards.render(datasets, visuals, filters, theme, data["mode"], today, context))
 
     def _datasets(
         self, request: Request, visuals: list[dict[str, Any]], dashboard_id: Any

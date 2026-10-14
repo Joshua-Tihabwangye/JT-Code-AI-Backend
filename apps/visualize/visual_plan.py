@@ -20,6 +20,8 @@ import hashlib
 import json
 from typing import Any
 
+from apps.visualize import viz_expr
+
 AGGREGATIONS = ("sum", "avg", "count", "distinct", "min", "max", "median", "std", "first", "last")
 NUMERIC_ONLY = {"sum", "avg", "median", "std"}
 ADDITIVE = {"sum", "count"}
@@ -40,6 +42,9 @@ FILTER_OPS = (
     "blank",
     "not_blank",
     "relative",
+    "or",
+    "and",
+    "top",
 )
 SHOW_VALUE_AS = (
     "none",
@@ -50,6 +55,8 @@ SHOW_VALUE_AS = (
     "diff_prev",
     "pct_diff_prev",
     "rank",
+    "moving_avg",
+    "yoy_pct",
 )
 VISUAL_TYPES = (
     "card",
@@ -73,7 +80,13 @@ VISUAL_TYPES = (
     "slicer",
     "text",
     "chart",
+    "python",
+    # Drawn in the browser, no query: parameter controls, buttons and page/bookmark navigators.
+    "parameter",
+    "button",
+    "navigator",
 )
+LOCAL_TYPES = frozenset({"text", "parameter", "button", "navigator"})
 SLICER_STYLES = ("dropdown", "list", "tiles", "between", "date_range", "relative")
 MAX_ROWS = 10_000
 MAX_FILTERS = 40
@@ -123,18 +136,105 @@ def clean_measure(item: Any, kinds: dict[str, str], index: int) -> dict[str, Any
         measure["showValueAs"] = show
     if raw.get("label"):
         measure["label"] = str(raw["label"])[:60]
+    _extras(raw, measure)
     return measure
 
 
-def clean_filter(item: Any, kinds: dict[str, str], today: dt.date) -> dict[str, Any]:
+def _extras(raw: dict[str, Any], measure: dict[str, Any]) -> None:
+    if measure.get("showValueAs") == "moving_avg":
+        try:
+            measure["window"] = max(2, min(int(raw.get("window") or 3), 60))
+        except TypeError, ValueError:
+            measure["window"] = 3
+    if raw.get("format") in {"number", "percent", "currency"}:
+        measure["format"] = raw["format"]
+
+
+NUMERIC_LEAVES = {"sum", "avg", "min", "max", "median"}
+
+
+def calc_measure(
+    raw: dict[str, Any], kinds: dict[str, str], index: int, context: dict[str, Any] | None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """A calculated measure → its output description and the plain measures (leaves) it needs."""
+    context = context or {}
+    try:
+        tree = viz_expr.resolve(
+            viz_expr.parse(raw.get("expr")), context.get("parameters"), context.get("calculations")
+        )
+        leaves = viz_expr.aggregates(tree)
+    except viz_expr.ExprError as exc:
+        name = raw.get("label") or raw.get("field") or "calculation"
+        raise PlanError(f"{name}: {exc}") from exc
+    physical: list[dict[str, Any]] = []
+    mapping: list[list[str]] = []
+    for position, (agg, field) in enumerate(leaves):
+        if field != "*":
+            _field(field, kinds, "a calculation")
+            if agg in NUMERIC_LEAVES and kinds[field] != "numeric":
+                raise PlanError(f"{agg.upper()}([{field}]) needs a numeric field.")
+        leaf = {"id": f"m{index}_{position}", "field": field, "agg": agg}
+        physical.append(leaf)
+        mapping.append([agg, field, leaf["id"]])
+    label = str(raw.get("label") or raw.get("field") or "Calculation")[:60]
+    measure: dict[str, Any] = {
+        "id": f"m{index}",
+        "field": label,
+        "agg": "calc",
+        "label": label,
+        "expr": tree,
+        "leaves": mapping,
+    }
+    show = raw.get("showValueAs") or "none"
+    if show not in SHOW_VALUE_AS:
+        raise PlanError(f"Unknown “show value as” {show!r}.")
+    if show != "none":
+        measure["showValueAs"] = show
+    _extras(raw, measure)
+    return measure, physical
+
+
+def clean_filter(item: Any, kinds: dict[str, str], today: dt.date) -> dict[str, Any] | None:
+    """A validated filter, or ``None`` when it filters nothing (an empty value list)."""
     if not isinstance(item, dict):
         raise PlanError("A filter must be an object.")
-    field = _field(item.get("field"), kinds, "a filter")
     op = item.get("op") or "in"
     if op not in FILTER_OPS:
         raise PlanError(f"Unknown filter operator {op!r}.")
     value = item.get("value")
+    if op in {"or", "and"}:
+        # Advanced filter: any (or all) of up to five conditions (no nesting).
+        parts = [
+            p
+            for p in (value if isinstance(value, list) else [])
+            if isinstance(p, dict) and p.get("op") not in {"or", "and"}
+        ]
+        if not 1 <= len(parts) <= 5:
+            raise PlanError(f"“{op}” needs one to five conditions.")
+        cleaned = [c for c in (clean_filter(part, kinds, today) for part in parts) if c]
+        if not cleaned:
+            return None
+        return {"field": cleaned[0]["field"], "op": op, "value": cleaned}
+    field = _field(item.get("field"), kinds, "a filter")
     kind = kinds[field]
+    if op == "top":
+        spec = value if isinstance(value, dict) else {}
+        by = spec.get("by") if isinstance(spec.get("by"), dict) else {"field": "*"}
+        measure = clean_measure(by, kinds, 0)
+        try:
+            n = max(1, min(int(spec.get("n", 10)), 1000))
+        except (TypeError, ValueError) as exc:
+            raise PlanError("Top N needs a number.") from exc
+        direction = "bottom" if spec.get("direction") == "bottom" else "top"
+        return {
+            "field": field,
+            "op": "top",
+            "value": {
+                "n": n,
+                "by": {"field": measure["field"], "agg": measure["agg"]},
+                "direction": direction,
+            },
+        }
     if op == "relative":
         start, end = relative_range(value, today)
         return {"field": field, "op": "between", "value": [start, end]}
@@ -142,6 +242,8 @@ def clean_filter(item: Any, kinds: dict[str, str], today: dt.date) -> dict[str, 
         return {"field": field, "op": op}
     if op in {"in", "not_in"}:
         values = value if isinstance(value, list) else [value]
+        if not values:
+            return None
         if len(values) > 500:
             raise PlanError("A filter may list at most 500 values.")
         return {"field": field, "op": op, "value": [_typed(v, kind) for v in values]}
@@ -152,6 +254,11 @@ def clean_filter(item: Any, kinds: dict[str, str], today: dt.date) -> dict[str, 
     if op in {"contains", "starts_with", "ends_with"}:
         return {"field": field, "op": op, "value": str(value or "")[:200]}
     return {"field": field, "op": op, "value": _typed(value, kind)}
+
+
+def _filters(items: Any, kinds: dict[str, str], today: dt.date) -> list[dict[str, Any]]:
+    cleaned = (clean_filter(item, kinds, today) for item in (items or [])[:MAX_FILTERS])
+    return [item for item in cleaned if item]
 
 
 def _typed(value: Any, kind: str) -> Any:
@@ -217,15 +324,36 @@ def relative_range(value: Any, today: dt.date) -> tuple[str, str]:
     return start.isoformat(), f"{last.isoformat()}T23:59:59"
 
 
-def clean_query(raw: dict[str, Any], kinds: dict[str, str], today: dt.date) -> dict[str, Any]:
+def clean_query(
+    raw: dict[str, Any], kinds: dict[str, str], today: dt.date, context: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """A validated query. Calculated measures (``expr``) become plain aggregate leaves in
+    ``measures`` (what Postgres or pandas computes) plus an ``output`` list (what the visual shows),
+    which the engine evaluates over the aggregated rows."""
     groups = [clean_group(g, kinds) for g in (raw.get("groupBy") or [])][:MAX_GROUPS]
-    measures = [clean_measure(m, kinds, i) for i, m in enumerate((raw.get("measures") or [])[:MAX_MEASURES])]
-    filters = [clean_filter(f, kinds, today) for f in (raw.get("filters") or [])[:MAX_FILTERS]]
+    physical: list[dict[str, Any]] = []
+    output: list[dict[str, Any]] = []
+    for index, item in enumerate((raw.get("measures") or [])[:MAX_MEASURES]):
+        if isinstance(item, dict) and item.get("expr"):
+            measure, leaves = calc_measure(item, kinds, index, context)
+            physical.extend(leaves)
+        else:
+            measure = clean_measure(item, kinds, index)
+            physical.append(measure)
+        output.append(measure)
+    filters = _filters(raw.get("filters"), kinds, today)
     try:
         limit = max(1, min(int(raw.get("limit") or MAX_ROWS), MAX_ROWS))
     except TypeError, ValueError:
         limit = MAX_ROWS
-    return {"groupBy": groups, "measures": measures, "filters": filters, "limit": limit}
+    derived = any(m["agg"] == "calc" for m in output)
+    if derived and not physical:
+        # Only constants and parameters: still one row per group.
+        physical.append({"id": "n", "field": "*", "agg": "count"})
+    query: dict[str, Any] = {"groupBy": groups, "measures": physical, "filters": filters, "limit": limit}
+    if derived:
+        query["output"] = output
+    return query
 
 
 ROW_LIMIT = 10_000
@@ -250,8 +378,10 @@ def clean_rows(columns: list[str], filters: list[dict[str, Any]], limit: int = R
 
 
 def query_key(dataset_token: str, query: dict[str, Any]) -> str:
-    """A stable cache key for one query against one version of a dataset."""
-    body = json.dumps(query, sort_keys=True, separators=(",", ":"), default=str)
+    """A stable cache key for one query against one version of a dataset (the database part only:
+    a calculation's ``output`` is computed afterwards, so changing a parameter reuses the result)."""
+    physical = {key: value for key, value in query.items() if key != "output"}
+    body = json.dumps(physical, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(f"{dataset_token}|{body}".encode()).hexdigest()
 
 
@@ -279,7 +409,11 @@ def _first_date(kinds: dict[str, str]) -> str | None:
 
 
 def plan(
-    visual: dict[str, Any], kinds: dict[str, str], filters: list[dict[str, Any]], today: dt.date
+    visual: dict[str, Any],
+    kinds: dict[str, str],
+    filters: list[dict[str, Any]],
+    today: dt.date,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The queries a visual needs, keyed by role: ``main`` plus optional extras.
 
@@ -291,7 +425,7 @@ def plan(
         raise PlanError(f"Unknown visual type {vtype!r}.")
     wells = _wells(visual)
     data = visual.get("data") if isinstance(visual.get("data"), dict) else {}
-    own = [clean_filter(f, kinds, today) for f in (data.get("filters") or [])[:MAX_FILTERS]]
+    own = _filters(data.get("filters"), kinds, today)
     where = [*filters, *own]
     values = wells.get("values") or []
     category = wells.get("category") or []
@@ -302,11 +436,20 @@ def plan(
         groups: list[Any], measures: list[Any], extra: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         return clean_query(
-            {"groupBy": groups, "measures": measures, "filters": [*where, *(extra or [])]}, kinds, today
+            {"groupBy": groups, "measures": measures, "filters": [*where, *(extra or [])]},
+            kinds,
+            today,
+            context,
         )
 
-    if vtype == "text":
+    if vtype in LOCAL_TYPES:
         return {}
+    if vtype == "python":
+        columns = [_field(_name(ref), kinds, "a Python visual") for ref in values]
+        if not columns:
+            raise PlanError("Add the fields your script uses to the Values well.")
+        queries["main"] = clean_rows(list(dict.fromkeys(columns)), where)
+        return queries
     if vtype == "chart":
         chart = format_section(visual, "chart")
         if not chart.get("chartType"):
@@ -323,6 +466,17 @@ def plan(
         style = format_section(visual, "slicer").get("style")
         # A slicer never narrows its own options: only the *other* filters apply to it.
         others = [f for f in filters if f.get("field") != field]
+        if style == "hierarchy" and len(category) > 1:
+            fields = [clean_group({"field": _name(ref)}, kinds) for ref in category[:3]]
+            # Hierarchy slicers ignore filters on any of their own levels.
+            mine = {g["field"] for g in fields}
+            others = [f for f in filters if f.get("field") not in mine]
+            queries["main"] = clean_query(
+                {"groupBy": fields, "measures": [{"field": "*", "agg": "count"}], "filters": [*others, *own]},
+                kinds,
+                today,
+            )
+            return queries
         if kinds[field] in {"numeric", "datetime"} and style in {"between", "date_range", "relative", None}:
             measures = [{"field": field, "agg": "min"}, {"field": field, "agg": "max"}]
             queries["main"] = clean_query(
@@ -375,6 +529,11 @@ def plan(
     # Category charts: bar, column, line, area, combo, donut, pie, treemap, funnel, waterfall, map.
     if not category:
         raise PlanError("Add a category (X axis) field.")
+    multiples = wells.get("smallMultiples") or []
+    if multiples and vtype in {"bar", "column", "line", "area"}:
+        # Small multiples: one panel per member of the second group (no legend).
+        queries["main"] = query(category[:1] + multiples[:1], (values or [{"field": "*"}])[:1])
+        return queries
     groups = category[:1] + (legend[:1] if vtype in {"bar", "column", "line", "area"} else [])
     measures = values or [{"field": "*"}]
     if vtype == "combo":
@@ -382,7 +541,5 @@ def plan(
     queries["main"] = query(groups, measures)
     highlight = data.get("highlight") if isinstance(data.get("highlight"), list) else []
     if highlight and vtype in {"bar", "column", "line", "area", "combo", "donut", "pie", "treemap", "funnel"}:
-        queries["highlight"] = query(
-            groups, measures, [clean_filter(f, kinds, today) for f in highlight[:10]]
-        )
+        queries["highlight"] = query(groups, measures, _filters(highlight[:10], kinds, today))
     return queries

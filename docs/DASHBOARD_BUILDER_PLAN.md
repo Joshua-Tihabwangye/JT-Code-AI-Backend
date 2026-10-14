@@ -253,6 +253,86 @@ Each phase ends with:
    - Present mode with auto-cycle; share links and embeds.
    - Performance and accessibility pass; final e2e flow from brief §18.
 
+### 6.4 Phase 4 design (customization)
+
+Most of Phase 4 is new. What already existed: the `PersonalView` endpoint (one view per user),
+the `themes/` CRUD API, the `allowPersonalize` flags and the `parameters`, `calculations`,
+`bookmarks` and `mobileLayout` slots in the spec. The design keeps Python building every visual
+and keeps the SQL/pandas parity rule.
+
+- **Calculations (A8).** `viz_expr.py` is a Django-free tokenizer and recursive-descent parser for
+  a small language:
+  - numbers, `+ - * /`, comparisons and parentheses;
+  - aggregates over a field: `SUM AVG COUNT DISTINCTCOUNT MIN MAX MEDIAN`, plus `COUNTROWS()`;
+  - scalar functions: `DIVIDE(a, b[, alt]) IF(c, a, b) ABS ROUND(x, n)`;
+  - a bare `[Name]` means a what-if parameter or another calculation (nesting is limited, and
+    cycles are rejected).
+
+  The parser produces a JSON tree. `visual_plan` turns each aggregate leaf into an ordinary
+  measure (so Postgres or pandas computes it) and attaches the tree as a `derived` measure. The
+  engine evaluates the tree over the aggregated rows with numpy, walking only whitelisted node
+  types; there is no `eval`. The spec keeps `calculations: [{id, name, expression, format}]`, and
+  well items reference one with `calc`. At render time the browser sends the expression and the
+  current parameter values with the visual.
+- **Visual calculations / quick measures.** "Show value as" gains `moving_avg` (n periods) and
+  `yoy_pct` (same period last year at the axis grain). Quick measures are templates that write a
+  calculation (margin %, average per row, vs target %, share of total), so there is nothing new to
+  evaluate.
+- **Parameters.** `parameters: [{id, kind: "whatif"|"fields", ...}]`.
+  - What-if: min/max/step/default. A `parameter` visual draws its slider, and the value reaches
+    calculations by name.
+  - Field parameters: a list of fields or calculations. A well item with `param: id` is swapped in
+    the browser for the chosen option before rendering, so every bound visual follows the switcher.
+- **New visual types** that need no query (drawn in the browser, like text): `parameter`,
+  `button` (go to page, bookmark, back, clear/apply slicers, URL, toggle table, Ask AI) and
+  `navigator` (pages or bookmarks).
+- **Bookmarks / views.** Author bookmarks live in `spec.bookmarks` and personal ones in
+  `PersonalView.state.bookmarks`. Each stores the page, slicers, filter overrides, drill,
+  parameter values and visual visibility. The header gets "Views ▾" with save, apply, set as
+  default and delete.
+- **Viewer personalization.** A "Personalize ✎" pane per visual lets viewers change the type, swap
+  fields, add or remove values, change the aggregation, toggle legend and labels, and sort.
+  Changes are saved to the viewer's `PersonalView` (debounced), with "Reset this visual", "Reset
+  all" and an undo. Overrides for deleted visuals are pruned when merged. Viewers can also pick
+  light/dark and density for themselves.
+- **Conditional formatting** (`format.conditional.rules`), computed in Python:
+  - colour scale, rules (operator, value, colour), data bars and icons, for table and matrix
+    cells;
+  - colour by value (gradient or rules) for bar and column charts;
+  - a rule-based value colour for cards and KPIs.
+- **Analytics lines** (`format.analytics.lines`): constant, average, median, min, max, percentile,
+  trend (least squares) and forecast (Holt's linear trend from statsmodels, with a band), on
+  bar/column/line/area/combo/scatter.
+- **Small multiples.** Values in the `smallMultiples` well give a grid of up to 9 panels on one
+  shared scale, built in Python as several ECharts grids. A click filters both the category and
+  the panel.
+- **Theme customizer.** A dialog with live preview:
+  - palette (8–12 colours), good/neutral/bad, light and dark structural colours, font, radius,
+    shadow, KPI style and density;
+  - generate a palette from a brand colour, and a contrast warning (below 4.5:1);
+  - import/export JSON, and save as an org theme (`themes/`).
+- **Mobile layout.** `page.mobileLayout: [{visualId, y, h}]` is edited in the editor's phone view
+  (add, remove, reorder, height). Phones use it when it is set; otherwise visuals stack in
+  reading order.
+- **Format painter.** Copies one visual's formatting (everything except data bindings and title
+  text) onto the next visual clicked.
+- **Python visuals (D1).** Type `python`, with fields in the Values well and code in
+  `format.python.code`.
+  - `viz_python.py` validates the script on save and again before it runs. Allowed:
+    - imports from pandas, numpy, scipy, statsmodels, sklearn, math, statistics, datetime;
+
+    Rejected:
+    - dunder and underscore names;
+    - `exec`/`eval`/`compile`/`open`/`getattr`/`globals`/`__import__`;
+    - escape-prone attributes (`os`, `sys`, `system`, `eval`, `query`, `read_*`, `load`, `format`,
+      …).
+  - The script gets the visual's filtered, sampled rows as `dataset`, plus `pd` and `np`, with
+    limited builtins and print captured.
+  - It must set `result` to an ECharts option dict, a DataFrame or a number.
+  - The output is sanitized (no `formatter`, `link`, `image://` or `$fn`) and size-capped.
+  - Each Python visual runs in its own guarded engine process, so a slow script cannot take the
+    page down with it.
+
 ## 7. Edge cases to guard
 
 - **Dataset changes.** A dataset replaced or edited after a dashboard was built can lose columns.
@@ -396,3 +476,100 @@ Each phase ends with:
   - quarter-unit layouts.
 - **Fixed during testing:** duplicate React keys for alignment guides left lines on screen (now
   de-duplicated); drag tracking uses capture-phase pointer listeners with one update per frame.
+
+### Phase 3 — done 2026-10-14
+
+- **Edit interactions:** an "Interactions" toggle in the editor puts filter / highlight / none
+  buttons on every other visual for the selected source; saved in `visual.interactions`.
+- **Cross-filtering:** Ctrl/⌘-click adds members to the selection (merged into one `in` filter,
+  or an `or` filter for date ranges); Esc clears it.
+- **Slicers:** dropdown (search, paste a list, select all), list, tiles, between (inputs and a
+  dual range slider), date range, relative date (last/this/next n units), text input with an
+  operator, and a hierarchy tree with tri-state checks. Each slicer can be single-choice. Slicers
+  sync across pages (visible or hidden copies sharing a `syncGroup`). "Apply" mode (dashboard
+  setting) holds slicer changes until Apply is pressed; "Clear all slicers" resets them.
+- **Filters pane:** dashboard, page and visual levels. Basic (pick values), advanced (two
+  conditions joined by and/or), Top N by a measure, and relative date modes. Editable in the
+  editor; in the viewer, readers can override values for their session and reset.
+- **Drill:** charts with a date axis drill through year › quarter › month › day; charts with
+  several category fields drill through them in order. The visual header has drill up, drill
+  mode (click a point to drill into it) and next level.
+- **Drill-through:** a page whose type is "drill-through" lists its fields; right-clicking a
+  member elsewhere offers "Drill through ▸ page". The page opens filtered to that member, with
+  the filter named in the header and a Back button. The same menu has keep only and exclude.
+- **Report-page tooltips:** a page whose type is "tooltip" can be picked under Format → Tooltip;
+  hovering a point draws that page small, filtered to the point.
+- **Visual header:** the filters affecting the visual, drill controls, focus mode (Esc to
+  leave), show as table, export data (CSV), copy as image, and spotlight.
+- **Backend:**
+  - new filter operators `or`, `and` (1–5 non-nested parts) and `top` (top or bottom N members
+    by an aggregated measure), identical in Postgres SQL and pandas;
+  - empty `in` lists are skipped;
+  - hierarchy slicers return a tree; slicers ignore filters on their own fields;
+  - pages keep `drillthroughFields`; settings keep `applyMode`.
+- **Fixed during testing:** opening the filters pane narrowed the canvas, and slicers then
+  overlapped the KPI row. The pane is now a drawer over the canvas, so the page never reflows.
+
+### Phase 4 — done 2026-10-14
+
+- **Calculations (A8):**
+  - `viz_expr.py` is a hand-written parser that turns text into a JSON tree. It supports
+    aggregates, `COUNTROWS`, `DIVIDE`, `IF`, `AND`/`OR`/`NOT`, `ABS`, `ROUND`, `SQRT`,
+    `MIN`/`MAX`, comparisons, what-if parameters by name and nested calculations (with cycle and
+    depth checks).
+  - Each aggregate leaf becomes an ordinary measure, so Postgres and pandas compute identical
+    results (tested). The engine evaluates the tree over the aggregated rows with numpy.
+  - Changing a parameter reuses the cached database result: the query cache key covers only the
+    database part.
+  - In the Build pane: a calculation editor (function and field tokens, a server-checked preview)
+    and quick measures (ratio, average per row, vs target, difference, per distinct item).
+- **Visual calculations:** "show value as" gains moving average (n periods) and % change versus
+  the same period last year. Running totals and differences now restart for each legend series.
+- **Parameters:**
+  - What-if sliders feed calculations.
+  - Field parameters switch the measure or dimension of every bound well.
+  - Both are drawn by a `parameter` visual (slider, buttons or dropdown).
+- **Buttons and navigators:** actions are go to page, apply a view, back, clear/apply slicers,
+  show/hide a visual, open an http(s) link (no other schemes), Ask AI and reset. Navigators list
+  pages or views.
+- **Views (bookmarks):**
+  - Author views come from the editor's Views tab and are saved in the spec.
+  - Viewers get "Views ▾" with personal views, a starred default view and their own light/dark
+    and density.
+  - Each view stores the page, slicers, filter overrides, drill, parameters and hidden visuals.
+- **Viewer personalization:** "Personalize ✎" on a visual changes its type (fields move to the
+  new type's wells), its fields, aggregation, legend, labels and sort. It is saved to the viewer's
+  personal view (debounced) with undo, reset this visual and reset all. Overrides for deleted
+  visuals are pruned.
+- **Conditional formatting** (computed in Python): colour scale, rules, data bars and icons on
+  tables and matrices; per-bar colours on bar and column charts; value colour on cards and KPIs.
+- **Analytics lines:** constant, average, median, min, max, percentile, least-squares trend, and
+  forecast (Holt's linear trend with a 95 % band, linear fallback); scatter gets reference lines
+  and a trend.
+- **Small multiples:** up to 9 panels on one shared scale; a click filters both the category and
+  the panel.
+- **Theme customizer:**
+  - live preview;
+  - palette from a brand colour;
+  - good/neutral/bad and light/dark structural colours, font, corners, shadow and KPI style;
+  - a contrast warning;
+  - JSON import (Power BI-style keys too) and export;
+  - organization themes saved through `themes/`.
+- **Phone layout:** a phone-frame editor (start from the desktop layout, reorder, resize, remove,
+  add). The viewer uses it below 640 px.
+- **Format painter:** copies the look but not data bindings or the title text.
+- **Python visuals (D1):**
+  - `viz_python.py` checks the script before it runs: allow-listed imports; no `_` names; no
+    dangerous builtins or escape-prone attributes.
+  - At runtime, every attribute read is rewritten into a check that refuses system modules and
+    functions (`pandas.compat.platform`, `numpy.f2py.warnings` …).
+  - Builtins are limited and `print` is captured.
+  - The output is sanitized: no `formatter`, `link`, `image` or `$fn` keys, and no URLs or
+    `image://`/`javascript:` strings.
+  - Each Python visual runs in its own guarded engine process. The script is validated on save
+    too.
+- **Fixed during testing:**
+  - Switching a visual's type (mini toolbar or personalize) kept wells the new type does not
+    read, e.g. matrix → table gave an error tile. `retype` now moves the fields.
+  - Python chart options now inherit the theme, grid and tooltip defaults.
+  - The theme dialog now sits above the editor's handles.

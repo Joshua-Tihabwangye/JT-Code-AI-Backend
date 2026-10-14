@@ -202,37 +202,56 @@ def _like(value: str, op: str) -> str:
     return {"contains": f"%{escaped}%", "starts_with": f"{escaped}%", "ends_with": f"%{escaped}"}[op]
 
 
+def _condition(record: DatasetTable, item: dict[str, Any], params: list[Any]) -> sql.Composable:
+    """One filter as SQL (parameters appended in order)."""
+    op, value = item["op"], item.get("value")
+    if op in {"or", "and"}:
+        joiner = sql.SQL(" OR " if op == "or" else " AND ")
+        return sql.SQL("({})").format(joiner.join(_condition(record, part, params) for part in value))
+    info = _column(record, item["field"])
+    column = _ident(info["column"])
+    cast = _cast(info["kind"])
+    if op == "blank":
+        return sql.SQL("{} IS NULL").format(column)
+    if op == "not_blank":
+        return sql.SQL("{} IS NOT NULL").format(column)
+    if op == "top":
+        # Top/bottom N members by a measure over the whole dataset; ties broken by name.
+        direction = sql.SQL("ASC" if value["direction"] == "bottom" else "DESC")
+        measure = _measure(record, {"field": value["by"]["field"], "agg": value["by"]["agg"]})
+        return sql.SQL(
+            "{c} IN (SELECT {c} FROM {t} WHERE {c} IS NOT NULL GROUP BY {c} "
+            "ORDER BY {m} {d} NULLS LAST, {c} ASC LIMIT {n})"
+        ).format(
+            c=column,
+            t=_ident(SCHEMA, record.table_name),
+            m=measure,
+            d=direction,
+            n=sql.Literal(int(value["n"])),
+        )
+    if op in {"in", "not_in"}:
+        values = [v for v in value if v is not None]
+        hit = sql.SQL("({c} = ANY(%s::{t}[]){nulls})").format(
+            c=column,
+            t=cast,
+            nulls=sql.SQL(" OR {} IS NULL").format(column) if None in value else sql.SQL(""),
+        )
+        params.append(values)
+        return hit if op == "in" else sql.SQL("({} IS NOT NULL AND NOT {})").format(column, hit)
+    if op == "between":
+        params.extend(value)
+        return sql.SQL("{c} BETWEEN %s::{t} AND %s::{t}").format(c=column, t=cast)
+    if op in {"contains", "starts_with", "ends_with"}:
+        params.append(_like(str(value), op))
+        return sql.SQL("{}::text ILIKE %s ESCAPE '\\'").format(column)
+    symbol = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
+    params.append(value)
+    return sql.SQL("{c} {s} %s::{t}").format(c=column, s=sql.SQL(symbol), t=cast)
+
+
 def _where(record: DatasetTable, filters: list[dict[str, Any]]) -> tuple[sql.Composable, list[Any]]:
-    parts: list[sql.Composable] = []
     params: list[Any] = []
-    for item in filters:
-        info = _column(record, item["field"])
-        column = _ident(info["column"])
-        cast = _cast(info["kind"])
-        op, value = item["op"], item.get("value")
-        if op == "blank":
-            parts.append(sql.SQL("{} IS NULL").format(column))
-        elif op == "not_blank":
-            parts.append(sql.SQL("{} IS NOT NULL").format(column))
-        elif op in {"in", "not_in"}:
-            values = [v for v in value if v is not None]
-            hit = sql.SQL("({c} = ANY(%s::{t}[]){nulls})").format(
-                c=column,
-                t=cast,
-                nulls=sql.SQL(" OR {} IS NULL").format(column) if None in value else sql.SQL(""),
-            )
-            params.append(values)
-            parts.append(hit if op == "in" else sql.SQL("({} IS NOT NULL AND NOT {})").format(column, hit))
-        elif op == "between":
-            parts.append(sql.SQL("{c} BETWEEN %s::{t} AND %s::{t}").format(c=column, t=cast))
-            params.extend(value)
-        elif op in {"contains", "starts_with", "ends_with"}:
-            parts.append(sql.SQL("{}::text ILIKE %s ESCAPE '\\'").format(column))
-            params.append(_like(str(value), op))
-        else:
-            symbol = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
-            parts.append(sql.SQL("{c} {s} %s::{t}").format(c=column, s=sql.SQL(symbol), t=cast))
-            params.append(value)
+    parts = [_condition(record, item, params) for item in filters]
     if not parts:
         return sql.SQL(""), params
     return sql.SQL(" WHERE ") + sql.SQL(" AND ").join(parts), params

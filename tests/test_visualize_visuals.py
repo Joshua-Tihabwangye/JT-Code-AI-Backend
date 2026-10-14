@@ -239,3 +239,32 @@ def test_gallery_charts_colours_and_legend_position():
             [],
             TODAY,
         )
+
+
+def test_hierarchy_slicers_return_a_tree():
+    kinds = _kinds("retail_sales")
+    visual = _visual(
+        "hier",
+        "slicer",
+        category=[{"field": "region"}, {"field": "country"}],
+        format={"slicer": {"style": "hierarchy"}},
+    )
+    filters = [
+        {"field": "region", "op": "in", "value": ["East"]},
+        {"field": "channel", "op": "in", "value": ["Online"]},
+    ]
+    queries = visual_plan.plan(visual, kinds, filters, TODAY)
+    assert [f["field"] for f in queries["main"]["filters"]] == ["channel"], (
+        "own levels never narrow the slicer"
+    )
+    typed = viz_engine.d.typed(_frame("retail_sales"), kinds)
+    out = viz_engine.vv.build(
+        visual,
+        queries,
+        {"main": viz_engine.vq.aggregate(typed, queries["main"], kinds)},
+        viz_engine.vv.Ctx(themes.resolve("vivid", "light")),
+    )
+    tree = out["slicer"]["tree"]
+    assert out["slicer"]["fields"] == ["region", "country"] and len(tree) == 5
+    east = next(node for node in tree if node["value"] == "East")
+    assert east["children"] and east["count"] == sum(child["count"] for child in east["children"])

@@ -499,7 +499,23 @@
     },
     {
       "method": "GET",
+      "path": "/visualize/themes/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/themes/"
+    },
+    {
+      "method": "GET",
       "path": "/visualize/themes/builtin/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/themes/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/visualize/themes/{param}/"
     },
     {
       "method": "POST",
