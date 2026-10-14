@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy JT-Code to one environment (used by .github/workflows/deploy.yml and by hand).
 #
-#   API_IMAGE=ghcr.io/...@sha256:... OFFICE_IMAGE=... STREAMLIT_IMAGE=... \
+#   API_IMAGE=ghcr.io/...@sha256:... OFFICE_IMAGE=... \
 #     scripts/deploy/deploy.sh staging
 #
 # Steps: pin images -> config -> migrate Job (must succeed) -> workloads -> wait
@@ -13,8 +13,7 @@ env_name="${1:?usage: deploy.sh <staging|production>}"
 case "$env_name" in staging|production) ;; *) echo "unknown environment: $env_name" >&2; exit 2 ;; esac
 : "${API_IMAGE:?API_IMAGE (image@digest) is required}"
 : "${OFFICE_IMAGE:?OFFICE_IMAGE (image@digest) is required}"
-: "${STREAMLIT_IMAGE:?STREAMLIT_IMAGE (image@digest) is required}"
-for image in "$API_IMAGE" "$OFFICE_IMAGE" "$STREAMLIT_IMAGE"; do
+for image in "$API_IMAGE" "$OFFICE_IMAGE"; do
   [[ "$image" == *@sha256:* ]] || { echo "deploy by digest only: $image" >&2; exit 2; }
 done
 
@@ -30,7 +29,7 @@ cp -R "$repo_root/infra/k8s" "$work/k8s"
 (
   cd "$work/k8s/overlays/${env_name}"
   "$kustomize_bin" edit set image \
-    "jt-code-api=${API_IMAGE}" "jt-code-api-office=${OFFICE_IMAGE}" "jt-code-streamlit=${STREAMLIT_IMAGE}"
+    "jt-code-api=${API_IMAGE}" "jt-code-api-office=${OFFICE_IMAGE}"
 )
 "$kustomize_bin" build "$work/k8s/overlays/${env_name}" > "$work/manifests.yaml"
 k() { "$kubectl_bin" --namespace "$namespace" "$@"; }

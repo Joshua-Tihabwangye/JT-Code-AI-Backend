@@ -10,7 +10,7 @@ Phase 5 uses Redis-backed Celery queues and durable records in `jobs_job`; it do
 | `jobs.ingestion` | Knowledge ingestion |
 | `jobs.visualization` | Image, document, and file-conversion work |
 | `analytics.analysis` | Isolated bounded Pandas dataset transforms |
-| `analytics.visualization` | Isolated Plotly/Matplotlib chart rendering |
+| `analytics.visualization` | Isolated ECharts-option/Matplotlib chart rendering |
 | `jobs.default` | Other durable jobs |
 
 Run a separately named worker for each workload.

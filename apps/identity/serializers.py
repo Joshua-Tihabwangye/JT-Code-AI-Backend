@@ -35,7 +35,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 class UserProfileSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField(read_only=True)
-    avatar_url = serializers.URLField(required=False, allow_blank=True)
+    # Output only: avatars are uploaded through /accounts/me/avatar/ and served via signed URLs.
+    avatar_url = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -54,7 +55,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "timezone",
             "avatar_url",
         )
-        read_only_fields = ("id", "supabase_user_id", "full_name", "first_name", "last_name")
+        # email is owned by Supabase Auth (synced from the verified session), never set here.
+        read_only_fields = ("id", "supabase_user_id", "full_name", "first_name", "last_name", "email")
+
+    def get_avatar_url(self, obj: User) -> str | None:
+        from apps.identity.account_views import avatar_url_for
+
+        return avatar_url_for(obj)
 
     def get_name(self, obj: User) -> str:
         if obj.full_name:

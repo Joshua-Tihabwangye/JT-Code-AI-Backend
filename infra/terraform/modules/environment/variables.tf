@@ -19,10 +19,6 @@ variable "api_subdomain" {
   type        = string
 }
 
-variable "analytics_subdomain" {
-  type = string
-}
-
 variable "n8n_hooks_subdomain" {
   type = string
 }

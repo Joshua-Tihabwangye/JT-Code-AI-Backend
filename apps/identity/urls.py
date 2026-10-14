@@ -1,6 +1,6 @@
 from django.urls import path
 
-from apps.identity.account_views import AccountView, PasswordChangeView
+from apps.identity.account_views import AccountAvatarView, AccountView, PasswordChangeView
 from apps.identity.settings_views import (
     SettingsAccountView,
     SettingsConsentsView,
@@ -22,6 +22,7 @@ urlpatterns = [
     path("me/", MeView.as_view(), name="me"),
     path("accounts/me/", AccountView.as_view(), name="account-me"),
     path("accounts/me/password/", PasswordChangeView.as_view(), name="account-password"),
+    path("accounts/me/avatar/", AccountAvatarView.as_view(), name="account-avatar"),
     path("settings/profile/", SettingsProfileView.as_view(), name="settings-profile"),
     path("settings/organization/", SettingsOrganizationView.as_view(), name="settings-organization"),
     path("settings/consents/", SettingsConsentsView.as_view(), name="settings-consents"),

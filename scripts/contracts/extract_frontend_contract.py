@@ -16,14 +16,24 @@ import sys
 from pathlib import Path
 
 CALL = re.compile(r"\bapi\.(get|post|put|patch|delete)\s*(?:<[^()]*?>)?\s*\(\s*([`'\"])(.+?)\2", re.S)
+# The repositories' ``list<T>(path)`` helper is a GET that unwraps plain arrays and DRF pages.
+LIST = re.compile(r"\blist\s*<[^()]*?>\s*\(\s*([`'\"])(.+?)\1", re.S)
+# ``blob(path)`` is a GET that downloads a file (exports).
+BLOB = re.compile(r"\bblob\s*\(\s*([`'\"])(.+?)\1", re.S)
 PARAM = re.compile(r"\$\{[^}]+\}")
 
 
 def extract(frontend: Path) -> list[dict[str, str]]:
     calls: set[tuple[str, str]] = set()
     for source in sorted((frontend / "src" / "lib" / "data" / "api").glob("*.ts")):
-        for method, _quote, path in CALL.findall(source.read_text()):
+        text = source.read_text()
+        found = [(method, path) for method, _quote, path in CALL.findall(text)]
+        found += [("get", path) for _quote, path in LIST.findall(text)]
+        found += [("get", path) for _quote, path in BLOB.findall(text)]
+        for method, path in found:
             template = PARAM.sub("{param}", path.split("?", 1)[0])
+            if not template.startswith("/"):
+                continue  # e.g. the helper's own `path` parameter
             calls.add((method.upper(), template))
     return [{"method": method, "path": path} for method, path in sorted(calls, key=lambda c: (c[1], c[0]))]
 

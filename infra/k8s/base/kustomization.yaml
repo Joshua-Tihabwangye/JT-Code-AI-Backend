@@ -15,7 +15,6 @@ resources:
 - worker-analytics.yaml
 - beat.yaml
 - consumers.yaml
-- streamlit.yaml
 - migrate-job.yaml
 - networkpolicies.yaml
 - ingress.yaml

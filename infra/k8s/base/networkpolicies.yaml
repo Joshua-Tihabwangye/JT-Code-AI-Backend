@@ -19,7 +19,6 @@ spec:
       operator: In
       values:
       - api
-      - streamlit
   policyTypes:
   - Ingress
   ingress:

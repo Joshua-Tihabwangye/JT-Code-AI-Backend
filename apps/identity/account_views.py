@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
@@ -47,6 +48,24 @@ class PasswordChangeSerializer(serializers.Serializer):
         return attrs
 
 
+AVATAR_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+AVATAR_MAX_BYTES = 2 * 1024 * 1024
+AVATAR_URL_TTL_SECONDS = 3600
+
+
+def avatar_url_for(user: Any) -> str | None:
+    """Uploaded avatars live in private storage, so hand out a short-lived signed URL."""
+    asset = getattr(user, "avatar_asset", None)
+    if asset is not None and asset.deleted_at is None and asset.storage_key:
+        from apps.assets.supabase_storage import SupabaseStorageError, generate_signed_delivery_url
+
+        try:
+            return generate_signed_delivery_url(asset.storage_key, expires_in=AVATAR_URL_TTL_SECONDS)
+        except SupabaseStorageError, httpx.HTTPError:
+            return None
+    return user.avatar_url or None
+
+
 def serialize_account(user: Any, organization: Any) -> dict[str, Any]:
     from apps.governance.models import ConsentRecord
     from apps.usage.services import active_plan
@@ -68,7 +87,7 @@ def serialize_account(user: Any, organization: Any) -> dict[str, Any]:
         "countryName": user.country,
         "dialCode": user.dial_code,
         "timezone": user.timezone,
-        "avatarUrl": user.avatar_url or None,
+        "avatarUrl": avatar_url_for(user),
         "createdAt": user.created_at.isoformat(),
         "termsAccepted": ConsentRecord.ConsentType.TERMS in granted,
         "privacyAccepted": ConsentRecord.ConsentType.PRIVACY in granted,
@@ -138,3 +157,65 @@ class PasswordChangeView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AccountAvatarView(APIView):
+    """Upload (multipart ``file``) or remove the signed-in user's avatar."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [BurstThrottle]
+
+    @extend_schema(request=OpenApiTypes.BINARY, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request: Request) -> Response:
+        from apps.assets.services import register_generated_asset
+        from apps.assets.supabase_storage import SupabaseStorageError, content_matches_type
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            return Response(
+                {"file": ["Attach an image as the 'file' field."]}, status=status.HTTP_400_BAD_REQUEST
+            )
+        content_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
+        if content_type not in AVATAR_TYPES:
+            return Response(
+                {"file": ["Use a PNG, JPEG, WebP or GIF image."]}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if upload.size is None or upload.size > AVATAR_MAX_BYTES:
+            return Response(
+                {"file": ["Avatars are limited to 2 MB."]}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            )
+        content = upload.read()
+        if not content_matches_type(content[:64], content_type):
+            return Response(
+                {"file": ["The file content does not match its image type."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        organization = organization_for_request(request, required=True)
+        user = request.user
+        try:
+            asset = register_generated_asset(
+                content,
+                owner=user,
+                organization=organization,
+                file_name=f"avatar.{content_type.rsplit('/', 1)[-1]}",
+                kind="avatars",
+                content_type=content_type,
+                provenance={"origin": "avatar"},
+            )
+        except SupabaseStorageError, httpx.HTTPError:
+            return Response(
+                {"detail": "File storage is unavailable; try again later."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        user.avatar_asset = asset
+        user.avatar_url = ""
+        user.save(update_fields=["avatar_asset", "avatar_url"])
+        return Response(serialize_account(user, organization))
+
+    @extend_schema(request=None, responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request: Request) -> Response:
+        user = request.user
+        user.avatar_asset = None
+        user.avatar_url = ""
+        user.save(update_fields=["avatar_asset", "avatar_url"])
+        return Response(serialize_account(user, organization_for_request(request)))

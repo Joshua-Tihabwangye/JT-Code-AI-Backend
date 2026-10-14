@@ -31,7 +31,7 @@ locals {
   zone      = var.manage_zone_policy ? 1 : 0
 }
 
-# DNS: the API, Streamlit and the n8n webhook processors are proxied through
+# DNS: the API and the n8n webhook processors are proxied through
 # Cloudflare to the cluster's ingress load balancer.
 resource "cloudflare_record" "hosts" {
   for_each = toset(var.proxied_subdomains)

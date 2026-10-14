@@ -113,7 +113,8 @@ class ConsentRecordViewSet(viewsets.ModelViewSet):
 
 
 class RetentionRuleViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+    # Retention rules delete data (including the audit trail), so only admins manage them.
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
     serializer_class = RetentionRuleSerializer
     lookup_field = "id"
 
@@ -160,6 +161,14 @@ class SafetyEventViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(action_taken=action)
 
         return queryset
+
+    def perform_create(self, serializer):
+        # Tenant and reporter come from the request, never the payload.
+        organization = organization_for_request(self.request, required=True)
+        job = serializer.validated_data.get("job")
+        if job is not None and job.organization_id != organization.id:
+            raise ValidationError({"job": "The job does not belong to this organization."})
+        serializer.save(organization=organization, user=self.request.user)
 
     @action(detail=True, methods=["post"])
     def review(self, request: Request, id=None):

@@ -171,7 +171,12 @@ class OrganizationInviteAcceptView(APIView):
             invite.status = OrganizationInvite.Status.EXPIRED
             invite.save(update_fields=["status"])
             return Response({"detail": "Invite has expired."}, status=status.HTTP_410_GONE)
-        if request.user.email.lower() != invite.email.lower():
+        # The invite token (shared by the inviting admin) proves possession of the invite;
+        # the email (from the verified Supabase session) proves it is the intended person.
+        token = request.data.get("token") if isinstance(request.data, dict) else None
+        if not isinstance(token, str) or not secrets.compare_digest(token, invite.token):
+            raise PermissionDenied("A valid invite token is required.")
+        if not request.user.email or request.user.email.lower() != invite.email.lower():
             raise PermissionDenied("This invite was issued to a different email address.")
         membership, _ = UserOrganization.objects.get_or_create(
             user=request.user, organization=invite.organization

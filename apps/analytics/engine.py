@@ -1,4 +1,4 @@
-"""Isolated analytics engine (pandas, Plotly, Matplotlib).
+"""Isolated analytics engine (pandas, Apache ECharts options, Matplotlib).
 
 This module deliberately imports nothing from Django or the application: the
 analysis workers run it as a separate ``python -I`` process with an empty
@@ -314,6 +314,95 @@ def frame_preview(frame: Any, rows: int) -> list[dict[str, Any]]:
     return records
 
 
+def _plain(values: Any) -> list[Any]:
+    out = []
+    for value in list(values):
+        if hasattr(value, "item"):
+            value = value.item()
+        if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+            value = None
+        out.append(value if isinstance(value, (int, float, str, bool)) or value is None else str(value))
+    return out
+
+
+def echarts_option(
+    frame: Any, *, kind: str, x: str, y: str, title: str = "", color: str = ""
+) -> dict[str, Any]:
+    """An Apache ECharts option for the analysis chart kinds (plain JSON, no functions)."""
+    import numpy as np
+
+    option: dict[str, Any] = {
+        "tooltip": {"trigger": "item" if kind in {"pie", "scatter", "box"} else "axis"},
+        "legend": {"top": 28 if title else 0},
+    }
+    if title:
+        option["title"] = {"text": title, "left": "left"}
+    if kind == "pie":
+        option["series"] = [
+            {
+                "type": "pie",
+                "radius": "65%",
+                "data": [
+                    {"name": str(n), "value": v} for n, v in zip(frame[x], _plain(frame[y]), strict=True)
+                ],
+            }
+        ]
+        return option
+    option["grid"] = {"left": 16, "right": 24, "top": 64 if title else 40, "bottom": 16, "containLabel": True}
+    if kind == "histogram":
+        values = frame[x].dropna().to_numpy(dtype=float)
+        counts, edges = np.histogram(values, bins="auto" if len(values) else 10)
+        option["xAxis"] = {
+            "type": "category",
+            "name": x,
+            "data": [f"{edges[i]:.4g}–{edges[i + 1]:.4g}" for i in range(len(counts))],
+        }
+        option["yAxis"] = {"type": "value", "name": "count"}
+        option["series"] = [
+            {"type": "bar", "name": x, "data": [int(c) for c in counts], "barCategoryGap": "4%"}
+        ]
+        return option
+    if kind == "box":
+        groups = [(str(key), group[y].dropna().to_numpy(dtype=float)) for key, group in frame.groupby(x)]
+        option["xAxis"] = {"type": "category", "name": x, "data": [name for name, _ in groups]}
+        option["yAxis"] = {"type": "value", "name": y, "scale": True}
+        option["series"] = [
+            {
+                "type": "boxplot",
+                "name": y,
+                "data": [_plain(np.percentile(v, [0, 25, 50, 75, 100])) if len(v) else [] for _, v in groups],
+            }
+        ]
+        return option
+    groups = [(str(key), group) for key, group in frame.groupby(color, sort=False)] if color else [(y, frame)]
+    if kind == "scatter":
+        option["xAxis"] = {"type": "value", "name": x, "scale": True}
+        option["yAxis"] = {"type": "value", "name": y, "scale": True}
+        option["series"] = [
+            {
+                "type": "scatter",
+                "name": name,
+                "data": [list(pair) for pair in zip(_plain(g[x]), _plain(g[y]), strict=True)],
+            }
+            for name, g in groups
+        ]
+        return option
+    categories = [str(value) for value in dict.fromkeys(frame[x].tolist())]
+    option["xAxis"] = {"type": "category", "name": x, "data": categories}
+    option["yAxis"] = {"type": "value", "name": y}
+    for name, group in groups:
+        lookup = dict(zip(group[x].astype(str), _plain(group[y]), strict=False))
+        series: dict[str, Any] = {
+            "type": "line" if kind in {"line", "area"} else "bar",
+            "name": name,
+            "data": [lookup.get(c) for c in categories],
+        }
+        if kind == "area":
+            series["areaStyle"] = {}
+        option["series"] = [*option.get("series", []), series]
+    return option
+
+
 def chart(
     frame: Any, *, kind: str, x: str, y: str, title: str = "", color: str = "", max_points: int
 ) -> tuple[dict[str, Any], bytes]:
@@ -332,24 +421,11 @@ def chart(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import pandas as pd
-    import plotly.express as px
 
     numeric_column = x if kind == "histogram" else y
     if not pd.api.types.is_numeric_dtype(frame[numeric_column]):
         raise AnalysisError(f"Chart column {numeric_column} must be numeric.")
-    options: dict[str, Any] = {"title": title or None}
-    if color:
-        options["color"] = color
-    builders = {
-        "bar": lambda: px.bar(frame, x=x, y=y, **options),
-        "line": lambda: px.line(frame, x=x, y=y, **options),
-        "area": lambda: px.area(frame, x=x, y=y, **options),
-        "scatter": lambda: px.scatter(frame, x=x, y=y, **options),
-        "histogram": lambda: px.histogram(frame, x=x, **options),
-        "box": lambda: px.box(frame, x=x, y=y, **options),
-        "pie": lambda: px.pie(frame, names=x, values=y, title=title or None),
-    }
-    plotly_spec = json.loads(builders[kind]().to_json())
+    chart_spec = echarts_option(frame, kind=kind, x=x, y=y, title=title, color=color)
 
     figure, axis = plt.subplots(figsize=(10, 6))
     if kind == "bar":
@@ -377,7 +453,7 @@ def chart(
     output = io.BytesIO()
     figure.savefig(output, format="png", bbox_inches="tight", dpi=120)
     plt.close(figure)
-    return plotly_spec, output.getvalue()
+    return chart_spec, output.getvalue()
 
 
 # --- Process entry point -----------------------------------------------------------

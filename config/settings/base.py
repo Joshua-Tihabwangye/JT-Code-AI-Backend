@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import dj_database_url
+from corsheaders.defaults import default_headers as cors_default_headers
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 from kombu import Queue
@@ -67,6 +68,7 @@ INSTALLED_APPS = [
     "apps.documents",
     "apps.conversions",
     "apps.analytics",
+    "apps.visualize",
     "apps.usage",
     "apps.orchestration",
     "apps.operations",
@@ -128,7 +130,10 @@ def runtime_connection_settings(
     result_url = env("CELERY_RESULT_BACKEND", result_default)
     pooler_mode = env("DATABASE_POOLER_MODE", "direct").lower()
     conn_max_age = int(env("DATABASE_CONN_MAX_AGE", "60"))
-    if pooler_mode == "transaction":
+    # Transaction poolers own pooling. Under ASGI (config/asgi.py) Django runs sync code on
+    # thread-pool threads and never closes their persistent connections, which exhausts
+    # max_connections; Django documents disabling persistent connections in async servers.
+    if pooler_mode == "transaction" or os.environ.get("JT_CODE_SERVER_INTERFACE") == "asgi":
         conn_max_age = 0
     # Parse the explicitly selected profile URL. ``dj_database_url.config``
     # would silently prefer DATABASE_URL from the process environment, which
@@ -188,6 +193,17 @@ STORAGES = {
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = False
+# Browser clients send these on API calls (tenant selection, idempotent POSTs, request
+# correlation, SSE resume); without them cross-origin preflights fail.
+CORS_ALLOW_HEADERS = (
+    *cors_default_headers,
+    "x-organization-id",
+    "idempotency-key",
+    "x-request-id",
+    "last-event-id",
+    "x-jt-code-client",
+)
+CORS_EXPOSE_HEADERS = ("x-request-id", "idempotency-replayed")
 
 CACHES: dict[str, Any] = {}
 REDIS_URL = ""
@@ -445,7 +461,7 @@ ANALYTICS_MAX_DATASET_COLUMNS = int(env("ANALYTICS_MAX_DATASET_COLUMNS", "200"))
 ANALYTICS_MAX_DATASET_CELLS = int(env("ANALYTICS_MAX_DATASET_CELLS", "2000000"))
 ANALYTICS_RESULT_PREVIEW_ROWS = int(env("ANALYTICS_RESULT_PREVIEW_ROWS", "100"))
 ANALYTICS_MAX_CHART_POINTS = int(env("ANALYTICS_MAX_CHART_POINTS", "10000"))
-ANALYTICS_MAX_PLOTLY_SPEC_BYTES = int(env("ANALYTICS_MAX_PLOTLY_SPEC_BYTES", str(5 * 1024 * 1024)))
+ANALYTICS_MAX_CHART_SPEC_BYTES = int(env("ANALYTICS_MAX_CHART_SPEC_BYTES", str(5 * 1024 * 1024)))
 ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS = int(env("ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS", "30"))
 ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS = int(env("ANALYTICS_TASK_SOFT_TIME_LIMIT_SECONDS", "270"))
 ANALYTICS_TASK_TIME_LIMIT_SECONDS = int(env("ANALYTICS_TASK_TIME_LIMIT_SECONDS", "300"))
@@ -454,7 +470,12 @@ ANALYTICS_STALLED_AFTER_MINUTES = int(env("ANALYTICS_STALLED_AFTER_MINUTES", "15
 ANALYTICS_SANDBOX_MEMORY_MB = int(env("ANALYTICS_SANDBOX_MEMORY_MB", "1536"))
 ANALYTICS_SANDBOX_CPU_SECONDS = int(env("ANALYTICS_SANDBOX_CPU_SECONDS", "240"))
 ANALYTICS_SANDBOX_TIMEOUT_SECONDS = int(env("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250"))
-# Plotly specs up to this size are also kept inline on the visualization row;
+# Data visualization tool (apps.visualize). Rendering runs in the analytics sandbox;
+# only the assistant calls a model, and only when a user sends a prompt.
+VISUALIZE_ASSISTANT_MODEL_ALIAS = env("VISUALIZE_ASSISTANT_MODEL_ALIAS", "")
+VISUALIZE_ASSISTANT_MAX_TOKENS = int(env("VISUALIZE_ASSISTANT_MAX_TOKENS", "700"))
+VISUALIZE_RESULT_TTL_SECONDS = int(env("VISUALIZE_RESULT_TTL_SECONDS", "3600"))
+# Chart (ECharts) specs up to this size are also kept inline on the visualization row;
 # the full spec is always stored as a private Supabase Storage asset.
 ANALYTICS_INLINE_SPEC_BYTES = int(env("ANALYTICS_INLINE_SPEC_BYTES", "262144"))
 
@@ -479,6 +500,11 @@ KAFKA_TOPIC_RETENTION_MS = int(env("KAFKA_TOPIC_RETENTION_MS", str(7 * 24 * 3600
 
 AI_PROVIDER = env("AI_PROVIDER", "disabled")
 N8N_SENTRY_RELAY_SECRET = env("N8N_SENTRY_RELAY_SECRET")
+# Integration sync (knowledge-integration-sync / integration-test workflows) reads providers with
+# ONE platform credential per provider, so nothing binds a repo/folder/channel to the tenant that
+# authorized it: any tenant could pull another tenant's data. Keep this off until per-tenant
+# OAuth (GitHub App installations, per-workspace Notion/Slack tokens) is in place.
+INTEGRATION_SHARED_CREDENTIAL_SYNC = env_bool("INTEGRATION_SHARED_CREDENTIAL_SYNC", False)
 
 # n8n orchestration (Phase 16; docs/N8N_ORCHESTRATION.md, infra/n8n).
 # N8N_BASE_URL serves the editor and public API (workflow sync); webhooks are
@@ -679,6 +705,9 @@ REST_FRAMEWORK = {
         "burst": env("THROTTLE_BURST", "30/minute"),
         "agent_runs": env("THROTTLE_AGENT_RUNS", "20/hour"),
         "analytics": env("THROTTLE_ANALYTICS", "30/hour"),
+        "visualize": env("THROTTLE_VISUALIZE", "900/hour"),
+        # Dashboards redraw on every slicer change and click; results are cached, so allow more.
+        "visualize_query": env("THROTTLE_VISUALIZE_QUERY", "3600/hour"),
     },
 }
 SPECTACULAR_SETTINGS = {
@@ -693,6 +722,10 @@ SPECTACULAR_SETTINGS = {
         "UsageFeature": "apps.usage.models.Feature",
         "EntitlementFeature": "apps.billing.models.Entitlement.FeatureType",
         "VisualizationKind": "apps.analytics.models.Visualization.Kind",
+        "DashboardMemberRole": "apps.visualize.models.DashboardMember.Role",
+        "DashboardRole": [("owner", "owner"), ("editor", "editor"), ("viewer", "viewer")],
+        "ColorMode": [("light", "light"), ("dark", "dark")],
+        "OrganizationRole": [("admin", "admin"), ("editor", "editor"), ("viewer", "viewer")],
         "KnowledgeDocumentVisibility": "apps.knowledge.models.Document.Visibility",
         "ModelStatus": [
             ("active", "Active"),

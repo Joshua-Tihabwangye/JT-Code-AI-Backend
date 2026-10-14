@@ -3,7 +3,7 @@
     python manage.py create_local_account you@example.com --org "My workspace"
 
 The password is prompted for (never echoed or passed on the command line). The
-same login works in the frontend, Streamlit and the API. Development only: the
+same login works in the frontend and the API. Development only: the
 command refuses to run unless DEBUG is on.
 """
 

@@ -119,7 +119,7 @@ class DocumentViewSet(ExportFormatMixin, viewsets.ModelViewSet):
         parameters=[OpenApiParameter("format", str, enum=["md", "pdf"], required=False)],
         responses={200: OpenApiTypes.OBJECT},
     )
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get"], throttle_classes=[ConversionThrottle, BurstThrottle])
     def export(self, request: Request, id=None):
         document = self.get_object()
         export_format = request.query_params.get("format", "md")

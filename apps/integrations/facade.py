@@ -58,6 +58,12 @@ _PATTERNS = {
 }
 
 
+SHARED_CREDENTIAL_SYNC_DISABLED = (
+    "Integration sync is disabled: it needs per-tenant provider authorization "
+    "(INTEGRATION_SHARED_CREDENTIAL_SYNC)."
+)
+
+
 def validate_config(key: str, config: Any) -> dict[str, str]:
     provider = PROVIDERS.get(key)
     if provider is None:
@@ -137,9 +143,16 @@ def serialize(account: ConnectorAccount) -> dict[str, Any]:
 
 def check_connection(account: ConnectorAccount) -> tuple[bool, str]:
     """Ask n8n (``integration-test`` workflow) whether it can read the tenant's resource."""
+    from django.conf import settings
+
     from apps.orchestration import client
     from apps.orchestration.registry import active_definition
 
+    if not settings.INTEGRATION_SHARED_CREDENTIAL_SYNC:
+        return (
+            False,
+            SHARED_CREDENTIAL_SYNC_DISABLED,
+        )
     definition = active_definition("integration-test")
     if definition is None or not client.configured():
         return False, "n8n is not configured, so the connection cannot be verified."

@@ -55,7 +55,6 @@ module "environment" {
   zone_name           = var.zone_name
   cloudflare_zone_id  = var.cloudflare_zone_id
   api_subdomain       = "api"
-  analytics_subdomain = "analytics"
   n8n_hooks_subdomain = "n8n-hooks"
   frontend_url        = var.frontend_url
 

@@ -68,8 +68,6 @@ def connection_budget(environment: str = "production") -> dict[str, Any]:
             name = doc["metadata"]["name"]
             container = doc["spec"]["template"]["spec"]["containers"][0]
             env = {item["name"]: item.get("value") for item in container.get("env", [])}
-            if name == "jt-code-streamlit":
-                continue  # read-only API client; no database connections
             if name == "jt-code-api":
                 hpa: dict[str, Any] = next(
                     (

@@ -105,7 +105,7 @@ services:
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:${JT_CODE_LOCAL_SUPABASE_DB_PASSWORD:-local-supabase-db-password-change-me}@supabase-db:5432/postgres
       GOTRUE_SITE_URL: ${JT_CODE_LOCAL_SUPABASE_SITE_URL:-http://localhost:5173}
-      GOTRUE_URI_ALLOW_LIST: ${JT_CODE_LOCAL_SUPABASE_ADDITIONAL_REDIRECT_URLS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8501}
+      GOTRUE_URI_ALLOW_LIST: ${JT_CODE_LOCAL_SUPABASE_ADDITIONAL_REDIRECT_URLS:-http://localhost:5173,http://127.0.0.1:5173}
       GOTRUE_DISABLE_SIGNUP: ${JT_CODE_LOCAL_SUPABASE_DISABLE_SIGNUP:-false}
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
@@ -355,21 +355,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 8
-
-  streamlit:
-    build: ./streamlit_app
-    image: jt-code-streamlit:local
-    environment:
-      JT_CODE_API_BASE_URL: http://api:8000/api/v1
-      SUPABASE_URL: ${JT_CODE_LOCAL_SUPABASE_PUBLIC_URL:-http://localhost:54321}
-      SUPABASE_PUBLISHABLE_KEY: ${JT_CODE_LOCAL_SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjIwNTEyMjI0MDB9.v6RJEVM3PMvl9LjjvH-IaHKJiZPNWc1--G2HH1PVfSs}
-    ports: ["127.0.0.1:8501:8501"]
-    read_only: true
-    tmpfs: [/tmp]
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    depends_on:
-      api: {condition: service_healthy}
 
   prometheus:
     image: prom/prometheus:v2.55.0

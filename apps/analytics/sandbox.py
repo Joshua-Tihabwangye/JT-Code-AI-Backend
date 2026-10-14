@@ -39,14 +39,20 @@ def _limits() -> dict[str, Any]:
         "max_cells": settings.ANALYTICS_MAX_DATASET_CELLS,
         "max_result_bytes": settings.ANALYTICS_MAX_RESULT_BYTES,
         "max_points": settings.ANALYTICS_MAX_CHART_POINTS,
-        "max_spec_bytes": settings.ANALYTICS_MAX_PLOTLY_SPEC_BYTES,
+        "max_spec_bytes": settings.ANALYTICS_MAX_CHART_SPEC_BYTES,
         "preview_rows": settings.ANALYTICS_RESULT_PREVIEW_ROWS,
         "allowed_mime_types": list(settings.ANALYTICS_ALLOWED_MIME_TYPES),
     }
 
 
-def run_engine(operation: str, content: bytes, **request: Any) -> dict[str, Any]:
-    """Execute one engine operation; raises ``AnalysisError`` or ``SandboxError``."""
+def run_engine(
+    operation: str, content: bytes, *, script: Path = ENGINE_PATH, **request: Any
+) -> dict[str, Any]:
+    """Execute one engine operation; raises ``AnalysisError`` or ``SandboxError``.
+
+    ``script`` selects a packaged engine (the analytics or the visualization
+    engine); it is always a fixed path inside the application, never input.
+    """
     from apps.analytics.services import AnalysisError
 
     limits = _limits()
@@ -68,7 +74,7 @@ def run_engine(operation: str, content: bytes, **request: Any) -> dict[str, Any]
         }
         try:
             completed = subprocess.run(  # nosec B603 - fixed interpreter and engine path
-                [sys.executable, "-I", str(ENGINE_PATH)],
+                [sys.executable, "-I", str(script)],
                 input=payload,
                 capture_output=True,
                 env=environment,

@@ -13,7 +13,7 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: docker
-    directories: ["/", "/streamlit_app"]
+    directories: ["/"]
     schedule:
       interval: weekly
   - package-ecosystem: terraform

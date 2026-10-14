@@ -6,7 +6,7 @@ Phase 3 data-foundation artifact for Supabase PostgreSQL.
 
 Canonical data lives in Supabase PostgreSQL: users, organizations, memberships,
 conversations, jobs, asset metadata, usage ledger, audit/governance records and
-billing state. Redis, Kafka, n8n and Streamlit are not canonical stores.
+billing state. Redis, Kafka and n8n are not canonical stores.
 
 ## Production Baseline
 
@@ -50,7 +50,7 @@ billing state. Redis, Kafka, n8n and Streamlit are not canonical stores.
 
 Migrations provision the no-login group role `jt_code_analytics_reader`, revoke
 PUBLIC access to the views, and grant it `SELECT` on the five `analytics_*`
-views only. Provision a separate login role for Metabase or Streamlit and grant
+views only. Provision a separate login role for a BI tool (e.g. Metabase) and grant
 it membership in `jt_code_analytics_reader`; do not give those consumers the
 Django application role. Application tables remain owned by Django migrations
 and service code.

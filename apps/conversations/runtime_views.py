@@ -17,6 +17,7 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -41,6 +42,7 @@ from apps.core.pagination import (
     OptionalCreatedCursorPagination,
     OptionalUpdatedCursorPagination,
 )
+from apps.core.renderers import EventStreamRenderer
 from apps.core.throttling import BurstThrottle, ChatThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
@@ -225,8 +227,13 @@ class ConversationRuntimeViewSet(ExportFormatMixin, viewsets.ModelViewSet):
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):  # OpenAPI generation has no user
+            return Conversation.objects.none()
         params = self.request.query_params
-        queryset = tenant_scoped_queryset(Conversation.objects.all(), self.request.user)
+        # Chats are private to their owner, even within an organization.
+        queryset = tenant_scoped_queryset(Conversation.objects.all(), self.request.user).filter(
+            owner=self.request.user
+        )
         flag = lambda name: params.get(name, "").lower() == "true"  # noqa: E731
         if flag("archivedOnly"):
             queryset = queryset.filter(archived_at__isnull=False)
@@ -433,8 +440,12 @@ class ChatRequestRuntimeViewSet(
     throttle_classes = [ChatThrottle, BurstThrottle]
 
     def get_queryset(self):
-        return tenant_scoped_queryset(ChatRequest.objects.all(), self.request.user).select_related(
-            "conversation"
+        if getattr(self, "swagger_fake_view", False):  # OpenAPI generation has no user
+            return ChatRequest.objects.none()
+        return (
+            tenant_scoped_queryset(ChatRequest.objects.all(), self.request.user)
+            .filter(owner=self.request.user)
+            .select_related("conversation")
         )
 
     def list(self, request: Request, *args, **kwargs) -> Response:
@@ -455,7 +466,9 @@ class ChatRequestRuntimeViewSet(
         serializer.is_valid(raise_exception=True)
         conversation = tenant_scoped_queryset(
             Conversation.objects.filter(
-                id=serializer.validated_data["conversationId"], archived_at__isnull=True
+                id=serializer.validated_data["conversationId"],
+                archived_at__isnull=True,
+                owner=request.user,
             ),
             request.user,
         ).first()
@@ -482,7 +495,7 @@ class ChatRequestRuntimeViewSet(
         item = cancel_chat_request(self.get_object())
         return Response(self.get_serializer(item).data)
 
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get"], renderer_classes=[JSONRenderer, EventStreamRenderer])
     def stream(self, request: Request, pk=None) -> StreamingHttpResponse:
         item = self.get_object()
         request_id = str(item.id)
@@ -494,7 +507,7 @@ class ChatRequestRuntimeViewSet(
                 if not connection.in_atomic_block:
                     close_old_connections()
                 current = tenant_scoped_queryset(
-                    ChatRequest.objects.filter(id=request_id), request.user
+                    ChatRequest.objects.filter(id=request_id, owner=request.user), request.user
                 ).first()
                 if current is None:
                     return None

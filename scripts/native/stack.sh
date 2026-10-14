@@ -29,7 +29,6 @@ ENDPOINTS=(
   "Supabase Storage|http://127.0.0.1:54321/storage/v1/status"
   "Mailpit|http://127.0.0.1:8025/livez"
   "n8n|http://127.0.0.1:5678/healthz"
-  "Streamlit|http://127.0.0.1:8501/_stcore/health"
 )
 OBS_ENDPOINTS=(
   "Prometheus|http://127.0.0.1:9090/-/ready"
@@ -100,7 +99,7 @@ infra_up() {
 }
 
 app_up() {
-  log "Starting application (API, worker, beat, consumer, Streamlit)"
+  log "Starting application (API, worker, beat, consumer)"
   "${SYSTEMCTL[@]}" start jt-code-app.target
   wait_for_http API http://127.0.0.1:8000/api/v1/health/live/ 90
 }
@@ -167,7 +166,7 @@ case "$cmd" in
     printf 'Redis       127.0.0.1:6379  no password; db 0 cache, 1 Celery broker, 2 results\n'
     printf '  GUI: make native-redisinsight   CLI: redis-cli -n 1\n'
     printf 'Grafana     http://127.0.0.1:3000  dashboards open without login; admin: user admin  password %s\n' "$(secret JT_GRAFANA_ADMIN_PASSWORD)"
-    printf 'App / Streamlit / frontend: your Supabase account (python manage.py create_local_account EMAIL)\n'
+    printf 'App / frontend: your Supabase account (python manage.py create_local_account EMAIL)\n'
     ;;
   redisinsight)
     bin="${JT_NATIVE_HOME:-$HOME/.local/share/jt-code-native}/bin/redisinsight"

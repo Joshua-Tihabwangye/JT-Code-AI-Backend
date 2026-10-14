@@ -10,36 +10,76 @@
       "path": "/accounts/me/"
     },
     {
+      "method": "DELETE",
+      "path": "/accounts/me/avatar/"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/me/avatar/"
+    },
+    {
       "method": "POST",
       "path": "/accounts/me/password/"
     },
     {
       "method": "GET",
-      "path": "/auth/me/"
+      "path": "/analysis/datasets/"
     },
     {
       "method": "POST",
-      "path": "/auth/oauth/{param}/"
+      "path": "/analysis/datasets/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/analysis/datasets/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/analysis/datasets/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/analysis/datasets/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/analysis/runs/"
     },
     {
       "method": "POST",
-      "path": "/auth/reset/"
+      "path": "/analysis/runs/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/analysis/runs/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/analysis/runs/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/analysis/runs/{param}/download/"
     },
     {
       "method": "POST",
-      "path": "/auth/reset/confirm/"
+      "path": "/analysis/runs/{param}/retry/"
     },
     {
       "method": "POST",
-      "path": "/auth/signin/"
+      "path": "/billing/portal/"
     },
     {
       "method": "POST",
-      "path": "/auth/signout/"
+      "path": "/chat/requests/"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/requests/{param}/"
     },
     {
       "method": "POST",
-      "path": "/auth/signup/"
+      "path": "/chat/requests/{param}/cancel/"
     },
     {
       "method": "GET",
@@ -71,7 +111,7 @@
     },
     {
       "method": "POST",
-      "path": "/conversations/{param}/cancel/"
+      "path": "/conversations/{param}/archive/"
     },
     {
       "method": "GET",
@@ -83,7 +123,7 @@
     },
     {
       "method": "POST",
-      "path": "/conversations/{param}/messages/"
+      "path": "/conversations/{param}/unarchive/"
     },
     {
       "method": "GET",
@@ -266,10 +306,6 @@
       "path": "/knowledge/sources/{param}/sync/"
     },
     {
-      "method": "POST",
-      "path": "/payment-methods/"
-    },
-    {
       "method": "GET",
       "path": "/payment-methods/me/"
     },
@@ -280,6 +316,10 @@
     {
       "method": "POST",
       "path": "/plans/{param}/subscribe/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/settings/account/"
     },
     {
       "method": "GET",
@@ -299,6 +339,178 @@
     },
     {
       "method": "GET",
+      "path": "/visualizations/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualizations/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualizations/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualizations/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/assistant/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/catalog/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/charts/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/charts/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/charts/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/charts/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/visualize/charts/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/charts/{param}/export/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/dashboards/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/dashboards/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/dashboards/auto/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/dashboards/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/dashboards/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/visualize/dashboards/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/dashboards/{param}/duplicate/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/dashboards/{param}/personal-view/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/dashboards/{param}/personal-view/"
+    },
+    {
+      "method": "PUT",
+      "path": "/visualize/dashboards/{param}/personal-view/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/dashboards/{param}/versions/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/dashboards/{param}/versions/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/dashboards/{param}/versions/{param}/restore/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/datasets/import/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/datasets/{param}/edit/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/datasets/{param}/export/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/datasets/{param}/insights/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/datasets/{param}/organize/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/datasets/{param}/preview/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/datasets/{param}/quality/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/datasets/{param}/recommend/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/datasets/{param}/replace/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/maps/world/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/predict/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/predict/results/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/predict/results/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/render/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/samples/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/themes/builtin/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/visuals/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/workbook/"
+    },
+    {
+      "method": "GET",
       "path": "/wallets/me/"
     },
     {
@@ -311,14 +523,7 @@
     }
   ],
   "delegated": {
-    "/auth/": "Supabase Auth owns sign-up, sign-in, OAuth, sign-out and password reset (ADR-001); the frontend calls supabase-js directly. ApiAuthRepository is only exercised by the frontend's unit tests."
+    "/auth/": "Supabase Auth owns sign-up, sign-in, OAuth, sign-out and password reset (ADR-001); ApiAuthRepository and src/lib/supabase.tsx call supabase-js directly."
   },
-  "deviations": [
-    {
-      "call": "POST /conversations/{param}/messages/",
-      "frontendExpects": "ChatMessage (synchronous assistant reply)",
-      "backendReturns": "202 ChatRequest; the reply streams from GET /chat/requests/{id}/stream/ (SSE) and is listed by GET /conversations/{id}/messages/",
-      "owner": "frontend: switch sendMessage to the streaming flow"
-    }
-  ]
+  "deviations": []
 }

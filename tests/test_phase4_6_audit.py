@@ -129,7 +129,8 @@ def test_control_viewer_cannot_post_messages_through_the_conversation_route(
         HTTP_IDEMPOTENCY_KEY="audit-p4-1-control",
     )
 
-    assert response.status_code == 403, response.content
+    # Conversations are owner-private, so another member's conversation is invisible (404).
+    assert response.status_code == 404, response.content
 
 
 @pytest.mark.django_db

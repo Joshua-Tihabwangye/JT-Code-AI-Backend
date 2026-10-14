@@ -14,4 +14,11 @@ if POD_IP := env("POD_IP"):  # noqa: F405
 # name or loopback (DJANGO_INTERNAL_HOSTS, set by the compose files), not the public host.
 ALLOWED_HOSTS = [*ALLOWED_HOSTS, *env_list("DJANGO_INTERNAL_HOSTS")]  # noqa: F405
 
+# The OpenAPI schema and Swagger UI describe every endpoint; outside development only
+# staff may read them.
+SPECTACULAR_SETTINGS = {  # noqa: F405
+    **SPECTACULAR_SETTINGS,  # noqa: F405
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
+}
+
 validate_settings("staging")

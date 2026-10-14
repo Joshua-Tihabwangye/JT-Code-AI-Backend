@@ -97,6 +97,9 @@ def validate_url(url: str, *, allowed_hosts: list[str] | tuple[str, ...] | None 
     return host, resolve_public(host)[0]
 
 
+_CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie", "x-api-key", "api-key"})
+
+
 def _pinned_url(url: str, ip: str) -> str:
     parts = urlsplit(url)
     literal = f"[{ip}]" if ":" in ip else ip
@@ -126,9 +129,18 @@ def safe_request(
     current = url
     if params:
         current = str(httpx.URL(url, params=params))
+    origin_host = urlsplit(current).hostname
     for _hop in range(max_redirects + 1):
         host, ip = validate_url(current, allowed_hosts=allowed_hosts)
-        request_headers = {**(headers or {}), "Host": host}
+        request_headers = dict(headers or {})
+        if host != origin_host:
+            # Like browsers and requests: credentials never follow a redirect to another host.
+            request_headers = {
+                name: value
+                for name, value in request_headers.items()
+                if name.lower() not in _CREDENTIAL_HEADERS
+            }
+        request_headers["Host"] = host
         try:
             with (
                 http_client(timeout) as client,

@@ -2,8 +2,8 @@
 
 This document is the implementation and operating contract for JT-Code's
 tenant-safe analytics path. Django remains the authentication, authorization,
-metadata, and artifact-ownership boundary. Pandas, Plotly, Matplotlib, and the
-separate Streamlit viewer never receive database credentials or permission to
+metadata, and artifact-ownership boundary. Pandas, the chart-option builders and
+Matplotlib never receive database credentials or permission to
 evaluate user code.
 
 ## Architecture
@@ -16,10 +16,10 @@ flowchart LR
     D --> E[Isolated engine process:<br/>bounded Pandas transform + profile]
     E --> F[Registered CSV result Asset]
     F --> G[analytics.visualization worker]
-    G --> H[Isolated engine process:<br/>Plotly JSON + Matplotlib PNG]
-    H --> I[Registered PNG + Plotly spec Assets]
+    G --> H[Isolated engine process:<br/>ECharts option JSON + Matplotlib PNG]
+    H --> I[Registered PNG + ECharts spec Assets]
     A --> J[Read-only visualization/run API]
-    J --> L[Separate Streamlit service<br/>Supabase sign-in or auth proxy]
+    J --> L[React app (Apache ECharts)<br/>Supabase sign-in]
 ```
 
 The relational records and provider objects have distinct responsibilities:
@@ -29,7 +29,7 @@ The relational records and provider objects have distinct responsibilities:
 | `Dataset` | Tenant, owner, source, schema, size, checksum, sharing policy | Inline CSV or a ready input `Asset` |
 | `DatasetGrant` | Explicit user-level `view` or `analyze` access | Unique dataset/user policy row |
 | `AnalysisRun` | Immutable transform request and durable worker state | Profile, preview, schema, registered CSV `result_asset` |
-| `Visualization` | Chart request and durable renderer state | Registered PNG `artifact_asset`, Plotly JSON `spec_asset` (inline copy when small) |
+| `Visualization` | Chart request and durable renderer state | Registered PNG `artifact_asset`, ECharts option JSON `spec_asset` (inline copy when small) |
 
 Provider URLs are never stored as durable output. Authorized API serializers
 create a short-lived signed delivery URL only while returning a completed,
@@ -133,7 +133,7 @@ original dataset—so the chart always represents the exact transform that the
 user reviewed.
 
 Charts are capped by `ANALYTICS_MAX_CHART_POINTS`; numeric axes are validated.
-The Plotly specification (JSON) and Matplotlib PNG are both registered as
+The ECharts option (JSON) and Matplotlib PNG are both registered as
 private Supabase Storage assets before the visualization becomes `ready`; the spec is
 also kept inline when it is at most `ANALYTICS_INLINE_SPEC_BYTES`. The
 versioned visualization result schema records kind, formats, byte sizes,
@@ -147,28 +147,23 @@ time limits, durable statuses, and transaction-protected claims. Beat runs
 beyond `ANALYTICS_STALLED_AFTER_MINUTES` become failed with a terminal
 timestamp rather than remaining permanently ambiguous.
 
-### 6. Serve the separate viewer
+### 6. Render in the web app
 
-`streamlit_app/` is an independent service with its own minimal requirements.
-It imports neither Django nor any database driver. Users authenticate either
-through an authentication proxy that forwards `Authorization` (and optionally
-`X-Organization-ID`), or by signing in with Supabase email/password in the app
-(`SUPABASE_URL` + `SUPABASE_PUBLISHABLE_KEY`); the session token stays in the
-user's Streamlit session. Every JT-Code API call is a `GET` to
-`/api/v1/visualizations/` or `/api/v1/analysis/runs/` (pagination followed),
-so the server's dataset ACL decides what is shown. Select the organization
-with `?org=<uuid>`. In staging/production set `JT_CODE_STREAMLIT_ENV=production`
-and HTTPS `JT_CODE_API_BASE_URL`/`SUPABASE_URL`; never give the service
-`DATABASE_URL`, the Supabase secret key or provider keys.
-
-```bash
-JT_CODE_API_BASE_URL=http://localhost:8000/api/v1 SUPABASE_URL=... \
-SUPABASE_PUBLISHABLE_KEY=... streamlit run streamlit_app/app.py
-```
+Charts are Apache ECharts options: plain JSON with no functions, built by the
+isolated engine and rendered by the React app (`/app/visualize`). The few places
+ECharts needs a callback (formatters, custom shapes such as violins) are written
+as `{"$fn": "<name>"}` markers that the client replaces with a fixed set of
+functions (`src/features/visualize/hydrate.ts`, `apps/visualize/static/hydrate.js`),
+so a chart option can never carry code. Exported HTML reports inline the vendored
+`echarts.min.js` (plus `echarts-gl` and the Natural Earth world map only when a
+chart needs them) and work offline. The Data Visualization tool also scans
+uploaded data for duplicates, missing values and IDs, wrong types and anomalies
+(`viz_quality.py`) without changing it; corrections are the user's own edits or a
+re-uploaded file.
 
 ## Worker isolation and deployment
 
-All pandas, Plotly and Matplotlib work runs in a separate `python -I
+All pandas, chart-option and Matplotlib work runs in a separate `python -I
 apps/analytics/engine.py` process per operation. The child has an empty
 environment (no database, Supabase or model-provider credentials),
 a private temporary working directory, and kernel limits applied before it
@@ -187,7 +182,7 @@ celery -A config beat
 Celery wall-clock limits complement, but do not replace, container resource
 limits. The API process should not consume either analytics queue. Network
 policy should allow workers to reach PostgreSQL, Redis, and the configured
-Supabase Storage delivery/API hosts only; the Streamlit process needs only the Django
+Supabase Storage delivery/API hosts only; the web app needs only the Django
 API.
 
 ## Failure and deletion semantics
@@ -212,8 +207,9 @@ Phase 12 is releasable only when migrations apply from an empty database,
 `makemigrations --check` is clean, Ruff passes, the OpenAPI schema validates
 without warnings, and tests prove: cross-tenant invisibility; view-vs-analyze
 grant behavior; dataset bounds; asset checksum enforcement; transform
-allowlisting; exact-result charting; JSON-safe Plotly persistence; registered
+allowlisting; exact-result charting; JSON-safe ECharts option persistence; registered
 artifact ownership; idempotent claims; stalled-run recovery; queue routing;
 the engine child's credential-free environment and memory/time limits; the
-asset-visibility check on dataset creation; and the Streamlit
-no-database/GET-only boundary.
+asset-visibility check on dataset creation; every catalog chart rendering as an
+ECharts option with only whitelisted hydration markers; and the data-quality scan
+flagging issues without editing data.

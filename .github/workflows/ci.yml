@@ -165,9 +165,6 @@ jobs:
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
-      - uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: streamlit_app/Dockerfile
       - uses: docker/setup-buildx-action@v3
       - name: Build runtime image
         uses: docker/build-push-action@v6
@@ -186,16 +183,9 @@ jobs:
           load: true
           tags: jt-code-api-office:ci
           cache-from: type=gha
-      - name: Build Streamlit image
-        uses: docker/build-push-action@v6
-        with:
-          context: streamlit_app
-          load: true
-          tags: jt-code-streamlit:ci
       - name: Images run as non-root and boot Django
         run: |
           test "$(docker run --rm --entrypoint id jt-code-api:ci -u)" = "10001"
-          test "$(docker run --rm --entrypoint id jt-code-streamlit:ci -u)" = "10001"
           docker run --rm --read-only --tmpfs /tmp -e DJANGO_SETTINGS_MODULE=config.settings.build \
             jt-code-api:ci manage check
           docker run --rm --read-only --tmpfs /tmp --entrypoint soffice jt-code-api-office:ci --version
@@ -204,13 +194,6 @@ jobs:
         with:
           scan-type: image
           image-ref: jt-code-api:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-      - uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: image
-          image-ref: jt-code-streamlit:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"

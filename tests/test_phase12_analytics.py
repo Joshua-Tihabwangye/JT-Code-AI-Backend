@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 from datetime import timedelta
@@ -141,7 +140,9 @@ def test_asset_dataset_must_be_ready_verified_and_in_tenant(api_client, analytic
     assert response.status_code == 400
 
 
-def test_asset_reader_uses_signed_egress_and_verifies_integrity(analytics_org, monkeypatch):
+def test_asset_reader_streams_first_party_storage_and_verifies_integrity(
+    analytics_org, monkeypatch, settings
+):
     organization, owner, _viewer, _analyst = analytics_org
     content = b"x,y\na,1\n"
     asset = make_asset(
@@ -152,26 +153,25 @@ def test_asset_reader_uses_signed_egress_and_verifies_integrity(analytics_org, m
         checksum_sha256=hashlib.sha256(content).hexdigest(),
         metadata={"content_type": "text/csv"},
     )
-    monkeypatch.setattr(settings, "SUPABASE_STORAGE_API_URL", "https://project.supabase.co/storage/v1")
-    monkeypatch.setattr(
-        "apps.assets.supabase_storage.generate_signed_delivery_url",
-        lambda _path, **_kwargs: (
-            "https://project.supabase.co/storage/v1/object/sign/signed.csv?token=short-lived"
-        ),
-    )
-    seen = {}
+    keys = []
 
-    def request(method, url, **kwargs):
-        seen.update({"method": method, "url": url, **kwargs})
-        return type("Response", (), {"status_code": 200, "content": content})()
+    def stream(key, **_kwargs):
+        keys.append(key)
+        yield content[:4]
+        yield content[4:]
 
-    monkeypatch.setattr("apps.tools.egress.safe_request", request)
+    monkeypatch.setattr("apps.assets.supabase_storage.stream_file", stream)
     assert bytes_for_asset(asset) == content
-    assert seen["allowed_hosts"] == ["project.supabase.co"]
-    assert seen["max_bytes"] == settings.ANALYTICS_MAX_DATASET_BYTES
+    assert keys == [asset.storage_key]
 
     asset.checksum_sha256 = "0" * 64
     with pytest.raises(AnalysisError, match="integrity"):
+        bytes_for_asset(asset)
+
+    # A storage object larger than the cap is rejected while streaming, not after.
+    settings.ANALYTICS_MAX_DATASET_BYTES = 5
+    asset.bytes = 0
+    with pytest.raises(AnalysisError, match="byte limit"):
         bytes_for_asset(asset)
 
 
@@ -357,8 +357,9 @@ def test_visualization_uses_persisted_result_and_json_safe_plotly(analytics_org,
     assert visualization.artifact_asset_id is not None
     assert visualization.result_schema["points"] == 1
     assert visualization.spec_asset_id is not None
-    assert visualization.spec_asset.original_filename.endswith(".plotly.json")
-    json.dumps(visualization.plotly_spec)
+    assert visualization.spec_asset.original_filename.endswith(".echarts.json")
+    assert visualization.result_schema["interactiveFormat"] == "echarts-json"
+    json.dumps(visualization.chart_spec, allow_nan=False)
 
 
 def test_workers_are_idempotent_and_recovery_closes_stalled_records(analytics_org, monkeypatch):
@@ -409,46 +410,25 @@ def test_analytics_tasks_have_dedicated_routes_and_limits():
     assert execute_analysis_run.time_limit == settings.ANALYTICS_TASK_TIME_LIMIT_SECONDS
 
 
-def test_streamlit_service_is_read_only_and_database_free():
-    source = (Path(settings.BASE_DIR) / "streamlit_app" / "app.py").read_text()
-    tree = ast.parse(source)
-    imports = {
-        alias.name.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
-    imports.update(
-        node.module.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module
-    )
-    assert "django" not in imports and "psycopg" not in imports
-    lowered = source.lower()
-    assert "database_url" not in lowered and "secret" not in lowered
-    calls = [
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"get", "post", "put", "patch", "delete"}
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id == "client"
-    ]
-    # Every JT-Code API call is a GET; the single POST is the Supabase sign-in.
-    assert calls.count("post") == 1 and not {"put", "patch", "delete"} & set(calls)
-    sign_in = next(
-        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "supabase_sign_in"
-    )
-    assert "/auth/v1/token?grant_type=password" in ast.get_source_segment(source, sign_in)
-    assert "client.post(" not in "".join(
-        ast.get_source_segment(source, node) or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name != "supabase_sign_in"
-    )
-
-
-# --- Isolation, ACL and new endpoints -------------------------------------------
+def test_streamlit_and_plotly_are_gone_from_the_stack():
+    """Charts are Apache ECharts options rendered by the web app; there is no Streamlit viewer."""
+    root = Path(settings.BASE_DIR)
+    assert not (root / "streamlit_app").exists()
+    for manifest in ("requirements.txt", "pyproject.toml"):
+        text = (root / manifest).read_text().lower()
+        assert "streamlit" not in text and "plotly" not in text, manifest
+    for path in (
+        "scripts/native/configure.py",
+        "scripts/native/stack.sh",
+        "scripts/k8s/gen_base.py",
+        "scripts/deploy/deploy.sh",
+        ".github/workflows/ci.yml",
+        ".github/workflows/deploy.yml",
+        "Makefile",
+    ):
+        assert "streamlit" not in (root / path).read_text().lower(), path
+    assert not list((root / "infra/k8s").rglob("streamlit*"))
+    assert (root / "apps/visualize/static/vendor/echarts.min.js").exists()
 
 
 def test_sandbox_child_gets_no_credentials_and_isolated_interpreter(monkeypatch):
@@ -568,7 +548,7 @@ def test_end_to_end_pie_chart_stores_png_and_spec_with_valid_schema(analytics_or
     assert chart.status == Visualization.Status.READY, chart.error_message
     assert chart.result_schema["kind"] == "pie" and chart.result_schema["points"] == 2
     assert stored[f"visualization-{chart.id}.png"].startswith(b"\x89PNG")
-    assert json.loads(stored[f"visualization-{chart.id}.plotly.json"])["data"][0]["type"] == "pie"
+    assert json.loads(stored[f"visualization-{chart.id}.echarts.json"])["series"][0]["type"] == "pie"
 
 
 def test_run_retry_download_and_delete(

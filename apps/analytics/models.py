@@ -131,8 +131,8 @@ class Visualization(models.Model):
     color_column = models.CharField(max_length=255, blank=True)
     title = models.CharField(max_length=200, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.QUEUED)
-    # Inline copy only when small; the full Plotly spec is always in ``spec_asset``.
-    plotly_spec = models.JSONField(default=dict, blank=True)
+    # Inline copy only when small; the full Apache ECharts option is always in ``spec_asset``.
+    chart_spec = models.JSONField(default=dict, blank=True)
     artifact_asset = models.ForeignKey(
         "assets.Asset",
         null=True,

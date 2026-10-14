@@ -72,8 +72,6 @@ def test_dockerfiles_are_pinned_multistage_and_non_root():
         assert "USER 10001:10001" in stage, "every runtime stage must end as the non-root user"
     assert 'ENTRYPOINT ["/usr/bin/tini", "--"' in dockerfile
     assert "ADD " not in dockerfile and "rm -rf /var/lib/apt/lists/*" in dockerfile
-    streamlit = (ROOT / "streamlit_app" / "Dockerfile").read_text()
-    assert re.search(r"@sha256:[0-9a-f]{64}", streamlit) and "USER 10001:10001" in streamlit
     ignored = (ROOT / ".dockerignore").read_text().splitlines()
     for secret in (".env", "**/*.tfvars", "**/*.tfstate*", ".git", "infra/n8n/n8n.env"):
         assert secret in ignored
@@ -302,8 +300,8 @@ def test_native_stack_listens_on_loopback_only_and_caps_memory():
         "jt-code-worker",
         "jt-code-beat",
         "jt-code-consumer",
-        "jt-code-streamlit",
     } <= names
+    assert not any("streamlit" in name for name in names)
     for unit in units:
         rendered = unit.render()
         assert re.search(r"^MemoryMax=\d+[MG]$", rendered, re.M), f"{unit.name} needs a memory ceiling"
@@ -357,7 +355,6 @@ def test_native_stack_launcher_bootstraps_like_the_migrate_role():
         "http://127.0.0.1:54321/storage/v1/status",
         "http://127.0.0.1:8025",
         "http://127.0.0.1:5678/healthz",
-        "http://127.0.0.1:8501",
         "http://127.0.0.1:9090",
         "http://127.0.0.1:3000",
     ):

@@ -10,7 +10,7 @@ a prerequisite for local or initial hosted deployments.
 
 | Layer | Source | Tooling |
 | --- | --- | --- |
-| Images | `Dockerfile` (`runtime`, `office`), `streamlit_app/Dockerfile` | Docker Buildx, Trivy, cosign |
+| Images | `Dockerfile` (`runtime`, `office`) | Docker Buildx, Trivy, cosign |
 | Cluster add-ons, Supabase, namespace and secrets, DNS and WAF | `infra/terraform/{modules,envs}` | Terraform ≥ 1.6 |
 | Workloads | `infra/k8s/{base,components,overlays}` | Kustomize, kubectl |
 | Pipeline | `.github/workflows/{ci,deploy}.yml`, `scripts/deploy/` | GitHub Actions |
@@ -61,7 +61,6 @@ fails if it is stale.
 | `jt-code-worker-analytics` | `analytics.analysis`, `analytics.visualization` | KEDA |
 | `jt-code-beat` | Celery beat (exactly one, `Recreate`) | none |
 | `jt-code-consumer-integrations` | Kafka consumer | none |
-| `jt-code-streamlit` | analytics surface | none |
 | `jt-code-migrate` (Job) | `migrate` + private bucket verification + `verify_supabase` | run by the deploy script |
 
 Every pod is hardened:
@@ -73,7 +72,7 @@ Every pod is hardened:
 * Namespaces enforce Pod Security `restricted`.
 
 Network policies deny all ingress by default. They then allow the ingress
-controller (API and Streamlit) and Prometheus (metrics), and block the cloud
+controller (API) and Prometheus (metrics), and block the cloud
 metadata endpoint.
 
 Components (overlays include all three):
@@ -81,12 +80,11 @@ Components (overlays include all three):
 * `keda`: ScaledObjects that replace the worker CPU HPAs.
 * `monitoring`: ServiceMonitor, PodMonitor, and a PrometheusRule generated from
   `infra/prometheus/alerts.yml`.
-* `ingress-hosts`: copies `API_HOST`/`ANALYTICS_HOST` from `config.env` into the Ingress.
+* `ingress-hosts`: copies `API_HOST` from `config.env` into the Ingress.
 
 Each overlay (`overlays/staging`, `overlays/production`) contains:
 
 * `config.env` for non-secret settings, with each hostname set in one place;
-* `streamlit.env`;
 * replica and autoscaling bounds;
 * image names, which are pinned to digests at deploy time.
 
@@ -137,8 +135,7 @@ export TF_VAR_cloudflare_api_token=… TF_VAR_supabase_access_token=… \
        TF_VAR_external_secrets='{"REDIS_URL":"rediss://…", …}'
 cd -
 scripts/deploy/bootstrap_environment.sh staging \
-  ghcr.io/<owner>/jt-code-api@sha256:… ghcr.io/<owner>/jt-code-api-office@sha256:… \
-  ghcr.io/<owner>/jt-code-streamlit@sha256:…
+  ghcr.io/<owner>/jt-code-api@sha256:… ghcr.io/<owner>/jt-code-api-office@sha256:…
 ```
 
 The bootstrap runs these steps:
@@ -149,7 +146,7 @@ The bootstrap runs these steps:
      issuer, KEDA, kube-prometheus-stack with the JT-Code dashboards, and the
      OpenTelemetry Collector;
    * the namespace and secrets;
-   * Cloudflare DNS for the API, Streamlit and n8n webhooks.
+   * Cloudflare DNS for the API and n8n webhooks.
 2. **`deploy.sh`** then:
    1. renders the overlay with the given digests;
    2. applies configuration;
@@ -197,7 +194,7 @@ GitHub configuration per environment (`staging`, `production`):
 Local development does not use Docker. `make native-setup` (first run) and
 `make native-up` start PostgreSQL 18 + pgvector and Redis as system services,
 and Kafka, Supabase Auth/Storage/REST with their gateway on :54321, Mailpit,
-n8n, the API, Celery and Streamlit as memory-capped systemd user units. The
+n8n, the API and Celery as memory-capped systemd user units. The
 same bootstrap steps as the Compose `migrate` role (migrate, configure_asset_storage,
 ensure_kafka_topics --grow, verify_messaging, verify_supabase) run between the
 infrastructure and the application. See [NATIVE_LOCAL_DEVELOPMENT.md](NATIVE_LOCAL_DEVELOPMENT.md).

@@ -27,7 +27,6 @@ tests
 docs
 infra
 n8n
-streamlit_app
 *.docx
 *.pdf
 .zap

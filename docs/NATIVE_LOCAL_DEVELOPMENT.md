@@ -21,7 +21,6 @@ image builds.
 | Celery worker (every queue) | user unit `jt-code-worker` | metrics `:9808` |
 | Celery beat | user unit `jt-code-beat` | — |
 | Kafka consumer | user unit `jt-code-consumer` | metrics `:9809` |
-| Streamlit | user unit `jt-code-streamlit` | `http://localhost:8501` |
 | Prometheus, Grafana, Tempo, OTel collector, redis_exporter, Kafka Console | opt-in units (`jt-code-observability.target`) | `:9090`, `:3000`, `:3200`, `:4318`, `:9121`, `:8080` |
 
 Every listener binds to loopback. Each unit has a `MemoryMax` ceiling, so one
@@ -48,8 +47,7 @@ make native-setup
 1. `native-install` downloads pinned releases into
    `~/.local/share/jt-code-native` (no sudo). That covers a private Node 24
    for Storage, a Temurin JRE with Kafka, GoTrue, PostgREST, Caddy and
-   Mailpit, Storage (built from source) and n8n, plus the Streamlit
-   requirements in `.venv`. Add the observability binaries with
+   Mailpit, Storage (built from source) and n8n. Add the observability binaries with
    `make native-install-observability`.
 2. `native-configure` does three things:
    - generates `~/.local/share/jt-code-native/etc/secrets.env` once (database

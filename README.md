@@ -14,7 +14,7 @@ Production-oriented Django boilerplate for JT-Code. This is the backend reposito
 - **Event Streaming**: Kafka event bus using `confluent-kafka`
 - **Outbox Pattern**: PostgreSQL transactional outbox for reliable event publishing
 - **Monitoring**: Sentry for Django, Celery, Redis and Kafka error monitoring
-- **Analytics**: bounded Pandas transforms, Plotly/Matplotlib artifacts, and a separate read-only Streamlit image
+- **Analytics & visualization**: bounded Pandas transforms, Apache ECharts chart options (82 chart types, predictions, data-quality scans) rendered in the web app, and Matplotlib PNG artifacts
 - **API Docs**: OpenAPI/Swagger via drf-spectacular
 - **Development**: managed/local PostgreSQL, Redis and Kafka; Ruff, MyPy, pytest, GitHub Actions
 
@@ -86,7 +86,7 @@ jt-code backend/
 
 Everything runs directly on the host: PostgreSQL 18 + pgvector and Redis as
 system services, and Kafka (KRaft), Supabase Auth/Storage/REST + gateway,
-Mailpit, n8n, the API, Celery and Streamlit as memory-capped `systemd --user`
+Mailpit, n8n, the API and Celery as memory-capped `systemd --user`
 units. See [docs/NATIVE_LOCAL_DEVELOPMENT.md](docs/NATIVE_LOCAL_DEVELOPMENT.md).
 
 ```bash
@@ -204,9 +204,9 @@ See `.env.example` for all available variables. Key variables:
 
 ### Data Analysis and Visualization
 - Dataset access is tenant-filtered with owner, shared, `view`, and `analyze` policies under `/api/v1/analysis/`.
-- Dedicated `analytics.analysis` and `analytics.visualization` Celery queues execute bounded declarative Pandas transforms and render Plotly/Matplotlib outputs.
+- Dedicated `analytics.analysis` and `analytics.visualization` Celery queues execute bounded declarative Pandas transforms and produce Apache ECharts options plus Matplotlib PNGs.
 - CSV results and PNG charts are integrity-tracked Supabase Storage `Asset` records; signed URLs are generated only for authorized completed results.
-- `streamlit_app/` has its own requirements and container image, performs read-only API calls, and receives user identity from an authentication proxy. See `docs/DATA_ANALYSIS_AND_VISUALIZATION.md`.
+- `apps/visualize` serves the Data Visualization tool (`/api/v1/visualize/`): charts are Apache ECharts options built in the isolated engine and rendered by the React app; exported reports inline ECharts so they work offline. See `docs/DATA_ANALYSIS_AND_VISUALIZATION.md`.
 
 ### Health Checks
 - `/api/v1/health/live/` - Liveness probe (always returns OK if process is running)

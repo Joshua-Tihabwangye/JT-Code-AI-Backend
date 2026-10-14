@@ -77,7 +77,30 @@ class ConsentUpdateSerializer(serializers.Serializer):
     version = serializers.CharField(max_length=50, required=False)
 
 
-class RetentionRuleSerializer(serializers.ModelSerializer):
+def _retention_floor_days(data_category: str) -> int:
+    """Legal minimum retention: audit and safety records may not be purged early."""
+    from django.conf import settings
+
+    if data_category == RetentionRule.DataCategory.AUDIT_EVENTS:
+        return int(settings.AUDIT_EVENT_RETENTION_DAYS)
+    return 1
+
+
+class _RetentionFloorMixin:
+    def validate(self, attrs):
+        attrs = super().validate(attrs)  # type: ignore[misc]
+        instance = getattr(self, "instance", None)
+        category = attrs.get("data_category") or getattr(instance, "data_category", "")
+        retention = attrs.get("retention_days", getattr(instance, "retention_days", None))
+        floor = _retention_floor_days(category)
+        if retention is not None and retention < floor:
+            raise serializers.ValidationError(
+                {"retention_days": f"Records in this category must be kept for at least {floor} days."}
+            )
+        return attrs
+
+
+class RetentionRuleSerializer(_RetentionFloorMixin, serializers.ModelSerializer):
     organization_name = serializers.CharField(source="organization.name", read_only=True)
     data_category_display = serializers.CharField(source="get_data_category_display", read_only=True)
     action_display = serializers.CharField(source="get_action_display", read_only=True)
@@ -104,10 +127,10 @@ class RetentionRuleSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "organization", "created_by", "created_at", "updated_at"]
 
 
-class RetentionRuleUpdateSerializer(serializers.ModelSerializer):
+class RetentionRuleUpdateSerializer(_RetentionFloorMixin, serializers.ModelSerializer):
     class Meta:
         model = RetentionRule
         fields = [
@@ -159,7 +182,17 @@ class SafetyEventSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "prompt_hash", "response_hash"]
+        read_only_fields = [
+            "organization",
+            "user",
+            "reviewed_by",
+            "reviewed_at",
+            "id",
+            "created_at",
+            "updated_at",
+            "prompt_hash",
+            "response_hash",
+        ]
 
 
 class SafetyEventReviewSerializer(serializers.Serializer):
