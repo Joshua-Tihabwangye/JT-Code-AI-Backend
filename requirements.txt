@@ -44,7 +44,7 @@ langchain-core>=1.0,<2
 pgvector>=0.3.6,<0.4
 
 # Payments (Stripe)
-stripe>=8.0,<9
+stripe>=8.0,<17
 
 # Document Processing
 python-docx>=1.1,<2
