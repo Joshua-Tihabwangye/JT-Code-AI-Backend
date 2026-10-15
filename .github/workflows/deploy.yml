@@ -39,7 +39,7 @@ jobs:
       api_image: ${{ steps.refs.outputs.api }}
       office_image: ${{ steps.refs.outputs.office }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -108,7 +108,7 @@ jobs:
       name: staging
       url: ${{ vars.STAGING_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/k8s-tools
         with:
           kubeconfig: ${{ secrets.KUBECONFIG }}
@@ -134,7 +134,7 @@ jobs:
       name: ${{ github.event.inputs.environment }}
       url: ${{ vars.PUBLIC_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: sigstore/cosign-installer@v3
       - name: Only images signed by this repository's deploy workflow
         run: |

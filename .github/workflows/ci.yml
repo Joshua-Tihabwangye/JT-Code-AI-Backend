@@ -25,7 +25,7 @@ jobs:
       DATABASE_URL: ${{ secrets.SUPABASE_CI_DATABASE_URL }}
       TEST_DATABASE_URL: ${{ secrets.SUPABASE_CI_TEST_DATABASE_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -59,7 +59,7 @@ jobs:
       WEBHOOK_ALLOWED_HOSTS: ${{ secrets.CI_WEBHOOK_ALLOWED_HOSTS }}
       WEBHOOK_SIGNING_SECRET: ${{ secrets.CI_WEBHOOK_SIGNING_SECRET }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -144,7 +144,7 @@ jobs:
     name: SAST, secrets, dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -161,7 +161,7 @@ jobs:
     name: Container images (lint, build, scan)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
@@ -210,7 +210,7 @@ jobs:
     name: Kubernetes manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -235,7 +235,7 @@ jobs:
     name: Terraform
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.8"
@@ -251,7 +251,7 @@ jobs:
     name: Prometheus rules
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate Prometheus config and alert rules
         run: |
           docker run --rm --entrypoint promtool -v "$PWD/infra/prometheus:/cfg:ro" prom/prometheus:v2.55.0 check rules /cfg/alerts.yml
@@ -260,7 +260,7 @@ jobs:
     name: GitHub Actions lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: actionlint
         run: |
           bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
