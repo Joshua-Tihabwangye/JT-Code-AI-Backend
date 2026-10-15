@@ -39,7 +39,7 @@ jobs:
       - run: python manage.py inventory_matrix --strict
       - name: Versioned n8n workflow definitions
         run: python manage.py n8n_workflows validate
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: openapi
           path: /tmp/openapi.yaml
@@ -134,7 +134,7 @@ jobs:
             -c rules.tsv -r zap-report.html -J zap-report.json -I
       - name: DAST - fail on FAIL-level alerts
         run: python manage.py security_gate --zap-report .zap/zap-report.json --zap-rules .zap/rules.tsv --skip-scanners
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: zap-report
