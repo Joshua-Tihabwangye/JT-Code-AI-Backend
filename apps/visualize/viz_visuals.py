@@ -692,6 +692,7 @@ def build_category(visual, queries, results, ctx):
         },
         "notes": notes,
         "autoTitle": default,
+        "insight": None if leg else _one_line(labels, series[0]["values"], grain, percent),
     }
 
 
@@ -930,6 +931,31 @@ def build_multiples(visual, query, result, ctx):
             f"{measure_label(measures[0])} by {nice(category_field).lower()} and {nice(panel_field).lower()}"
         ),
     }
+
+
+def _one_line(labels: list[str], values: list[Any], grain: str | None, percent: bool) -> str | None:
+    """A ≤ 15-word reading of a single-series chart: who leads (and their share), or the change
+    from the first to the last period."""
+    points = [
+        (label, float(v))
+        for label, v in zip(labels, values, strict=False)
+        if v is not None and not math.isnan(v)
+    ]
+    if len(points) < 2:
+        return None
+    if grain:
+        (first_label, first), (last_label, last) = points[0], points[-1]
+        if not first:
+            return None
+        change = (last - first) / abs(first)
+        direction = "Up" if change > 0 else "Down"
+        return f"{direction} {abs(change) * 100:.0f}% from {first_label} to {last_label}."
+    leader, top = max(points, key=lambda point: point[1])
+    total = sum(value for _, value in points)
+    shown = compact(top, percent)
+    if total > 0 and not percent and all(value >= 0 for _, value in points):
+        return f"{leader} leads with {shown} ({top / total:.0%} of the total)."
+    return f"{leader} is highest at {shown}."
 
 
 def build_pie(visual, queries, results, ctx):

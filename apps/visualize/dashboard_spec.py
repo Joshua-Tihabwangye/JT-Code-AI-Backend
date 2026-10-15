@@ -20,6 +20,7 @@ MAX_PAGES = 20
 MAX_VISUALS = 60
 MAX_SPEC_BYTES = 1_500_000
 MAX_FORMAT_BYTES = 20_000
+SNAPSHOT_BYTES = 400_000
 MAX_FILTERS = 40
 ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 PAGE_TYPES = ("page", "tooltip", "drillthrough")
@@ -160,7 +161,9 @@ def clean_visual(raw: Any, where: str) -> dict[str, Any]:
             # Another visual's selection, drawn over this one (cross-highlight).
             "highlight": _filters(data.get("highlight"), f"{where} highlight"),
         },
-        "format": _json_section(raw.get("format"), f"{where} format"),
+        "format": _json_section(
+            raw.get("format"), f"{where} format", SNAPSHOT_BYTES if vtype == "snapshot" else MAX_FORMAT_BYTES
+        ),
         "interactions": _json_section(raw.get("interactions"), f"{where} interactions", 4_000),
         "hidden": bool(raw.get("hidden", False)),
         "locked": bool(raw.get("locked", False)),
@@ -170,6 +173,17 @@ def clean_visual(raw: Any, where: str) -> dict[str, Any]:
         visual["groupId"] = _id(raw["groupId"], f"{where} group")
     if vtype == "text":
         visual["text"] = _text(raw.get("text"), 4_000)
+    if vtype == "snapshot":
+        snapshot = visual["format"].get("snapshot")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("option"), dict):
+            raise SpecError(f"{where}: a snapshot needs a chart.")
+        try:
+            # Same cleaning as Python visuals (no HTML formatters, links or remote images).
+            snapshot["option"] = viz_python.sanitize_option(snapshot["option"], markers=True)
+        except viz_python.PythonVisualError as exc:
+            raise SpecError(f"{where}: {exc}") from exc
+        snapshot["takenAt"] = _text(snapshot.get("takenAt"), 40)
+        snapshot["source"] = _text(snapshot.get("source"), 120)
     if vtype == "python":
         code = (
             visual["format"].get("python", {}).get("code")
@@ -275,6 +289,7 @@ def clean_spec(raw: Any) -> dict[str, Any]:
         "calculations": _calculations(raw.get("calculations")),
         "bookmarks": _bookmarks(raw.get("bookmarks"), "Bookmarks"),
         "syncGroups": _json_list(raw.get("syncGroups"), "Sync groups"),
+        "relationships": clean_relationships(raw.get("relationships")),
         "pages": pages,
     }
 
@@ -389,6 +404,23 @@ def _bookmarks(value: Any, where: str, limit: int = 50) -> list[dict[str, Any]]:
                 "state": state,
             }
         )
+    return out
+
+
+def clean_relationships(value: Any) -> list[dict[str, Any]]:
+    """Links between datasets (``from`` key ↔ ``to`` key), so slicers filter across datasets."""
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(_json_list(value, "Relationships", limit=20)):
+        ends = []
+        for side in ("from", "to"):
+            end = item.get(side) if isinstance(item.get(side), dict) else {}
+            dataset_id, field = end.get("datasetId"), end.get("field")
+            if not isinstance(dataset_id, str) or not dataset_id or not isinstance(field, str) or not field:
+                raise SpecError(f"Relationship {index + 1}: choose a dataset and a column on both sides.")
+            ends.append({"datasetId": dataset_id[:40], "field": field[:200]})
+        if ends[0]["datasetId"] == ends[1]["datasetId"]:
+            raise SpecError(f"Relationship {index + 1}: link two different datasets.")
+        out.append({"from": ends[0], "to": ends[1]})
     return out
 
 

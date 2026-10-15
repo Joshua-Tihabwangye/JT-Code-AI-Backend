@@ -4,10 +4,12 @@ the starter auto-dashboard and the batched visuals endpoint."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 from typing import Any
 
 from django.db import transaction
 from django.db.models import Max, Q
+from django.http import HttpResponse
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -28,18 +30,21 @@ from apps.identity.authorization import (
     user_has_role,
 )
 from apps.identity.models import Role, UserOrganization
-from apps.visualize import autodash, dashboard_spec, dashboards, services, themes
-from apps.visualize.models import Dashboard, DashboardMember, DashboardVersion, PersonalView, Theme
+from apps.visualize import autodash, dashboard_export, dashboard_spec, dashboards, services, themes
+from apps.visualize.models import Dashboard, DashboardMember, DashboardVersion, Measure, PersonalView, Theme
 from apps.visualize.serializers import (
     AutoDashboardSerializer,
+    DashboardExportSerializer,
     DashboardListSerializer,
     DashboardMemberSerializer,
     DashboardSerializer,
     DashboardVersionSerializer,
+    MeasureSerializer,
     PersonalViewSerializer,
     ThemeSerializer,
     VisualsRequestSerializer,
 )
+from apps.visualize.views import _download
 
 SNAPSHOT_EVERY = dt.timedelta(minutes=10)
 MAX_VERSIONS = 100
@@ -63,6 +68,33 @@ class VersionConflict(Exception):
     def __init__(self, current: int) -> None:
         super().__init__(self.message)
         self.current = current
+
+
+class ExportInvalid(APIException):
+    status_code = 400
+    default_code = "export_invalid"
+
+
+def datasets_for(request: Request, wanted: set[str], dashboard_id: Any) -> dict[str, Dataset]:
+    """Datasets the user may analyze — or, inside a dashboard shared with them, the datasets that
+    dashboard uses (its owner's access applies, as in Power BI report sharing)."""
+    organization = _organization(request)
+    found = {str(d.id): d for d in datasets_analyzable_by(request.user, organization).filter(id__in=wanted)}
+    missing = wanted - set(found)
+    if missing and dashboard_id:
+        dashboard = visible_dashboards(request).filter(id=dashboard_id).first()
+        if dashboard is not None:
+            usable = missing & (
+                dashboard_spec.dataset_ids(dashboard.spec)
+                | {
+                    end["datasetId"]
+                    for link in dashboard.spec.get("relationships") or []
+                    for end in (link["from"], link["to"])
+                }
+            )
+            for item in datasets_analyzable_by(dashboard.owner, organization).filter(id__in=usable):
+                found[str(item.id)] = item
+    return found
 
 
 class SpecInvalid(APIException):
@@ -321,6 +353,45 @@ class DashboardViewSet(viewsets.ModelViewSet):
         saved = serializer.save(dashboard=dashboard, user=request.user, state=state, is_default=True)
         return Response(PersonalViewSerializer(saved).data)
 
+    @extend_schema(request=DashboardExportSerializer, responses={200: OpenApiTypes.BINARY})
+    @action(detail=True, methods=["post"])
+    def export(self, request: Request, id=None) -> HttpResponse:
+        """Download the dashboard: Excel (data per visual + raw data), interactive HTML, JSON, or a
+        PDF made from page images the browser painted."""
+        dashboard = self.get_object()
+        serializer = DashboardExportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        name = dashboard.name or "Dashboard"
+        try:
+            if data["format"] == "json":
+                content = json.dumps({"name": name, "spec": dashboard.spec}, indent=2).encode("utf-8")
+                return _download(content, mime="application/json", filename=f"{name}.json")
+            if data["format"] == "pdf":
+                return _download(
+                    dashboard_export.pdf(name, data.get("images") or []),
+                    mime="application/pdf",
+                    filename=f"{name}.pdf",
+                )
+            spec = dashboard.spec
+            wanted = dashboard_spec.dataset_ids(spec) | {
+                end["datasetId"]
+                for link in spec.get("relationships") or []
+                for end in (link["from"], link["to"])
+            }
+            datasets = datasets_for(request, wanted, dashboard.id)
+            pages = dashboard_export.render_pages(spec, datasets, data["mode"], timezone.localdate())
+            if data["format"] == "xlsx":
+                return _download(
+                    dashboard_export.workbook(name, pages, datasets),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    filename=f"{name}.xlsx",
+                )
+            page = dashboard_export.interactive_html(name, dashboard.description, pages, data["mode"])
+            return _download(page.encode("utf-8"), mime="text/html; charset=utf-8", filename=f"{name}.html")
+        except dashboard_export.ExportError as exc:
+            raise ExportInvalid(str(exc)) from exc
+
     @extend_schema(request=AutoDashboardSerializer, responses={201: DashboardSerializer})
     @action(detail=False, methods=["post"])
     def auto(self, request: Request) -> Response:
@@ -399,6 +470,59 @@ class ThemeViewSet(viewsets.ModelViewSet):
         instance.delete()
 
 
+class MeasureViewSet(viewsets.ModelViewSet):
+    """The measures library: calculations saved once and added to any dashboard."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = MeasureSerializer
+    lookup_field = "id"
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Measure.objects.none()
+        queryset = Measure.objects.filter(organization=_organization(self.request))
+        dataset_id = self.request.query_params.get("datasetId")
+        if dataset_id:
+            queryset = queryset.filter(Q(dataset_id=dataset_id) | Q(dataset__isnull=True))
+        return queryset
+
+    @extend_schema(parameters=[OpenApiParameter("datasetId", str, required=False)])
+    def list(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        return super().list(request, *args, **kwargs)
+
+    def _check_dataset(self, serializer: Any) -> None:
+        dataset_id = serializer.validated_data.get("dataset_id")
+        if (
+            dataset_id
+            and not datasets_visible_to(self.request.user, _organization(self.request))
+            .filter(id=dataset_id)
+            .exists()
+        ):
+            raise NotFound("Dataset not found.")
+
+    def perform_create(self, serializer):
+        organization = _organization(self.request)
+        require_organization_write_access(self.request.user, organization.id)
+        self._check_dataset(serializer)
+        serializer.save(organization=organization, owner=self.request.user)
+
+    def _require_owner(self, instance: Measure) -> None:
+        if instance.owner_id != self.request.user.id and not _is_admin(
+            self.request.user, instance.organization
+        ):
+            raise PermissionDenied("Only the measure's owner may change it.")
+
+    def perform_update(self, serializer):
+        self._require_owner(serializer.instance)
+        self._check_dataset(serializer)
+        serializer.save()
+
+    def perform_destroy(self, instance: Measure) -> None:
+        self._require_owner(instance)
+        instance.delete()
+
+
 class VisualsView(APIView):
     """Draw a batch of dashboard visuals with the current filters (Python builds every visual)."""
 
@@ -415,9 +539,16 @@ class VisualsView(APIView):
                 dashboard_spec.clean_visual(v, f"Visual {i + 1}") for i, v in enumerate(data["visuals"])
             ]
             filters = [dashboard_spec.clean_filter(f, "Filters") for f in data.get("filters") or []]
+            relationships = dashboard_spec.clean_relationships(data.get("relationships") or [])
         except dashboard_spec.SpecError as exc:
             raise SpecInvalid(str(exc)) from exc
         datasets = self._datasets(request, visuals, data.get("dashboardId"))
+        # Datasets reached only through a relationship are loaded too (their keys answer filters).
+        linked = {end["datasetId"] for r in relationships for end in (r["from"], r["to"])} - set(datasets)
+        if linked:
+            datasets.update(
+                self._datasets(request, [{"data": {"datasetId": i}} for i in linked], data.get("dashboardId"))
+            )
         theme = data.get("theme") or themes.DEFAULT_THEME
         today = data.get("today") or timezone.localdate()
         context = {
@@ -427,24 +558,12 @@ class VisualsView(APIView):
                 for c in data.get("calculations") or []
                 if isinstance(c, dict) and c.get("name")
             },
+            "relationships": relationships,
         }
         return Response(dashboards.render(datasets, visuals, filters, theme, data["mode"], today, context))
 
     def _datasets(
         self, request: Request, visuals: list[dict[str, Any]], dashboard_id: Any
     ) -> dict[str, Dataset]:
-        """Datasets the user may analyze — or, inside a dashboard shared with them, the datasets that
-        dashboard uses (its owner's access applies, as in Power BI report sharing)."""
-        organization = _organization(request)
         wanted = {v["data"]["datasetId"] for v in visuals if v["data"].get("datasetId")}
-        found = {
-            str(d.id): d for d in datasets_analyzable_by(request.user, organization).filter(id__in=wanted)
-        }
-        missing = wanted - set(found)
-        if missing and dashboard_id:
-            dashboard = visible_dashboards(request).filter(id=dashboard_id).first()
-            if dashboard is not None:
-                usable = missing & dashboard_spec.dataset_ids(dashboard.spec)
-                for item in datasets_analyzable_by(dashboard.owner, organization).filter(id__in=usable):
-                    found[str(item.id)] = item
-        return found
+        return datasets_for(request, wanted, dashboard_id)

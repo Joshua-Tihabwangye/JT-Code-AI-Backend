@@ -157,6 +157,37 @@ class Theme(models.Model):
         return self.name
 
 
+class Measure(models.Model):
+    """A saved calculation (measures library): reusable by every dashboard in the organization."""
+
+    class Format(models.TextChoices):
+        NUMBER = "number", "Number"
+        PERCENT = "percent", "Percent"
+        CURRENCY = "currency", "Currency"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.CASCADE, related_name="viz_measures"
+    )
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="viz_measures")
+    # The dataset the measure was written for (its fields); empty = any dataset with those fields.
+    dataset = models.ForeignKey(
+        "analytics.Dataset", null=True, blank=True, on_delete=models.SET_NULL, related_name="viz_measures"
+    )
+    name = models.CharField(max_length=60)
+    expression = models.TextField(max_length=1000)
+    format = models.CharField(max_length=12, choices=Format.choices, default=Format.NUMBER)
+    description = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self) -> str:
+        return self.name
+
+
 class DatasetTable(models.Model):
     """The Postgres copy of a dataset used for fast filtered aggregation (``viz_data`` schema).
 

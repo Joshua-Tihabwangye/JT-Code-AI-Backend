@@ -42,6 +42,7 @@ q = _load("jt_viz_quality", "viz_quality.py")
 x = _load("jt_viz_excel", "viz_excel.py")
 vq = _load("jt_viz_query", "viz_query.py")
 vv = _load("jt_viz_visuals", "viz_visuals.py")
+vs = _load("jt_viz_steps", "viz_steps.py")
 base = d.base
 catalog = d.catalog
 AnalysisError = d.AnalysisError
@@ -2122,7 +2123,30 @@ def insights(frame: Any, profile: dict[str, Any], kinds: dict[str, str]) -> list
                         },
                     }
                 )
-    return found[:24]
+    return [_short_insight(item) for item in found[:24]]
+
+
+def _short_insight(item: dict[str, Any]) -> dict[str, Any]:
+    """Adds ``headline`` (≤ 6 words) and ``value`` (one number) for compact insight cards; the
+    full sentence stays in ``title``/``detail`` (shown in an ⓘ popover)."""
+    import re
+
+    title = str(item.get("title") or "")
+    detail = str(item.get("detail") or "")
+    value = ""
+    correlation = re.search(r"\(r = (-?[\d.]+)\)", title)
+    leading = re.match(r"^([\d,.]+%?)\s+(.+)$", title)
+    if correlation:
+        value, title = f"r = {correlation.group(1)}", title.replace(correlation.group(0), "")
+    elif leading:
+        value, title = leading.group(1), leading.group(2)
+    else:
+        found = re.search(r"Skewness (-?[\d.]+)|[+-]?\d[\d,.]*%", detail)
+        if found:
+            value = f"skew {found.group(1)}" if found.group(1) else found.group(0)
+    words = re.sub(r"[_\s]+", " ", title).strip().split(" ")
+    headline = " ".join(words[:6]) + ("…" if len(words) > 6 else "")
+    return {**item, "headline": headline[:1].upper() + headline[1:], "value": value}
 
 
 def import_table(request: dict[str, Any], limits: dict[str, Any]) -> Any:
@@ -2217,6 +2241,22 @@ def _normalize_columns(frame: Any, limits: dict[str, Any]) -> Any:
         if frame[column].dtype == object:
             frame[column] = frame[column].map(lambda v: json.dumps(v) if isinstance(v, (list, dict)) else v)
     return frame.reset_index(drop=True)
+
+
+def organize_pipeline(
+    frame: Any, kinds: dict[str, str], steps: dict[str, Any], request: dict[str, Any], limits: dict[str, Any]
+) -> Any:
+    """Applied steps (``viz_steps``), optionally stopping after one step for its preview."""
+    try:
+        pipeline = vs.validate(steps.get("pipeline"))
+        others = {}
+        for dataset_id, other in (request.get("others") or {}).items():
+            other_frame = d.load_frame(other, limits)
+            others[str(dataset_id)] = d.typed(other_frame, d.column_kinds(other_frame)[1])
+        upto = steps.get("upto")
+        return vs.run(d.typed(frame, kinds), pipeline, others, limits, None if upto is None else int(upto))
+    except vs.StepError as exc:
+        raise AnalysisError(str(exc)) from exc
 
 
 def organize(frame: Any, kinds: dict[str, str], steps: dict[str, Any]) -> Any:
@@ -2715,7 +2755,11 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
     if operation == "viz_insights":
         return {"profile": profile, "insights": insights(d.typed(frame, kinds), profile, kinds)}
     if operation == "viz_organize":
-        result = organize(frame, kinds, request.get("steps") or {})
+        steps = request.get("steps") or {}
+        if isinstance(steps, dict) and "pipeline" in steps:
+            result = organize_pipeline(frame, kinds, steps, request, limits)
+        else:
+            result = organize(frame, kinds, steps)
         csv_bytes = result.to_csv(index=False).encode("utf-8")
         if len(csv_bytes) > limits["max_result_bytes"]:
             raise AnalysisError("The organized dataset exceeds the configured size limit.")

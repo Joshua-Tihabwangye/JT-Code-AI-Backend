@@ -344,7 +344,8 @@ class DatasetOrganizeView(APIView):
         save_as = serializer.validated_data.get("saveAs")
         if save_as:
             require_organization_write_access(request.user, dataset.organization_id)
-        output = _engine("viz_organize", dataset, steps=serializer.validated_data["steps"])
+        steps = serializer.validated_data["steps"]
+        output = _engine("viz_organize", dataset, steps=steps, others=_other_datasets(request, steps))
         if not save_as:
             return Response({"profile": output["profile"], "preview": output["preview"]})
         try:
@@ -359,6 +360,51 @@ class DatasetOrganizeView(APIView):
         except AnalysisError as exc:
             raise VisualizationError(str(exc)) from exc
         return _created(created)
+
+
+def _save_visual(request: Request, organization: Any, data: dict[str, Any]) -> SavedChart:
+    """A dashboard visual saved to My visuals, with its drawn chart for previews and exports."""
+    from django.utils import timezone
+
+    from apps.visualize import dashboards, themes
+
+    visual = data["visual"]
+    dataset = _dataset(request, visual["data"]["datasetId"])
+    output = dashboards.render(
+        {str(dataset.id): dataset}, [visual], [], themes.DEFAULT_THEME, "light", timezone.localdate()
+    )["visuals"][0]
+    if output.get("status") == "error":
+        raise VisualizationError(output.get("message") or "This visual could not be drawn.")
+    return SavedChart.objects.create(
+        organization=organization,
+        owner=request.user,
+        dataset=dataset,
+        title=data.get("title") or output.get("title") or visual["type"].title(),
+        chart_type=f"visual:{visual['type']}",
+        config={"visual": visual},
+        option=output.get("option") or {},
+        explanation={"insight": output.get("insight") or ""},
+        description=data.get("description", ""),
+        is_shared=data.get("isShared", False),
+    )
+
+
+def _other_datasets(request: Request, steps: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Datasets a pipeline merges or appends, as engine inputs (only ones the user may analyse)."""
+    from apps.visualize import viz_steps
+
+    others: dict[str, dict[str, str]] = {}
+    for other_id in viz_steps.other_datasets(steps.get("pipeline") or []):
+        try:
+            uuid.UUID(other_id)
+        except ValueError as exc:
+            raise VisualizationError("Merge and append need a dataset id.") from exc
+        other = _dataset(request, other_id)
+        others[other_id] = {
+            "data": base64.b64encode(dataset_bytes(other)).decode("ascii"),
+            "mime_type": other.mime_type,
+        }
+    return others
 
 
 class DatasetQualityView(APIView):
@@ -779,6 +825,8 @@ class SavedChartViewSet(viewsets.ModelViewSet):
                 description=data.get("description", ""),
                 is_shared=data.get("isShared", False),
             )
+        elif data.get("visual"):
+            chart = _save_visual(request, organization, data)
         else:
             dataset = _dataset(request, data["datasetId"])
             rendered = _render(dataset, data)

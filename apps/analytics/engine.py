@@ -251,6 +251,7 @@ def _json_value(value: Any) -> Any:
 
 def profile_frame(frame: Any) -> dict[str, Any]:
     """Per-column profile: types, completeness, cardinality, statistics and top values."""
+    import numpy as np
     import pandas as pd
 
     rows = int(len(frame.index))
@@ -284,6 +285,11 @@ def profile_frame(frame: Any) -> dict[str, Any]:
                         "p75": _json_value(quantiles.loc[0.75]),
                     }
                 )
+                finite = non_null[np.isfinite(non_null.astype(float))]
+                if len(finite) > 1 and finite.min() != finite.max():
+                    # A small histogram for profile sparklines (12 equal-width bins).
+                    counts, _ = np.histogram(finite.astype(float), bins=12)
+                    entry["histogram"] = [int(count) for count in counts]
         else:
             parsed = (
                 pd.to_datetime(non_null, errors="coerce", format="mixed") if not non_null.empty else non_null

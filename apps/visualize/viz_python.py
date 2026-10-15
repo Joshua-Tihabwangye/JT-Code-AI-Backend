@@ -399,21 +399,35 @@ def run(code: str, dataset: Any) -> tuple[Any, str]:
     return scope["result"], printed.getvalue()[:MAX_PRINT]
 
 
-def _plain(value: Any, depth: int, budget: list[int]) -> Any:
-    """JSON-safe copy of an option without HTML/link/remote-content keys; raises when too large."""
+def _marker(value: Any) -> bool:
+    """A ``{"$fn": name, ...}`` formatter marker: a name the browser maps to a built-in function."""
+    return isinstance(value, dict) and isinstance(value.get("$fn"), str) and len(value) <= 6
+
+
+def _plain(value: Any, depth: int, budget: list[int], markers: bool = False) -> Any:
+    """JSON-safe copy of an option without HTML/link/remote-content keys; raises when too large.
+
+    With ``markers`` (charts the engine built), formatter *markers* are kept; formatter strings,
+    which ECharts may render as HTML, are always dropped."""
     budget[0] -= 1
     if budget[0] < 0 or depth > 30:
         raise PythonVisualError("The chart option is too large or nested too deeply.")
     if isinstance(value, dict):
+        if markers and _marker(value):
+            return {
+                str(k)[:40]: (v if isinstance(v, (int, float, bool)) or v is None else str(v)[:40])
+                for k, v in value.items()
+            }
         return {
-            str(key)[:100]: _plain(item, depth + 1, budget)
+            str(key)[:100]: _plain(item, depth + 1, budget, markers)
             for key, item in value.items()
             if str(key) not in DROP_KEYS
+            or (markers and key in {"formatter", "valueFormatter"} and _marker(item))
         }
     if isinstance(value, (list, tuple)):
         if len(value) > 50_000:
             raise PythonVisualError("The chart has too many points (50,000 at most).")
-        return [_plain(item, depth + 1, budget) for item in value]
+        return [_plain(item, depth + 1, budget, markers) for item in value]
     if isinstance(value, str):
         if value.lower().startswith(("image://", "http://", "https://", "javascript:", "data:")):
             return ""
@@ -436,10 +450,10 @@ def _plain(value: Any, depth: int, budget: list[int]) -> Any:
     return str(value)[:2000]
 
 
-def sanitize_option(option: dict[str, Any]) -> dict[str, Any]:
+def sanitize_option(option: dict[str, Any], *, markers: bool = False) -> dict[str, Any]:
     import json
 
-    clean = _plain(option, 0, [400_000])
+    clean = _plain(option, 0, [400_000], markers)
     if len(json.dumps(clean, default=str)) > MAX_OUTPUT_BYTES:
         raise PythonVisualError("The chart option is larger than 1 MB.")
     return clean

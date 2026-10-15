@@ -273,7 +273,32 @@ def aggregates(tree: list[Any]) -> list[tuple[str, str]]:
     return seen
 
 
-NODE_KINDS = {"num", "agg", "op", "cmp", "neg", "fn"}
+def row_tree(text: Any, columns: list[str]) -> list[Any]:
+    """A calculated column: ``[column]`` is each row's value (no aggregates), e.g.
+    ``[revenue] - [cost]`` or ``IF([units] > 10, 1, 0)``."""
+    names = {str(column).lower(): str(column) for column in columns}
+
+    def visit(node: list[Any]) -> list[Any]:
+        kind = node[0]
+        if kind == "agg":
+            raise ExprError("A calculated column uses each row's values: write [column], not SUM([column]).")
+        if kind == "ref":
+            key = node[1].lower()
+            if key not in names:
+                raise ExprError(f"Unknown column [{node[1]}].")
+            return ["col", names[key]]
+        if kind in {"op", "cmp"}:
+            return [kind, node[1], visit(node[2]), visit(node[3])]
+        if kind == "neg":
+            return ["neg", visit(node[1])]
+        if kind == "fn":
+            return ["fn", node[1], [visit(arg) for arg in node[2]]]
+        return node
+
+    return visit(parse(text))
+
+
+NODE_KINDS = {"num", "agg", "op", "cmp", "neg", "fn", "col"}
 
 
 def evaluate(tree: list[Any], leaves: dict[tuple[str, str], Any], size: int) -> Any:
@@ -288,6 +313,8 @@ def evaluate(tree: list[Any], leaves: dict[tuple[str, str], Any], size: int) -> 
             return np.full(size, float(node[1]))
         if kind == "agg":
             return np.asarray(leaves[(node[1], node[2])], dtype=float)
+        if kind == "col":
+            return np.asarray(leaves[("col", node[1])], dtype=float)
         if kind == "neg":
             return -value(node[1])
         if kind == "op":

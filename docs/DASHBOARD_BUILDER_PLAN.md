@@ -333,6 +333,83 @@ and keeps the SQL/pandas parity rule.
   - Each Python visual runs in its own guarded engine process, so a slow script cannot take the
     page down with it.
 
+### 6.5 Phase 5 design (data and module polish)
+
+- **Navigation.**
+  - One module bar: `Dataset ▾ | Dashboards · Data · Explore · Predict · Gallery · Reports | Ask
+    AI`.
+  - `/app/visualize` opens the Dashboards home, which absorbs the overview's "start" actions;
+    the gradient banners go.
+  - `/studio` redirects to `/explore`. "My visuals" moves into Reports, which becomes the export
+    hub.
+- **Applied steps (Power Query style).**
+  - `viz_steps.py` (engine, no Django) runs an ordered `pipeline` of steps. Each step is
+    `{op, …settings, enabled, label}` and is validated before anything runs.
+  - Preview can stop after any step (`upto`). "Save as new dataset" keeps the original, as
+    today.
+  - The old fixed `clean`/`transform` request keeps working.
+  - Steps:
+    - remove duplicates / blank rows / columns, keep columns, keep top/bottom rows;
+    - rename, change type, trim, text case, replace values, fill blanks, fill down/up;
+    - filter rows (the dashboard filter operators), sort;
+    - split column, merge columns, extract date parts;
+    - conditional column (if/then rules), calculated column (row formulas in the safe expression
+      language), bins (equal width or custom edges);
+    - group by (several aggregations), pivot, unpivot;
+    - merge (left/inner/full join with another dataset) and append (another dataset);
+    - outliers (cap, remove or flag);
+    - date table (a calendar from a date column, with fiscal year).
+
+    Merge and append load at most three other datasets the user can analyse.
+- **Data tab.**
+  - A compact toolbar (Dataset ▾, Add data ▾, Download ▾, primary "Build dashboard →").
+  - A quality bar under every grid header (valid / error / empty, from the profile plus the last
+    scan).
+  - Quality chips filter the grid, and one-click fixes add steps.
+  - Profile cards get histogram sparklines (numeric bins in the profile) and a details panel;
+    clicking a top value offers keep only / exclude / replace as steps.
+  - A searchable transform catalogue ("What do you want to do?") and the Applied steps panel
+    (click to preview there; rename, disable, delete, reorder).
+- **Measures library.** `Measure(organization, owner, dataset?, name, expression, format)` with
+  CRUD under `measures/`. The Build pane can save a calculation to the library and add library
+  measures to a dashboard.
+- **Relationships.**
+  - `spec.relationships: [{from: {datasetId, field}, to: {datasetId, field}}]`, edited in the
+    dashboard editor, with suggestions where names and kinds match.
+  - When a filter's field is not in a dataset but a relationship reaches it, the API turns the
+    filter into `key IN (keys matching the filter)`, queried in Postgres (capped at 5,000 keys).
+    Slicers then filter across datasets.
+- **Explore** (replaces Studio).
+  - Left: fields. Centre: a grid of visual cards; the selected one is large. Right: the dashboard
+    editor's Build and Format panes.
+  - Top: dataset picker, chart-type picker with thumbnails, and suggestions drawn small with the
+    real data.
+  - Bottom drawer: aggregated data, raw rows and a plain query summary.
+  - A one-line insight (≤ 15 words) computed in Python.
+  - Actions: Pin to dashboard (existing dashboard and page, or a new one), Save to My visuals,
+    export PNG/CSV.
+- **Gallery.**
+  - No banner.
+  - Each card has a static SVG thumbnail (one template per chart shape, mapped from the 85 ids),
+    a short line and required-field chips.
+  - Hover offers "Use in Explore" and "Add to dashboard".
+  - "Recommended for this dataset" on top.
+- **Insights.** Cards show a headline of at most 6 words, a number, a chart thumbnail and "Add to
+  dashboard". The full sentence moves to an ⓘ popover. Python adds `headline` and `value`.
+- **Predict.**
+  - A left step wizard (type → data and target → settings → run). Results on the right: KPI
+    cards and charts, with no raw table and "How this was calculated" collapsed.
+  - "Pin to dashboard": a forecast pins as a live line chart with a forecast line (it follows
+    slicers). Other results pin as a `snapshot` visual (a stored ECharts option, sanitized like
+    Python output, with its date).
+- **Reports (export hub).** Pick a dashboard:
+  - PDF (one page per dashboard page; the browser paints each page, weasyprint packs them);
+  - PNG per page;
+  - Excel (one sheet per visual's data plus the raw data, via `report_workbook`);
+  - JSON spec;
+  - interactive HTML (ECharts options laid out like the page).
+- **Not in this phase:** PowerPoint (needs python-pptx), scheduled e-mails, column from examples.
+
 ## 7. Edge cases to guard
 
 - **Dataset changes.** A dataset replaced or edited after a dashboard was built can lose columns.

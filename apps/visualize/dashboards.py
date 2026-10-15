@@ -62,6 +62,75 @@ def _filters_for(
     ]
 
 
+MAX_KEYS = 5_000
+
+
+def _related_filters(
+    filters: list[dict[str, Any]],
+    dataset: Dataset,
+    kinds: dict[str, str],
+    datasets: dict[str, Dataset],
+    relationships: list[dict[str, Any]],
+    today: dt.date,
+) -> list[dict[str, Any]]:
+    """Filters on another dataset's fields, carried over relationships as ``key IN (matching keys)``.
+
+    The keys come from the other dataset's Postgres table (cached like any query). A filter whose
+    keys exceed ``MAX_KEYS`` is not carried over (an incomplete key list would give wrong totals).
+    """
+    out: list[dict[str, Any]] = []
+    me = str(dataset.id)
+    for item in filters:
+        if item.get("field") in kinds and (not item.get("datasetId") or item.get("datasetId") == me):
+            continue  # already a filter on this dataset
+        for link in relationships:
+            for near, far in ((link["from"], link["to"]), (link["to"], link["from"])):
+                if near["datasetId"] != me or near["field"] not in kinds or far["datasetId"] not in datasets:
+                    continue
+                if item.get("datasetId") and item["datasetId"] != far["datasetId"]:
+                    continue
+                other = datasets[far["datasetId"]]
+                other_kinds = _kinds(other)
+                if item.get("field") not in other_kinds or far["field"] not in other_kinds:
+                    continue
+                try:
+                    query = visual_plan.clean_query(
+                        {
+                            "groupBy": [{"field": far["field"]}],
+                            "measures": [],
+                            "filters": [item],
+                            "limit": MAX_KEYS,
+                        },
+                        other_kinds,
+                        today,
+                    )
+                    key = "viz-q:" + visual_plan.query_key(store.dataset_token(other), query)
+                    result = cache.get(key)
+                    if result is None:
+                        result = store.run_query(store.ensure_table(other), query)
+                        cache.set(key, result, QUERY_TTL)
+                except visual_plan.PlanError, store.StoreError, AnalysisError:
+                    logger.warning("relationship filter skipped for %s", far, exc_info=True)
+                    continue
+                if result.get("truncated"):
+                    continue
+                values = [row[0] for row in result.get("rows") or [] if row and row[0] is not None]
+                if values:
+                    out.append({"field": near["field"], "op": "in", "value": values})
+                else:  # nothing matches: a condition no row meets (blank and not blank)
+                    out.append(
+                        {
+                            "field": near["field"],
+                            "op": "and",
+                            "value": [
+                                {"field": near["field"], "op": "blank"},
+                                {"field": near["field"], "op": "not_blank"},
+                            ],
+                        }
+                    )
+    return out
+
+
 def render(
     datasets: dict[str, Dataset],
     visuals: list[dict[str, Any]],
@@ -102,7 +171,12 @@ def render(
     for dataset_id, group in by_dataset.items():
         dataset = datasets[dataset_id]
         try:
-            _render_dataset(dataset, group, filters, resolved, today, outputs, stats, context or {})
+            extra = _related_filters(
+                filters, dataset, _kinds(dataset), datasets, (context or {}).get("relationships") or [], today
+            )
+            _render_dataset(
+                dataset, group, [*filters, *extra], resolved, today, outputs, stats, context or {}
+            )
         except AnalysisError as exc:
             for visual in group:
                 outputs.setdefault(visual["id"], _error(visual, str(exc)))

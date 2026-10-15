@@ -7,6 +7,7 @@ router = DefaultRouter()
 router.register(r"charts", views.SavedChartViewSet, basename="viz-chart")
 router.register(r"dashboards", dashboard_views.DashboardViewSet, basename="viz-dashboard")
 router.register(r"themes", dashboard_views.ThemeViewSet, basename="viz-theme")
+router.register(r"measures", dashboard_views.MeasureViewSet, basename="viz-measure")
 
 urlpatterns = [
     path("catalog/", views.CatalogView.as_view(), name="viz-catalog"),

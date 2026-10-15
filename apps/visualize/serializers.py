@@ -11,6 +11,7 @@ from apps.visualize.models import (
     Dashboard,
     DashboardMember,
     DashboardVersion,
+    Measure,
     PersonalView,
     SavedChart,
     Theme,
@@ -148,10 +149,20 @@ class OrganizeRequestSerializer(serializers.Serializer):
     saveAs = serializers.CharField(max_length=200, required=False, allow_blank=True)
 
     def validate_steps(self, value: Any) -> dict[str, Any]:
+        from apps.visualize import viz_steps
+
         value = _bounded_object(value, "steps")
-        unknown = set(value) - {"clean", "transform"}
+        unknown = set(value) - {"clean", "transform", "pipeline", "upto"}
         if unknown:
             raise serializers.ValidationError(f"Unknown steps: {', '.join(sorted(unknown))}.")
+        if "pipeline" in value:
+            # Applied steps: validated here so mistakes come back before the engine runs.
+            try:
+                value["pipeline"] = viz_steps.validate(value["pipeline"])
+            except viz_steps.StepError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+            if value.get("upto") is not None and not isinstance(value["upto"], int):
+                raise serializers.ValidationError("upto must be a step number.")
         return value
 
 
@@ -206,6 +217,8 @@ class SavedChartCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200, required=False, allow_blank=True)
     description = serializers.CharField(max_length=5000, required=False, allow_blank=True)
     isShared = serializers.BooleanField(required=False)
+    # A dashboard visual from Explore (card, column, table, gallery chart…).
+    visual = serializers.JSONField(required=False)
 
     def validate_fields(self, value: Any) -> dict[str, Any]:
         return _bounded_object(value, "fields")
@@ -216,8 +229,20 @@ class SavedChartCreateSerializer(serializers.Serializer):
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         if attrs.get("resultId"):
             return attrs
+        if attrs.get("visual") is not None:
+            from apps.visualize import dashboard_spec
+
+            try:
+                attrs["visual"] = dashboard_spec.clean_visual(attrs["visual"], "Visual")
+            except dashboard_spec.SpecError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+            if not attrs["visual"]["data"]["datasetId"]:
+                raise serializers.ValidationError("The visual needs a dataset.")
+            return attrs
         if not attrs.get("datasetId") or not attrs.get("chartType"):
-            raise serializers.ValidationError("Provide datasetId and chartType, or a prediction resultId.")
+            raise serializers.ValidationError(
+                "Provide datasetId and chartType, a visual, or a prediction resultId."
+            )
         return attrs
 
 
@@ -334,6 +359,25 @@ class PersonalViewSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "updatedAt"]
 
 
+class MeasureSerializer(serializers.ModelSerializer):
+    datasetId = serializers.UUIDField(source="dataset_id", required=False, allow_null=True)
+    ownerId = serializers.UUIDField(source="owner_id", read_only=True)
+
+    class Meta:
+        model = Measure
+        fields = ["id", "name", "expression", "format", "description", "datasetId", "ownerId"]
+        read_only_fields = ["id", "ownerId"]
+
+    def validate_expression(self, value: str) -> str:
+        from apps.visualize import viz_expr
+
+        try:
+            viz_expr.parse(value)
+        except viz_expr.ExprError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return value
+
+
 class ThemeSerializer(serializers.ModelSerializer):
     isShared = serializers.BooleanField(source="is_shared", required=False)
     ownerId = serializers.UUIDField(source="owner_id", read_only=True)
@@ -356,8 +400,17 @@ class VisualsRequestSerializer(serializers.Serializer):
     # What calculated measures may reference: what-if parameter values and other calculations.
     parameters = serializers.DictField(child=serializers.FloatField(), required=False)
     calculations = serializers.ListField(child=serializers.JSONField(), required=False, max_length=100)
+    relationships = serializers.ListField(child=serializers.JSONField(), required=False, max_length=20)
 
 
 class AutoDashboardSerializer(serializers.Serializer):
     datasetId = serializers.UUIDField()
     name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class DashboardExportSerializer(serializers.Serializer):
+    """Export a dashboard: Excel, interactive HTML, JSON, or a PDF of page images from the browser."""
+
+    format = serializers.ChoiceField(choices=["xlsx", "html", "pdf", "json"])
+    mode = serializers.ChoiceField(choices=["light", "dark"], default="light")
+    images = serializers.ListField(child=serializers.JSONField(), required=False, max_length=20)

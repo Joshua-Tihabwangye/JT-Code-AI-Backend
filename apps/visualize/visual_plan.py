@@ -85,8 +85,10 @@ VISUAL_TYPES = (
     "parameter",
     "button",
     "navigator",
+    # A frozen chart (e.g. a prediction pinned from Predict), drawn from its stored option.
+    "snapshot",
 )
-LOCAL_TYPES = frozenset({"text", "parameter", "button", "navigator"})
+LOCAL_TYPES = frozenset({"text", "parameter", "button", "navigator", "snapshot"})
 SLICER_STYLES = ("dropdown", "list", "tiles", "between", "date_range", "relative")
 MAX_ROWS = 10_000
 MAX_FILTERS = 40
