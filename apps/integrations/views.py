@@ -398,7 +398,10 @@ class IntegrationViewSet(viewsets.ViewSet):
     def _get(self, id):
         from django.shortcuts import get_object_or_404
 
-        return get_object_or_404(self._accounts(), id=id)
+        account = get_object_or_404(self._accounts(), id=id)
+        # A plain ViewSet has no get_object(), so run the object-level role check here.
+        self.check_object_permissions(self.request, account)
+        return account
 
     @extend_schema(operation_id="v1_integrations_list", responses={200: OpenApiTypes.OBJECT})
     def list(self, request: Request):

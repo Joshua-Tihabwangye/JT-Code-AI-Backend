@@ -34,7 +34,6 @@ def test_connection_budget_is_derived_from_the_production_manifests():
     assert by_name["jt-code-api"]["maxReplicas"] == 20  # production HPA ceiling (overlay patch)
     assert by_name["jt-code-worker-ai"]["maxReplicas"] == 20  # production ScaledObject override
     assert by_name["jt-code-worker-ai"]["connectionsPerPod"] == 9  # concurrency 8 + main process
-    assert "jt-code-streamlit" not in by_name  # no database access
     assert budget["totalMaxClientConnections"] == sum(c["maxConnections"] for c in budget["components"])
     staging = connection_budget("staging")["totalMaxClientConnections"]
     assert staging < budget["totalMaxClientConnections"]
@@ -121,9 +120,8 @@ def _usage(org, user, *, cost: str, at):
 
 
 def test_cost_anomalies_are_detected_once_and_published(user, settings):
-    from apps.usage.anomalies import detect_cost_anomalies
-
     from apps.events.models import OutboxEvent
+    from apps.usage.anomalies import detect_cost_anomalies
     from apps.usage.models import CostAnomaly
 
     settings.USAGE_ANOMALY_Z = 4.0

@@ -32,7 +32,7 @@ class VisualizationResultSchemaSerializer(serializers.Serializer):
     version = serializers.ChoiceField(choices=["1"])
     kind = serializers.ChoiceField(choices=Visualization.Kind.choices)
     staticFormat = serializers.ChoiceField(choices=["png"])
-    interactiveFormat = serializers.ChoiceField(choices=["plotly-json"])
+    interactiveFormat = serializers.ChoiceField(choices=["echarts-json"])
     bytes = serializers.IntegerField(min_value=1)
     specBytes = serializers.IntegerField(min_value=1)
     points = serializers.IntegerField(min_value=1)
@@ -166,7 +166,7 @@ class VisualizationSerializer(serializers.ModelSerializer):
             "color_column",
             "title",
             "status",
-            "plotly_spec",
+            "chart_spec",
             "artifact_url",
             "spec_url",
             "artifact_checksum_sha256",
@@ -179,7 +179,7 @@ class VisualizationSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "status",
-            "plotly_spec",
+            "chart_spec",
             "artifact_url",
             "spec_url",
             "artifact_checksum_sha256",

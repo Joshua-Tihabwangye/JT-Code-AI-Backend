@@ -215,12 +215,24 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
     ),
     IntegrationSpec(
         key="analytics",
-        label="Pandas / Plotly / Matplotlib / Streamlit",
-        distributions=("pandas", "plotly", "matplotlib"),
-        modules=("pandas", "plotly", "matplotlib"),
+        label=(
+            "Pandas / NumPy / SciPy / statsmodels / scikit-learn / openpyxl / Matplotlib (charts: "
+            "Apache ECharts)"
+        ),
+        distributions=(
+            "pandas",
+            "numpy",
+            "matplotlib",
+            "contourpy",
+            "scipy",
+            "statsmodels",
+            "scikit-learn",
+            "openpyxl",
+        ),
+        modules=("pandas", "numpy", "matplotlib", "contourpy", "scipy", "statsmodels", "sklearn", "openpyxl"),
         purpose=(
-            "Bounded analysis and chart workers plus the separately deployed read-only viewer "
-            "(apps.analytics, streamlit_app)"
+            "Bounded analysis, chart-option and prediction workers in the isolated engines; charts are "
+            "rendered client-side with Apache ECharts (apps.analytics, apps.visualize)"
         ),
     ),
     IntegrationSpec(

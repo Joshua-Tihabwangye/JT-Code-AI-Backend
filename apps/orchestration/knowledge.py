@@ -35,7 +35,7 @@ class IntegrationSyncError(ValueError):
 
 def request_integration_sync(source: Any, sync_run: Any) -> None:
     """Emit the sync request in the caller's transaction (``sync_source``)."""
-    from apps.integrations.facade import public_config
+    from apps.integrations.facade import SHARED_CREDENTIAL_SYNC_DISABLED, public_config
     from apps.integrations.models import ConnectorAccount
 
     account = (
@@ -43,6 +43,8 @@ def request_integration_sync(source: Any, sync_run: Any) -> None:
         .filter(id=source.config.get("integrationId"), organization_id=source.collection.organization_id)
         .first()
     )
+    if not settings.INTEGRATION_SHARED_CREDENTIAL_SYNC:
+        raise IntegrationSyncError(SHARED_CREDENTIAL_SYNC_DISABLED)
     if account is None or account.status != ConnectorAccount.Status.ACTIVE:
         raise IntegrationSyncError("The source's integration is not connected.")
     if not client.configured():

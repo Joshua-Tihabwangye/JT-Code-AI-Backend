@@ -2,7 +2,7 @@
 
 Each task claims its record under a row lock (``FOR UPDATE OF`` the record only,
 so optional related rows can be joined), fetches and verifies source bytes,
-runs all pandas/Plotly/Matplotlib work in the isolated engine process, stores
+runs all pandas/ECharts-option/Matplotlib work in the isolated engine process, stores
 artifacts privately in Supabase Storage, and validates the result against the
 versioned result schema before saving it.
 """
@@ -222,7 +222,7 @@ def execute_visualization(visualization_id: str) -> None:
             spec_bytes,
             owner=run.owner,
             organization=organization,
-            file_name=f"visualization-{visualization.id}.plotly.json",
+            file_name=f"visualization-{visualization.id}.echarts.json",
             kind="analytics/charts",
             content_type="application/json",
             provenance={**provenance, "kind": "analytics-visualization-spec"},
@@ -232,7 +232,7 @@ def execute_visualization(visualization_id: str) -> None:
                 "version": RESULT_SCHEMA_VERSION,
                 "kind": visualization.kind,
                 "staticFormat": "png",
-                "interactiveFormat": "plotly-json",
+                "interactiveFormat": "echarts-json",
                 "bytes": len(png),
                 "specBytes": len(spec_bytes),
                 "points": output["points"],
@@ -241,7 +241,7 @@ def execute_visualization(visualization_id: str) -> None:
             }
         )
         schema.is_valid(raise_exception=True)
-        visualization.plotly_spec = (
+        visualization.chart_spec = (
             json.loads(spec_bytes) if len(spec_bytes) <= settings.ANALYTICS_INLINE_SPEC_BYTES else {}
         )
         visualization.artifact_checksum_sha256 = sha256(png)
@@ -252,7 +252,7 @@ def execute_visualization(visualization_id: str) -> None:
         visualization.completed_at = timezone.now()
         visualization.save(
             update_fields=[
-                "plotly_spec",
+                "chart_spec",
                 "artifact_checksum_sha256",
                 "artifact_asset",
                 "spec_asset",

@@ -435,6 +435,32 @@ def test_redirects_to_private_hosts_are_blocked(monkeypatch):
         egress.safe_request("GET", "https://public.example.com/")
 
 
+def test_credentials_do_not_follow_redirects_to_another_host(monkeypatch):
+    monkeypatch.setattr(egress, "resolve_public", lambda host: [PUBLIC_IP])
+    seen: dict[str, dict[str, str]] = {}
+
+    def handler(request):
+        host = request.headers["host"]
+        seen[host] = dict(request.headers)
+        if host == "api.example.com":
+            return httpx.Response(302, headers={"location": "https://elsewhere.example.net/landing"})
+        return httpx.Response(200, content=b"ok")
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(egress, "http_client", lambda timeout: httpx.Client(transport=transport))
+
+    egress.safe_request(
+        "GET",
+        "https://api.example.com/data",
+        headers={"Authorization": "Bearer tool-secret", "Cookie": "s=1", "Accept": "application/json"},
+    )
+
+    assert seen["api.example.com"]["authorization"] == "Bearer tool-secret"
+    assert "authorization" not in seen["elsewhere.example.net"]
+    assert "cookie" not in seen["elsewhere.example.net"]
+    assert seen["elsewhere.example.net"]["accept"] == "application/json"
+
+
 def test_oversized_responses_are_rejected(monkeypatch):
     monkeypatch.setattr(egress, "resolve_public", lambda host: [PUBLIC_IP])
     transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 2048))

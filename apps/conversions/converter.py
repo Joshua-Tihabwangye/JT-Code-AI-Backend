@@ -36,9 +36,9 @@ def _html_from_markdown(content: str) -> str:
 
 
 def _pdf_from_html(html: str) -> bytes:
-    from weasyprint import HTML
+    from apps.core.pdf import html_to_pdf
 
-    return HTML(string=html).write_pdf()
+    return html_to_pdf(html)
 
 
 def _docx_from_markdown(content: str) -> bytes:

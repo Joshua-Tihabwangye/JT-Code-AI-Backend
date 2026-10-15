@@ -41,7 +41,7 @@ help:
 	@echo "  native-restart [SERVICE=worker]  Restart the app processes, or one unit"
 	@echo "  native-observability-up / -down  Prometheus, Grafana, Tempo, OTel (opt-in)"
 	@echo "Infrastructure (Phase 17):"
-	@echo "  images        Build the API, office and Streamlit images"
+	@echo "  images        Build the API, office images"
 	@echo "  compose-up-prod  Production stack (docker-compose.prod.yml + .env.production); opens dashboards"
 	@echo "  prod-tunnel SERVER=user@host  SSH tunnel to a remote server's dashboards; opens them"
 	@echo "  k8s-generate  Regenerate infra/k8s/base and components"
@@ -213,7 +213,6 @@ TERRAFORM ?= terraform
 images:
 	docker build --target runtime -t jt-code-api:local .
 	docker build --target office -t jt-code-api-office:local .
-	docker build -t jt-code-streamlit:local streamlit_app
 
 compose-up-prod:
 	@JT_CODE_STACK=production bash scripts/compose_up.sh
@@ -247,4 +246,4 @@ deploy-staging:
 	scripts/deploy/deploy.sh staging
 
 bootstrap-staging:
-	scripts/deploy/bootstrap_environment.sh staging $(API_IMAGE) $(OFFICE_IMAGE) $(STREAMLIT_IMAGE)
+	scripts/deploy/bootstrap_environment.sh staging $(API_IMAGE) $(OFFICE_IMAGE)

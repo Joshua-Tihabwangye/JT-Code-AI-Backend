@@ -45,7 +45,7 @@ from apps.core.metrics import SECURITY_EVENTS, WEBHOOKS
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
 from apps.governance.audit import security_event
-from apps.identity.authorization import organization_for_request, require_organization_write_access
+from apps.identity.authorization import organization_for_request, require_organization_admin
 
 _INVOICE_PDF_HOSTS = {"pay.stripe.com", "files.stripe.com", "invoice.stripe.com"}
 
@@ -92,7 +92,7 @@ class PlanViewSet(viewsets.ReadOnlyModelViewSet):
         """Start Stripe Checkout for this plan (the subscription activates via webhook)."""
         plan = self.get_object()
         organization = _organization(request)
-        require_organization_write_access(request.user, organization.id)
+        require_organization_admin(request.user, organization.id)
         serializer = SubscribeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         if plan.is_free:
@@ -133,7 +133,7 @@ class SubscriptionViewSet(viewsets.ReadOnlyModelViewSet):
 
     def _toggle(self, request: Request, *, cancel: bool) -> Response:
         organization = _organization(request)
-        require_organization_write_access(request.user, organization.id)
+        require_organization_admin(request.user, organization.id)
         subscription = _current_subscription(organization)
         if subscription is None:
             raise NotFound("The organization has no active subscription.")
@@ -175,7 +175,7 @@ class WalletView(APIView):
     @extend_schema(request=WalletSettingsSerializer, responses={200: CreditWalletSerializer})
     def patch(self, request: Request) -> Response:
         organization = _organization(request)
-        require_organization_write_access(request.user, organization.id)
+        require_organization_admin(request.user, organization.id)
         serializer = WalletSettingsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -230,7 +230,7 @@ class WalletTopUpView(APIView):
     def post(self, request: Request) -> Response:
         """Create a PaymentIntent; credits are granted when Stripe confirms the payment."""
         organization = _organization(request)
-        require_organization_write_access(request.user, organization.id)
+        require_organization_admin(request.user, organization.id)
         serializer = TopUpSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         amount = serializer.validated_data["amount_cents"]
@@ -274,7 +274,7 @@ class PaymentMethodView(APIView):
         if any(key in request.data for key in ("number", "cardNumber", "cvc", "card_number")):
             raise ValidationError({"detail": "Card details must be submitted to Stripe, never to this API."})
         organization = _organization(request)
-        require_organization_write_access(request.user, organization.id)
+        require_organization_admin(request.user, organization.id)
         intent = stripe_client.create_setup_intent(organization)
         return Response(
             {
@@ -294,7 +294,7 @@ class BillingPortalView(APIView):
     )
     def post(self, request: Request) -> Response:
         organization = _organization(request)
-        require_organization_write_access(request.user, organization.id)
+        require_organization_admin(request.user, organization.id)
         serializer = PortalSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return_url = stripe_client.safe_return_url(serializer.validated_data.get("returnUrl"), "/billing")

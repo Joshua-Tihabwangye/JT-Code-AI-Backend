@@ -133,6 +133,8 @@ RESOLVERS: dict[str, Callable[[str], SourceState]] = {
     "document_render": _completed_inline,
     "knowledge_search": _completed_inline,
     "embedding": _completed_inline,
+    "viz_prediction": _completed_inline,
+    "viz_assistant": _completed_inline,
 }
 
 

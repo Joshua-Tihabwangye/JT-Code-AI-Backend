@@ -525,7 +525,9 @@ def test_unsubscribed_events_create_no_deliveries(n8n):
 # Integrations and knowledge sync ------------------------------------------------------
 
 
-def test_integrations_contract_connect_test_and_disconnect(n8n, django_user_model):
+def test_integrations_contract_connect_test_and_disconnect(n8n, django_user_model, settings):
+    # Plumbing test: opt in to shared-credential sync (off by default; see the setting).
+    settings.INTEGRATION_SHARED_CREDENTIAL_SYNC = True
     organization, owner = make_org(django_user_model, "integrations")
     api = client_for(owner, organization)
     bad = api.post(
@@ -561,7 +563,10 @@ def test_integrations_contract_connect_test_and_disconnect(n8n, django_user_mode
     assert api.get("/api/v1/integrations/").json()[0]["status"] == "disconnected"
 
 
-def test_knowledge_integration_sync_round_trip(n8n, django_user_model, django_capture_on_commit_callbacks):
+def test_knowledge_integration_sync_round_trip(
+    n8n, django_user_model, django_capture_on_commit_callbacks, settings
+):
+    settings.INTEGRATION_SHARED_CREDENTIAL_SYNC = True
     from apps.integrations.facade import connector_for
     from apps.integrations.models import ConnectorAccount
     from apps.knowledge.models import Collection, Document, Source, SyncRun
@@ -728,3 +733,34 @@ def test_push_reports_missing_credentials_and_keeps_those_workflows_inactive(n8n
     with pytest.raises(CommandError, match="N8N_CREDENTIAL_SLACK"):
         call_command("n8n_workflows", "push")
     assert all(not w["active"] for w in n8n.workflows.values())
+
+
+@pytest.mark.django_db
+def test_shared_credential_integration_sync_is_off_by_default(n8n, django_user_model):
+    """One platform credential per provider cannot bind a resource to a tenant: never use it by default."""
+    from apps.integrations.facade import SHARED_CREDENTIAL_SYNC_DISABLED, check_connection, connector_for
+    from apps.integrations.models import ConnectorAccount
+    from apps.knowledge.models import Collection, Source, SyncRun
+    from apps.orchestration.knowledge import IntegrationSyncError, request_integration_sync
+
+    organization, owner = make_org(django_user_model, "shared-credential")
+    account = ConnectorAccount.objects.create(
+        organization=organization,
+        connector=connector_for("github"),
+        user=owner,
+        status=ConnectorAccount.Status.ACTIVE,
+        metadata={"config": {"owner": "victimorg", "repo": "private"}},
+    )
+    assert check_connection(account) == (False, SHARED_CREDENTIAL_SYNC_DISABLED)
+
+    collection = Collection.objects.create(
+        organization=organization, name="kb", created_by=owner, embedding_model="echo"
+    )
+    source = Source.objects.create(
+        collection=collection,
+        name="repo",
+        source_type=Source.SourceType.INTEGRATION,
+        config={"integrationId": str(account.id)},
+    )
+    with pytest.raises(IntegrationSyncError, match="per-tenant"):
+        request_integration_sync(source, SyncRun.objects.create(source=source))

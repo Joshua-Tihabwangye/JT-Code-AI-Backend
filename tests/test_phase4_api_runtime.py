@@ -157,6 +157,38 @@ def test_sse_is_authenticated_and_uses_terminal_event(authenticated_client, user
 
 
 @pytest.mark.django_db
+def test_sse_negotiates_the_event_stream_accept_header(authenticated_client, user, conversation):
+    """SSE clients send ``Accept: text/event-stream``; that must not be a 406."""
+    request = ChatRequest.objects.create(
+        owner=user,
+        organization=conversation.organization,
+        conversation=conversation,
+        idempotency_key="phase4-sse-accept",
+        request_fingerprint="c" * 64,
+        input_text="input",
+        output_text="output",
+        status=ChatRequest.Status.COMPLETED,
+        trace_id="trace",
+    )
+    url = reverse("chat-request-stream", kwargs={"pk": request.id})
+
+    response = authenticated_client.get(url, HTTP_ACCEPT="text/event-stream")
+
+    async def consume():
+        return b"".join([chunk async for chunk in response.streaming_content])
+
+    assert response.status_code == 200
+    assert "event: completed" in async_to_sync(consume)().decode()
+
+    missing = authenticated_client.get(
+        reverse("chat-request-stream", kwargs={"pk": "00000000-0000-0000-0000-000000000000"}),
+        HTTP_ACCEPT="text/event-stream",
+    )
+    assert missing.status_code == 404
+    assert missing.content.decode().startswith("event: error\ndata: ")
+
+
+@pytest.mark.django_db
 def test_phase4_chat_list_accepts_tenant_scoped_status_filter(authenticated_client, user, conversation):
     ChatRequest.objects.create(
         owner=user,

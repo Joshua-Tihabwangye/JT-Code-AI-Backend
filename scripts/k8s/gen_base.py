@@ -370,33 +370,6 @@ write("beat.yaml", [beat])
 write("consumers.yaml", [consumer])
 resources_list += ["beat.yaml", "consumers.yaml"]
 
-# Streamlit -----------------------------------------------------------------------------
-streamlit = deployment(
-    "jt-code-streamlit",
-    "streamlit",
-    args=[],
-    image="jt-code-streamlit",
-    grace=30,
-    resources=res("100m", "256Mi", "1", "1Gi"),
-    ports=[{"name": "http", "containerPort": 8501, "protocol": "TCP"}],
-    probes={
-        "readinessProbe": http_probe("/_stcore/health", period=10, failure=3),
-        "livenessProbe": http_probe("/_stcore/health", period=20, failure=3),
-    },
-)
-container = streamlit["spec"]["template"]["spec"]["containers"][0]
-container.pop("args")
-container["envFrom"] = [{"configMapRef": {"name": "jt-code-streamlit-config"}}]
-container["env"] = []
-streamlit_service = {
-    "apiVersion": "v1",
-    "kind": "Service",
-    "metadata": {"name": "jt-code-streamlit", "labels": labels("streamlit")},
-    "spec": {"selector": labels("streamlit"), "ports": [{"name": "http", "port": 80, "targetPort": "http"}]},
-}
-write("streamlit.yaml", [streamlit, streamlit_service])
-resources_list.append("streamlit.yaml")
-
 # Migrations (run by the deploy pipeline before the rollout) -------------------------------
 migrate_pod = deployment(
     "x",
@@ -448,7 +421,7 @@ policies = [
         "spec": {
             "podSelector": {
                 "matchExpressions": [
-                    {"key": "app.kubernetes.io/component", "operator": "In", "values": ["api", "streamlit"]}
+                    {"key": "app.kubernetes.io/component", "operator": "In", "values": ["api"]}
                 ]
             },
             "policyTypes": ["Ingress"],
@@ -535,7 +508,7 @@ ingress = {
     },
     "spec": {
         "ingressClassName": "nginx",
-        "tls": [{"hosts": ["api.example.com", "analytics.example.com"], "secretName": TLS_SECRET_NAME}],
+        "tls": [{"hosts": ["api.example.com"], "secretName": TLS_SECRET_NAME}],
         "rules": [
             {
                 "host": "api.example.com",
@@ -545,18 +518,6 @@ ingress = {
                             "path": "/",
                             "pathType": "Prefix",
                             "backend": {"service": {"name": "jt-code-api", "port": {"name": "http"}}},
-                        }
-                    ]
-                },
-            },
-            {
-                "host": "analytics.example.com",
-                "http": {
-                    "paths": [
-                        {
-                            "path": "/",
-                            "pathType": "Prefix",
-                            "backend": {"service": {"name": "jt-code-streamlit", "port": {"name": "http"}}},
                         }
                     ]
                 },

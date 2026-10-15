@@ -116,6 +116,11 @@ def require_organization_write_access(user, organization_id) -> None:
         raise PermissionDenied("Editor or admin access is required for this organization.")
 
 
+def require_organization_admin(user, organization_id) -> None:
+    if not user_has_role(user, Role.RoleType.ADMIN, organization_id):
+        raise PermissionDenied("Admin access is required for this organization.")
+
+
 def organization_id_for_object(obj) -> object | None:
     """Find an object's tenant without accepting an owner as a boundary.
 
@@ -182,10 +187,11 @@ class HasOrganizationWriteAccess(permissions.BasePermission):
             return False
         if request.method in permissions.SAFE_METHODS:
             return True
-        if getattr(view, "action", None) in {None, "create"}:
-            organization = organization_for_request(request, required=True)
-            return user_can_edit_organization(request.user, organization.id)
-        return True
+        # Every write needs editor rights in the selected tenant up front. Object checks
+        # alone are not enough: views that load objects without get_object() (plain
+        # ViewSets, custom actions) never reach has_object_permission.
+        organization = organization_for_request(request, required=True)
+        return user_can_edit_organization(request.user, organization.id)
 
     def has_object_permission(self, request, view, obj) -> bool:
         organization_id = organization_id_for_object(obj)

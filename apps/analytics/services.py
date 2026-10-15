@@ -1,6 +1,6 @@
 """Django-side analytics services. Uploaded code is never executed.
 
-Data handling (pandas, Plotly, Matplotlib) runs in the isolated engine process
+Data handling (pandas, ECharts options, Matplotlib) runs in the isolated engine process
 (:mod:`apps.analytics.sandbox`). This module fetches and verifies source bytes,
 and re-exports the engine's pure validation helpers for request validation.
 """
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any
-from urllib.parse import urlsplit
 
 from django.conf import settings
 
@@ -44,32 +43,35 @@ def dataframe_from_bytes(content: bytes, *, mime_type: str) -> Any:
 
 
 def bytes_for_asset(asset: Any) -> bytes:
-    """Download a READY asset through signed, host-pinned egress and verify its checksum."""
+    """Read a READY asset from first-party storage (byte-capped) and verify its checksum.
+
+    The URL is built from server configuration and an internal storage key, never
+    user input, so this uses the storage client rather than the public-internet
+    egress guard (which would refuse a self-hosted, in-network Supabase Storage).
+    """
+    import httpx
+
     from apps.assets.models import Asset
-    from apps.assets.supabase_storage import generate_signed_delivery_url, storage_api_url
-    from apps.tools.egress import safe_request
+    from apps.assets.supabase_storage import SupabaseStorageError, stream_file
 
     if asset.status != Asset.Status.READY or not asset.storage_key:
         raise AnalysisError("The dataset asset is not ready.")
-    if asset.bytes > settings.ANALYTICS_MAX_DATASET_BYTES:
+    limit = settings.ANALYTICS_MAX_DATASET_BYTES
+    if asset.bytes > limit:
         raise AnalysisError("The dataset asset exceeds the configured byte limit.")
-    host = urlsplit(storage_api_url()).hostname
-    if not host:
-        raise AnalysisError("Supabase Storage delivery is not configured.")
-    response = safe_request(
-        "GET",
-        generate_signed_delivery_url(asset.storage_key, external=False),
-        allowed_hosts=[host],
-        timeout=settings.ANALYTICS_DOWNLOAD_TIMEOUT_SECONDS,
-        max_bytes=settings.ANALYTICS_MAX_DATASET_BYTES,
-    )
-    if response.status_code != 200:
-        raise AnalysisError("The dataset asset could not be downloaded.")
-    if asset.bytes and len(response.content) != asset.bytes:
+    content = bytearray()
+    try:
+        for chunk in stream_file(asset.storage_key):
+            content.extend(chunk)
+            if len(content) > limit:
+                raise AnalysisError("The dataset asset exceeds the configured byte limit.")
+    except (httpx.HTTPError, SupabaseStorageError) as exc:
+        raise AnalysisError("The dataset asset could not be downloaded.") from exc
+    if asset.bytes and len(content) != asset.bytes:
         raise AnalysisError("The downloaded dataset size does not match its asset record.")
-    if asset.checksum_sha256 and sha256(response.content) != asset.checksum_sha256:
+    if asset.checksum_sha256 and sha256(bytes(content)) != asset.checksum_sha256:
         raise AnalysisError("The downloaded dataset failed its integrity check.")
-    return bytes(response.content)
+    return bytes(content)
 
 
 def dataset_bytes(dataset: Any) -> bytes:

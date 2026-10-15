@@ -163,13 +163,6 @@ install_n8n() {
   ln -sfn "$dest" "$OPT/n8n"
 }
 
-install_streamlit() {
-  local repo
-  repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  log "Streamlit requirements into $repo/.venv"
-  "$repo/.venv/bin/python" -m pip install --quiet -r "$repo/streamlit_app/requirements.txt"
-}
-
 install_observability() {
   local d
   d="$OPT/prometheus-$PROMETHEUS_VERSION"
@@ -213,7 +206,6 @@ install_core() {
   install_mailpit
   install_storage
   install_n8n
-  install_streamlit
 }
 
 case "${1:-core}" in

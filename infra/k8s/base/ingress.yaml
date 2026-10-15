@@ -19,7 +19,6 @@ spec:
   tls:
   - hosts:
     - api.example.com
-    - analytics.example.com
     secretName: jt-code-tls  # pragma: allowlist secret
   rules:
   - host: api.example.com
@@ -30,15 +29,5 @@ spec:
         backend:
           service:
             name: jt-code-api
-            port:
-              name: http
-  - host: analytics.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: jt-code-streamlit
             port:
               name: http

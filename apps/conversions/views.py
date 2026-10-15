@@ -19,6 +19,7 @@ from apps.conversions.serializers import (
     ConversionCreateSerializer,
     ConversionJobSerializer,
 )
+from apps.core.throttling import BurstThrottle, ConversionThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
@@ -32,6 +33,13 @@ from apps.usage.pricing import flat_credits
 
 class ConversionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+
+    def get_throttles(self):
+        # Conversions run synchronously (LibreOffice, WeasyPrint, PIL) inside the web process.
+        if self.action == "create":
+            return [ConversionThrottle(), BurstThrottle()]
+        return super().get_throttles()
+
     serializer_class = ConversionJobSerializer
     lookup_field = "id"
     http_method_names = ["get", "post", "head", "options"]

@@ -73,6 +73,9 @@ class ConnectorAccountSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = [
+            "organization",
+            "user",
+            "connector",
             "id",
             "credentials_ref",
             "encrypted_config",
@@ -110,7 +113,6 @@ class WebhookSerializer(serializers.ModelSerializer):
             "organization_name",
             "name",
             "url",
-            "secret",
             "status",
             "status_display",
             "event_filter",
@@ -129,9 +131,11 @@ class WebhookSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        # The signing secret is never listed: it is returned once, in the create response.
         read_only_fields = [
+            "organization",
+            "created_by",
             "id",
-            "secret",
             "is_verified",
             "last_triggered_at",
             "last_success_at",
@@ -202,7 +206,16 @@ class APIKeySerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "prefix", "key_hash", "last_used_at", "created_at", "updated_at"]
+        read_only_fields = [
+            "organization",
+            "user",
+            "id",
+            "prefix",
+            "key_hash",
+            "last_used_at",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_full_key(self, obj) -> str | None:
         # Only return full key on creation
@@ -246,6 +259,8 @@ class KafkaConsumerSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = [
+            "organization",
+            "created_by",
             "id",
             "assigned_partitions",
             "lag",

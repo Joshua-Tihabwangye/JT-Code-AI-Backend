@@ -149,6 +149,11 @@ class CollectionViewSet(viewsets.ModelViewSet):
         serializer.save(organization=organization, created_by=self.request.user)
 
     def perform_destroy(self, instance):
+        # A collection holds other members' sources: only its creator or an org admin deletes it.
+        if instance.created_by_id != self.request.user.id and not user_has_role(
+            self.request.user, Role.RoleType.ADMIN, instance.organization_id
+        ):
+            raise PermissionDenied("Only the collection's creator or an organization admin can delete it.")
         with transaction.atomic():
             enqueue_outbox_event(
                 topic="knowledge.collection.deleted",
@@ -639,7 +644,9 @@ def _create_rag_job(request: Request, payload: dict):
         from apps.conversations.models import Conversation
 
         if not tenant_scoped_queryset(
-            Conversation.objects.filter(id=conversation_id), request.user, organization_id=organization.id
+            Conversation.objects.filter(id=conversation_id, owner=request.user),
+            request.user,
+            organization_id=organization.id,
         ).exists():
             raise NotFound("Conversation not found.")
     with transaction.atomic():

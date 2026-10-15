@@ -12,19 +12,54 @@
 		max_size 32MB
 	}
 
+	# CORS, as the hosted Supabase API gateway does it: browsers on a local dev origin
+	# (e.g. the Vite dev server on :5173) call Auth/Storage/REST cross-origin. Loopback only.
+	@local_origin header_regexp Origin ^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$$
+	header @local_origin {
+		Access-Control-Allow-Origin "{http.request.header.Origin}"
+		Access-Control-Allow-Credentials "true"
+		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+		Access-Control-Allow-Headers "authorization, apikey, content-type, x-client-info, x-supabase-api-version, x-upsert, cache-control, x-signature, range, accept-profile, content-profile, prefer"
+		Access-Control-Expose-Headers "content-range, content-length, etag, x-request-id"
+		Access-Control-Max-Age "600"
+		Vary "Origin"
+		defer
+	}
+	@preflight {
+		method OPTIONS
+		header_regexp Origin ^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$$
+	}
+	handle @preflight {
+		respond 204
+	}
+
 	handle /health {
 		respond "ok" 200
+	}
+	# Email templates GoTrue fetches (GOTRUE_MAILER_TEMPLATES_*): the recovery email carries the
+	# one-time code the frontend's reset form verifies.
+	handle_path /templates/* {
+		root * ${REPO_DIR}/infra/native/supabase-templates
+		file_server
 	}
 	handle_path /auth/v1/* {
 		reverse_proxy 127.0.0.1:${GOTRUE_PORT} {
 			header_up X-Forwarded-Prefix /auth/v1
+			header_down -Access-Control-Allow-Origin
+			header_down -Access-Control-Allow-Credentials
 		}
 	}
 	handle_path /storage/v1/* {
-		reverse_proxy 127.0.0.1:${STORAGE_PORT}
+		reverse_proxy 127.0.0.1:${STORAGE_PORT} {
+			header_down -Access-Control-Allow-Origin
+			header_down -Access-Control-Allow-Credentials
+		}
 	}
 	handle_path /rest/v1/* {
-		reverse_proxy 127.0.0.1:${POSTGREST_PORT}
+		reverse_proxy 127.0.0.1:${POSTGREST_PORT} {
+			header_down -Access-Control-Allow-Origin
+			header_down -Access-Control-Allow-Credentials
+		}
 	}
 	handle {
 		header Content-Type application/json

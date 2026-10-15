@@ -119,7 +119,7 @@ module "edge" {
   environment        = var.environment
   zone_id            = var.cloudflare_zone_id
   zone_name          = var.zone_name
-  proxied_subdomains = [var.api_subdomain, var.analytics_subdomain, var.n8n_hooks_subdomain]
+  proxied_subdomains = [var.api_subdomain, var.n8n_hooks_subdomain]
   origin_ip = coalesce(
     var.ingress_ip,
     try(data.kubernetes_service.ingress.status[0].load_balancer[0].ingress[0].ip, ""),

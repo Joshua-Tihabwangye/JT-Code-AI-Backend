@@ -493,7 +493,7 @@ class AssetAttachView(APIView):
         serializer = AttachSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         conversation = tenant_scoped_queryset(
-            Conversation.objects.filter(id=serializer.validated_data["conversationId"]),
+            Conversation.objects.filter(id=serializer.validated_data["conversationId"], owner=request.user),
             request.user,
             organization_id=asset.organization_id,
         ).first()

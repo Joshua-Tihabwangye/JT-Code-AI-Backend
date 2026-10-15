@@ -60,6 +60,10 @@ class User(AbstractUser):
     full_name = models.CharField(max_length=255, blank=True)
     display_name = models.CharField(max_length=255, blank=True)
     avatar_url = models.URLField(blank=True)
+    # An avatar uploaded through /accounts/me/avatar/ (private storage; served via signed URLs).
+    avatar_asset = models.ForeignKey(
+        "assets.Asset", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     job_title = models.CharField(max_length=255, blank=True)
     contact = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)

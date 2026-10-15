@@ -28,11 +28,9 @@ def _render_html(content: str) -> str:
 
 
 def render_pdf(document: Document) -> bytes:
-    from weasyprint import HTML
+    from apps.core.pdf import html_to_pdf
 
-    html = _render_html(document.content)
-    pdf = HTML(string=html).write_pdf()
-    return pdf
+    return html_to_pdf(_render_html(document.content))
 
 
 def render_docx(document: Document) -> bytes:

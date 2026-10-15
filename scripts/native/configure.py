@@ -9,7 +9,7 @@
 * One systemd *user* unit per process is written to ~/.config/systemd/user,
   each with a memory ceiling, grouped into targets:
       jt-code-infra.target          Kafka, Supabase Auth/REST/Storage/gateway, Mailpit, n8n
-      jt-code-app.target            API, Celery worker + beat, Kafka consumer, Streamlit
+      jt-code-app.target            API, Celery worker + beat, Kafka consumer
       jt-code.target                both of the above
       jt-code-observability.target  Prometheus, Grafana, Tempo, OTel collector, exporters (opt-in)
 * --write-env merges the connection settings for this stack into .env (a
@@ -313,20 +313,6 @@ def build_units(values: dict[str, str]) -> list[Unit]:
             environment=app_env,
             after=("jt-code-infra.target",),
         ),
-        Unit(
-            "jt-code-streamlit",
-            "Streamlit analytics app",
-            f"{VENV_BIN}/streamlit run streamlit_app/app.py --server.address 127.0.0.1 --server.port 8501 "
-            "--server.headless true --browser.gatherUsageStats false",
-            app,
-            "512M",
-            environment={
-                "JT_CODE_API_BASE_URL": "http://127.0.0.1:8000/api/v1",
-                "SUPABASE_URL": SUPABASE_PUBLIC_URL,
-                "SUPABASE_PUBLISHABLE_KEY": values["JT_SUPABASE_ANON_KEY"],
-            },
-            after=("jt-code-api.service",),
-        ),
         # --- observability (opt-in) -----------------------------------------
         Unit(
             "jt-code-prometheus",
@@ -528,6 +514,7 @@ def main(argv: list[str]) -> int:
         **PORTS,
         "SUPABASE_PUBLIC_URL": SUPABASE_PUBLIC_URL,
         "DATA_DIR": str(DATA),
+        "REPO_DIR": str(REPO),
         "OPT_DIR": str(OPT),
         "ASSET_MAX_UPLOAD_BYTES": repo_env.get("ASSET_MAX_UPLOAD_BYTES") or str(25 * 1024 * 1024),
         "N8N_DISPATCH_SECRET": repo_env.get("N8N_DISPATCH_SECRET", ""),

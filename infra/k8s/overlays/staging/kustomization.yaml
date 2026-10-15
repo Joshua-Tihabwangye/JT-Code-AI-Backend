@@ -15,16 +15,9 @@ images:
   - name: jt-code-api-office
     newName: ghcr.io/joshua-tihabwangye/jt-code-api-office
     newTag: staging
-  - name: jt-code-streamlit
-    newName: ghcr.io/joshua-tihabwangye/jt-code-streamlit
-    newTag: staging
 configMapGenerator:
   - name: jt-code-config
     envs: [config.env]
-    options:
-      labels: {app.kubernetes.io/component: config}
-  - name: jt-code-streamlit-config
-    envs: [streamlit.env]
     options:
       labels: {app.kubernetes.io/component: config}
 patches:

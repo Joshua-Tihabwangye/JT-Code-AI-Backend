@@ -224,7 +224,7 @@ def test_viewer_role_cannot_mutate_prompts(api_client, user):
 
 
 @pytest.mark.django_db
-def test_organization_member_can_list_team_conversations(api_client, user):
+def test_conversations_are_private_to_their_owner_within_an_organization(api_client, user):
     owner = type(user).objects.create_user(
         username="conversation-owner", supabase_user_id="conversation-owner", email="owner@example.com"
     )
@@ -241,7 +241,14 @@ def test_organization_member_can_list_team_conversations(api_client, user):
     assert response.status_code == 200
     body = response.json()
     items = body.get("results", body) if isinstance(body, dict) else body
-    assert str(conversation.id) in {item["id"] for item in items}
+    # Chats are private: a fellow member neither lists nor opens someone else's conversation.
+    assert str(conversation.id) not in {item["id"] for item in items}
+    detail = api_client.get(reverse("conversation-detail", kwargs={"pk": conversation.id}))
+    assert detail.status_code == 404
+    api_client.force_authenticate(owner)
+    owned = api_client.get(reverse("conversation-list")).json()
+    owned_items = owned.get("results", owned) if isinstance(owned, dict) else owned
+    assert str(conversation.id) in {item["id"] for item in owned_items}
 
 
 @pytest.mark.django_db

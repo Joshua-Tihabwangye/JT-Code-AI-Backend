@@ -58,10 +58,6 @@ case "$role" in
   n8n-push)
     exec python manage.py n8n_workflows push
     ;;
-  streamlit)
-    echo "Streamlit ships as its own image (streamlit_app/Dockerfile)." >&2
-    exit 64
-    ;;
   manage)
     exec python manage.py "$@"
     ;;

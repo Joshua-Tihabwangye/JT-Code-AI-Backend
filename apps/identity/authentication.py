@@ -138,6 +138,9 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
         if not created and email and user.email != email:
             User.objects.filter(pk=user.pk).update(email=email)
             user.email = email
+        from apps.identity.provisioning import provision_on_authentication
+
+        provision_on_authentication(user, claims, created=created)
         return user, claims
 
     def authenticate_header(self, request) -> str:

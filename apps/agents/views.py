@@ -13,6 +13,7 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, NotFound, ValidationError
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -26,6 +27,7 @@ from apps.agents.serializers import (
 )
 from apps.agents.tasks import dispatch_run
 from apps.core.pagination import CreatedCursorPagination, UpdatedCursorPagination
+from apps.core.renderers import EventStreamRenderer
 from apps.core.throttling import AgentRunThrottle, BurstThrottle
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
@@ -171,7 +173,7 @@ class AgentRunViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets
         return Response(AgentStepSerializer(run.trace.order_by("sequence"), many=True).data)
 
     @extend_schema(responses={(200, "text/event-stream"): OpenApiTypes.STR})
-    @action(detail=True, methods=["get"])
+    @action(detail=True, methods=["get"], renderer_classes=[JSONRenderer, EventStreamRenderer])
     def events(self, request: Request, pk=None) -> StreamingHttpResponse:
         """SSE stream of trace steps (``step``) then the final run (``completed``/``failed``/…)."""
         run = self.get_object()
