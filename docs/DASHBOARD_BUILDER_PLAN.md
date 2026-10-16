@@ -650,3 +650,65 @@ and keeps the SQL/pandas parity rule.
     read, e.g. matrix → table gave an error tile. `retype` now moves the fields.
   - Python chart options now inherit the theme, grid and tooltip defaults.
   - The theme dialog now sits above the editor's handles.
+
+### Phase 5 — done 2026-10-16
+
+- **Navigation:**
+  - One module bar: `Dataset ▾ | Dashboards · Data · Explore · Predict · Gallery · Reports | Ask
+    AI`.
+  - `/app/visualize` is the Dashboards home, with a "start here" row (samples, upload), filters
+    for mine/shared and a My visuals strip.
+  - The Overview and Studio pages are gone: `/studio` redirects to `/explore`, and chart
+    hand-offs (gallery, insights, assistant) open in Explore.
+- **Applied steps (`viz_steps.py`):**
+  - 26 validated step types run in order. They cover clean, rows, columns, text, numbers/dates,
+    group/pivot/unpivot, merge/append and a date table with fiscal year.
+  - Calculated columns use the safe expression language in row mode; conditions use the
+    dashboard filter operators.
+  - Preview stops after any step. Merge and append load other datasets the user may analyse (404
+    otherwise). Saving creates a new dataset; the original never changes.
+- **Data tab:**
+  - A compact toolbar: Dataset ▾, Add data ▾, Download ▾, Explore, Predict, Build dashboard →.
+  - Quality bars (valid/problem/empty) under every grid header.
+  - Quality chips that filter the grid, and one-click fixes that add steps.
+  - A Transform tab: searchable catalogue, Applied steps (select, disable, reorder, delete,
+    rename), live preview, save as a new dataset.
+  - Smaller profile cards with 12-bin histograms (new in the profile), a statistics panel, and
+    keep only / exclude / replace on top values.
+  - Insight cards with a headline (≤ 6 words), a number, a chart picture, Explore and Add to
+    dashboard; the sentence is behind ⓘ.
+- **Measures library:** `Measure` model (migration 0004) and `measures/` CRUD. Saving and adding
+  are done from the Build pane's Calculations section.
+- **Relationships:** `spec.relationships`, with suggestions from same-named columns. A filter on
+  one dataset's field reaches a related dataset as `key IN (matching keys)`, queried in Postgres
+  and cached; no matching keys gives an impossible condition, and more than 5,000 keys is skipped.
+- **Explore:**
+  - Dashboard visuals in a card grid (up to 12); the selected card is large and shows a one-line
+    insight (≤ 15 words, from Python).
+  - The editor's Build and Format panes, plus chart-type pictures.
+  - Live mini previews of the rule-based suggestions.
+  - A View data drawer: data behind the chart, raw rows and a plain query description.
+  - Pin to dashboard (existing page, or a new dashboard), Save to My visuals (new `visual:` saved
+    charts), PNG and CSV.
+- **Gallery:**
+  - Static SVG pictures for all 85 charts (about 30 shape templates).
+  - A short line and required-field chips per card; Use in Explore / Add to dashboard on hover.
+  - "Recommended for <dataset>" on top.
+- **Predict:** a left wizard (type → data and target → settings → run) and results without the raw
+  table, with "How this was calculated" folded. Pin to dashboard: the forecast pins live (a line
+  with a forecast line that follows slicers); other results pin as `snapshot` visuals.
+- **Snapshots:** the stored chart is sanitized on save (formatter markers kept, string formatters,
+  links and remote images dropped).
+- **Reports:**
+  - An export hub for any dashboard: Excel (summary, chart sheets with native charts, table
+    data, raw data), interactive HTML (ECharts inlined), JSON, and PDF/PNG.
+  - PDF/PNG pages are painted in the browser: the page is cloned with computed styles inlined
+    and chart canvases turned into images, then drawn via SVG `foreignObject`. weasyprint packs
+    the PDF through the existing data-only fetcher in `apps/core/pdf.py`.
+  - My visuals is listed below.
+- **Fixed during testing:**
+  - "Blank out N/A" failed on number columns, where pandas had already read N/A as blank. It is
+    now a no-op there.
+  - Gallery charts opened in Explore had no fields; they now get the dataset's best mapping.
+  - Dashboard table styles positioned the transform preview off the page.
+  - Assistant "Open in Studio" became "Open in Explore".

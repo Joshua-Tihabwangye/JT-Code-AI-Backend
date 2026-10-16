@@ -414,6 +414,10 @@
       "path": "/visualize/dashboards/{param}/duplicate/"
     },
     {
+      "method": "POST",
+      "path": "/visualize/dashboards/{param}/export/"
+    },
+    {
       "method": "DELETE",
       "path": "/visualize/dashboards/{param}/personal-view/"
     },
@@ -476,6 +480,22 @@
     {
       "method": "GET",
       "path": "/visualize/maps/world/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/measures/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/measures/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/measures/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/visualize/measures/{param}/"
     },
     {
       "method": "POST",
