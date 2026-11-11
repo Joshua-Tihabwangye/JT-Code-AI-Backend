@@ -1,5 +1,5 @@
 # Cluster properties applied when the production broker is first created
-# (docker-compose.prod.yml mounts this as /etc/redpanda/.bootstrap.yaml).
+# (compose.yaml mounts this as /etc/redpanda/.bootstrap.yaml).
 # Change them later with `rpk cluster config set`, not by editing this file.
 enable_sasl: true # every Kafka connection must log in (SCRAM)
 superusers: ["jt-admin"] # topic administration (ensure_kafka_topics, verify_messaging)

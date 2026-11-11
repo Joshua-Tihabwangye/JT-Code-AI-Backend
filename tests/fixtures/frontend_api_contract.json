@@ -355,6 +355,22 @@
     },
     {
       "method": "POST",
+      "path": "/visualize/ai/ask/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/ai/format/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/ai/page/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/ai/suggest/"
+    },
+    {
+      "method": "POST",
       "path": "/visualize/assistant/"
     },
     {
@@ -398,6 +414,14 @@
       "path": "/visualize/dashboards/auto/"
     },
     {
+      "method": "POST",
+      "path": "/visualize/dashboards/from-template/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/dashboards/templates/"
+    },
+    {
       "method": "DELETE",
       "path": "/visualize/dashboards/{param}/"
     },
@@ -428,6 +452,18 @@
     {
       "method": "PUT",
       "path": "/visualize/dashboards/{param}/personal-view/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/dashboards/{param}/share-links/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/dashboards/{param}/share-links/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/dashboards/{param}/share-links/{param}/"
     },
     {
       "method": "GET",
@@ -478,6 +514,10 @@
       "path": "/visualize/datasets/{param}/replace/"
     },
     {
+      "method": "POST",
+      "path": "/visualize/explain/"
+    },
+    {
       "method": "GET",
       "path": "/visualize/maps/world/"
     },
@@ -516,6 +556,14 @@
     {
       "method": "POST",
       "path": "/visualize/samples/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/shared/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/shared/{param}/visuals/"
     },
     {
       "method": "GET",

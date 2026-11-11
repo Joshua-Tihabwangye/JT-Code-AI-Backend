@@ -410,6 +410,60 @@ and keeps the SQL/pandas parity rule.
   - interactive HTML (ECharts options laid out like the page).
 - **Not in this phase:** PowerPoint (needs python-pptx), scheduled e-mails, column from examples.
 
+### 6.6 Phase 6 design (AI and presentation)
+
+- **Templates** (`templates.py`): 9 templates — Sales overview, CRM pipeline, Finance P&L, HR
+  analytics, Web analytics, Mobile app analytics, Marketing campaigns, Inventory and operations,
+  Retail.
+  - Each template is a list of *roles* (date, amount, category, target, …, required or optional)
+    plus visual blueprints that use them; blueprints whose optional roles are missing are
+    skipped.
+  - `guess(profile)` proposes a column for every role from kinds and names. The one-step mapping
+    wizard shows those guesses; the user confirms or changes them, then the API builds the spec
+    with the auto-dashboard layout.
+  - Cards preview each template's layout as small pictures, in light and dark.
+- **New dashboard dialog**: Blank · Auto-dashboard · Template · Ask AI.
+- **Auto-dashboard** additions:
+  - margin % and vs-target % as calculations when profit/revenue or target columns exist;
+  - a metric switcher (field parameter over the main measures) bound to the ranking;
+  - a colour scale on the matrix;
+  - a page 2 "Details" drill-through table.
+- **AI** (metered as `chat_messages`, only when the user asks). Every AI answer is a JSON spec
+  that is validated (`dashboard_spec`) and shown as a preview, with Apply / Discard. A free
+  rule-based answer is used whenever the model is unavailable or its JSON is unusable.
+  - *Create page*: the prompt becomes visual blueprints (type, fields, aggregation) and slicers,
+    laid out by the auto-dashboard rules.
+  - *Suggest visuals*: free, rule-based recommendations not already on the page, shown as
+    pictures; click to add.
+  - *Ask a question*: the model turns the question into one visual and its filters; the numbers
+    come from rendering it (Postgres/pandas), and the answer sentence is that visual's insight.
+    The visual can be pinned.
+  - *Summary visual* (`summary` type): 3 bullets of ≤ 12 words, computed in Python (total and
+    change versus the previous period, leader and its share, biggest mover). It follows slicers
+    and is free.
+  - *Explain this change* (`explain/`): for a period on a date chart, versus the period before,
+    the categories that contributed most (per low-cardinality dimension), from grouped queries.
+  - *Auto-format* ("make it executive / dark / compact"): keywords map to theme, mode, density,
+    grid alignment and consistent titles. The model is used only when no keyword matches, and
+    picks from the allowed options.
+- **Present mode**: full screen, no chrome, ←/→ between pages, optional auto-cycle (10/30/60 s),
+  Esc to leave.
+- **Share links and embeds** (`DashboardShareLink`):
+  - The token is random, stored only as a SHA-256 hash, can be revoked, and may expire.
+  - Public read-only routes `/share/<token>` and `/embed/<token>` serve the stored dashboard.
+  - Renders take only visual ids, filters and parameter values, never visual definitions.
+  - Filters may use only the fields the dashboard itself uses, so a link cannot probe other
+    columns.
+  - Anonymous requests have their own throttle. Links are off until the owner or an editor
+    creates one.
+- **Accessibility and performance**:
+  - tiles are focusable figures with labels and a visible focus ring;
+  - keyboard: Tab between tiles, Enter for focus mode, T for "show as table";
+  - charts mount when scrolled into view;
+  - the e2e checks that a 15-visual page draws in under 2 s and fits 1366×768.
+- **Final e2e (brief §18)**: create → auto-dashboard → click a bar filters a KPI → slicer → a
+  second user (viewer) personalizes a visual → reset → save → reload persists → export PDF.
+
 ## 7. Edge cases to guard
 
 - **Dataset changes.** A dataset replaced or edited after a dashboard was built can lose columns.

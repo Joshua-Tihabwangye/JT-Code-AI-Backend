@@ -2,7 +2,7 @@
 
     python scripts/generate_supabase_keys.py "$SUPABASE_JWT_SECRET"
 
-Prints SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY lines for .env.production.
+Prints SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY lines for .env.
 GoTrue, PostgREST and Storage verify these HS256 tokens with the same secret; regenerate
 both keys whenever the secret changes.
 """

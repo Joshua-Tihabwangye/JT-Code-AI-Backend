@@ -1,8 +1,10 @@
 # Native local development (no Docker)
 
-Local development runs every service directly on the host. Docker is only used
-on the single-host production server (`docker-compose.prod.yml`) and in CI
-image builds.
+Local development runs every service directly on the host. To run the production
+topology in Docker on this machine instead, use `make docker-up`
+([LOCAL_DOCKER.md](LOCAL_DOCKER.md)). It uses its own `.env.docker` and never touches
+this stack's `.env`. Stop one stack before starting the other, because both use ports
+8000 and 54321.
 
 ## What runs where
 

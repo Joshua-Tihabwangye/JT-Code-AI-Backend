@@ -958,6 +958,61 @@ def _one_line(labels: list[str], values: list[Any], grain: str | None, percent: 
     return f"{leader} is highest at {shown}."
 
 
+def build_summary(visual, queries, results, ctx):
+    """Three bullets (≤ 12 words each) computed from the data: the total and its change from the
+    previous period, the leading category and its share, and the category that moved most."""
+    measure = queries["main"]["measures"][0]
+    label = measure_label(measure)
+    total = (results["main"].get("rows") or [[None]])[0][0]
+    percent = _is_pct(measure)
+    bullets: list[str] = []
+    line = f"{label}: {compact(total, percent)}"
+    trend = results.get("trend")
+    if trend and len(trend.get("rows") or []) >= 3:
+        # The last complete month against the one before (the newest month may be partial).
+        points = [row for row in trend["rows"] if row[0] is not None and row[1] is not None]
+        if len(points) >= 3 and points[-3][1]:
+            before, after = float(points[-3][1]), float(points[-2][1])
+            change = (after - before) / abs(before) if before else 0.0
+            word = "up" if change > 0.005 else "down" if change < -0.005 else "flat"
+            month = period_label(points[-2][0], "month")
+            line += (
+                f", {word} {abs(change) * 100:.0f}% in {month}" if word != "flat" else f", flat in {month}"
+            )
+    bullets.append(line + ".")
+    breakdown = results.get("breakdown")
+    if breakdown and breakdown.get("rows"):
+        rows = [
+            (row[0], float(row[1])) for row in breakdown["rows"] if row[0] is not None and row[1] is not None
+        ]
+        if rows:
+            leader, value = max(rows, key=lambda row: row[1])
+            whole = sum(v for _, v in rows)
+            share = f" ({value / whole:.0%} of total)" if whole > 0 and not percent and value >= 0 else ""
+            bullets.append(f"{leader} leads with {compact(value, percent)}{share}.")
+    movers = results.get("movers")
+    if movers and movers.get("rows"):
+        by_member: dict[Any, list[tuple[Any, float]]] = {}
+        for member, period, value in movers["rows"]:
+            if member is not None and period is not None and value is not None:
+                by_member.setdefault(member, []).append((period, float(value)))
+        changes = []
+        for member, series in by_member.items():
+            series.sort(key=lambda item: str(item[0]))
+            if len(series) >= 3 and series[-3][1]:
+                changes.append((member, (series[-2][1] - series[-3][1]) / abs(series[-3][1])))
+        if changes:
+            member, change = max(changes, key=lambda item: abs(item[1]))
+            sign = "+" if change >= 0 else "−"
+            bullets.append(f"Biggest mover: {member}, {sign}{abs(change) * 100:.0f}% month on month.")
+    bullets = [" ".join(bullet.split()[:12]) for bullet in bullets[:3]]
+    return {
+        "summary": {"bullets": bullets},
+        "data": _data(["Summary"], [[bullet] for bullet in bullets]),
+        "autoTitle": f"{label} summary",
+    }
+
+
 def build_pie(visual, queries, results, ctx):
     """donut, pie, funnel and treemap."""
     vtype = visual["type"]
@@ -1695,6 +1750,8 @@ def build(
         out = build_slicer(visual, queries, results, ctx)
     elif vtype == "chart":
         out = build_chart(visual, queries, results, ctx, geo["render"], geo.get("kinds") or {})
+    elif vtype == "summary":
+        out = build_summary(visual, queries, results, ctx)
     elif vtype == "python":
         out = build_python(visual, queries, results, ctx, geo.get("kinds") or {})
     else:

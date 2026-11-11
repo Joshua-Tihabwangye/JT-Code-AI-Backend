@@ -277,7 +277,7 @@ def _native_units():
 
 def test_local_development_runs_without_docker():
     assert not (ROOT / "docker-compose.yml").exists(), (
-        "local development is native; production uses docker-compose.prod.yml"
+        "local development is native; production uses compose.yaml"
     )
     makefile = (ROOT / "Makefile").read_text()
     assert "compose-up:" not in makefile and "compose-down:" not in makefile

@@ -708,6 +708,8 @@ REST_FRAMEWORK = {
         "visualize": env("THROTTLE_VISUALIZE", "900/hour"),
         # Dashboards redraw on every slicer change and click; results are cached, so allow more.
         "visualize_query": env("THROTTLE_VISUALIZE_QUERY", "3600/hour"),
+        # Public dashboard links and embeds, per link (anonymous viewers share one budget).
+        "visualize_share": env("THROTTLE_VISUALIZE_SHARE", "3600/hour"),
     },
 }
 SPECTACULAR_SETTINGS = {
@@ -795,7 +797,7 @@ SPECTACULAR_SETTINGS = {
     },
 }
 HEALTHCHECK_EXTERNAL_DEPENDENCIES = env_bool("HEALTHCHECK_EXTERNAL_DEPENDENCIES", False)
-# One server runs the app, Redis and Kafka on a private Docker network (docker-compose.prod.yml).
+# One server runs the app, Redis and Kafka on a private Docker network (compose.yaml).
 SINGLE_HOST_DEPLOYMENT = env_bool("SINGLE_HOST_DEPLOYMENT", False)
 
 SENTRY_DSN = env("SENTRY_DSN")

@@ -76,34 +76,106 @@ def build(dataset_id: str, profile: dict[str, Any], name: str = "Overview") -> d
             }
         )
 
-    # Row 0 — slicers.
+    main = measures[0] if measures else None
+    second = measures[1] if len(measures) > 1 else None
+    # A metric switcher (field parameter) over the main measures, bound to the ranking below.
+    switch = measures[:3] if len(measures) >= 2 else []
+    parameters = (
+        [
+            {
+                "id": "metric",
+                "name": "Metric",
+                "kind": "fields",
+                "role": "measure",
+                "options": [{"field": m, "agg": _agg(m)} for m in switch],
+                "default": 1 if len(switch) > 1 else 0,
+            }
+        ]
+        if switch
+        else []
+    )
+    # Row 0 — slicers (and the metric switcher at the right).
     slicers = ([date] if date else []) + [d for d in dims if cardinality.get(d, 0) <= 12 and d != geo][
         : 4 - (1 if date else 0)
     ]
+    slicer_width = 5 if parameters else 6
     for index, field in enumerate(slicers):
         style = "date_range" if field == date else "dropdown"
         add(
             f"slicer-{index}",
             "slicer",
-            (index * 6, 0, 6, 3),
+            (index * slicer_width, 0, slicer_width, 3),
             {"category": [{"field": field}]},
             format={"slicer": {"style": style}},
         )
-    # Row 3 — KPI cards.
-    kpis = measures[:6]
-    width = 24 // max(len(kpis), 1) if kpis else 4
-    for index, field in enumerate(kpis):
+    if parameters:
+        add(
+            "metric",
+            "parameter",
+            (20, 0, 4, 3),
+            {},
+            format={"parameter": {"id": "metric", "style": "dropdown"}},
+        )
+    # Row 3 — KPI cards: the main measures, margin % and versus target % when the columns exist.
+    calculations: list[dict[str, Any]] = []
+    profit = next((m for m in measures if "profit" in m.lower()), None)
+    revenue = next((m for m in measures if any(h in m.lower() for h in ("revenue", "sales", "amount"))), None)
+    cards: list[dict[str, Any]] = []
+    for field in measures:
         wells: dict[str, Any] = {"values": [{"field": field, "agg": _agg(field)}]}
         target = _target_for(field, numeric)
         if target:
             wells["target"] = [{"field": target, "agg": _agg(field)}]
+        cards.append(wells)
+    if profit and revenue and profit != revenue:
+        calculations.append(
+            {
+                "id": "calc-margin",
+                "name": "Profit margin",
+                "expression": f"DIVIDE(SUM([{profit}]), SUM([{revenue}]))",
+                "format": "percent",
+                "datasetId": dataset_id,
+            }
+        )
+        cards.insert(2, {"values": [{"field": "Profit margin", "calc": "calc-margin"}]})
+    target_of_main = _target_for(main, numeric) if main else None
+    if main and target_of_main:
+        calculations.append(
+            {
+                "id": "calc-vs-target",
+                "name": "Vs target",
+                "expression": f"DIVIDE(SUM([{main}]), SUM([{target_of_main}])) - 1",
+                "format": "percent",
+                "datasetId": dataset_id,
+            }
+        )
+        cards.insert(min(5, len(cards)), {"values": [{"field": "Vs target", "calc": "calc-vs-target"}]})
+    # Six cards: keep the calculations, then averages (scores) over further sums.
+    calc_cards = [c for c in cards if c["values"][0].get("calc")]
+    plain = [c for c in cards if not c["values"][0].get("calc")]
+
+    def named(card: dict[str, Any], hints: tuple[str, ...]) -> bool:
+        return any(hint in card["values"][0]["field"].lower() for hint in hints)
+
+    rest = plain[2:]
+    rates = sorted(
+        [c for c in rest if c["values"][0]["agg"] == "avg"],
+        key=lambda c: not named(c, ("satisfaction", "score", "rating", "rate")),
+    )
+    volumes = sorted(
+        [c for c in rest if c not in rates],
+        key=lambda c: not named(c, ("unit", "qty", "quantity", "order", "volume", "count")),
+    )
+    chosen = plain[:2] + calc_cards[:1] + volumes[:1] + rates[:1] + calc_cards[1:2]
+    chosen += [c for c in plain if c not in chosen]
+    kpis = chosen[:6]
+    width = 24 // max(len(kpis), 1) if kpis else 4
+    for index, wells in enumerate(kpis):
         if date:
-            wells["category"] = [{"field": date}]
+            wells = {**wells, "category": [{"field": date}]}
         add(f"kpi-{index}", "kpi", (index * width, 3, width, 5), wells, format={"kpi": {"grain": "month"}})
     if not kpis:
         add("kpi-0", "card", (0, 3, 6, 5), {"values": [{"field": "*"}]})
-    main = measures[0] if measures else None
-    second = measures[1] if len(measures) > 1 else None
     # Row 7 — trend and composition.
     if date and main:
         wells = {
@@ -140,7 +212,11 @@ def build(dataset_id: str, profile: dict[str, Any], name: str = "Overview") -> d
             (0, 18, 8, 12),
             {
                 "category": [{"field": ranking}],
-                "values": [{"field": rank_by, "agg": _agg(rank_by)}] if rank_by else [],
+                "values": [
+                    {"field": rank_by, "agg": _agg(rank_by), **({"param": "metric"} if parameters else {})}
+                ]
+                if rank_by
+                else [],
             },
             format={"topN": {"n": 10, "others": False}},
         )
@@ -156,6 +232,7 @@ def build(dataset_id: str, profile: dict[str, Any], name: str = "Overview") -> d
                 "columns": [{"field": columns}],
                 "values": [{"field": main}] if main else [],
             },
+            format={"conditional": {"rules": [{"kind": "scale", "min": "#eef2ff", "max": "#4f46e5"}]}},
         )
     if geo:
         add(
@@ -171,8 +248,45 @@ def build(dataset_id: str, profile: dict[str, Any], name: str = "Overview") -> d
             (16, 18, 8, 12),
             {"category": [{"field": medium[1]}], "values": [{"field": main}] if main else []},
         )
+    pages = [{"id": "page-1", "name": name, "visuals": visuals}]
+    # Page 2 — a drill-through detail table (right-click a member → Drill through ▸ Details).
+    detail_fields = [f for f in (ranking, geo, rows) if f][:3]
+    if detail_fields and main:
+        detail_values = [{"field": m, "agg": _agg(m)} for m in measures[:4]]
+        pages.append(
+            {
+                "id": "details",
+                "name": "Details",
+                "type": "drillthrough",
+                "drillthroughFields": list(dict.fromkeys(detail_fields)),
+                "visuals": [
+                    {
+                        "id": "detail-kpi",
+                        "type": "multi_card",
+                        "layout": {"x": 0, "y": 0, "w": 24, "h": 5, "z": 0},
+                        "data": {"datasetId": dataset_id, "wells": {"values": detail_values}, "filters": []},
+                    },
+                    {
+                        "id": "detail-table",
+                        "type": "table",
+                        "layout": {"x": 0, "y": 5, "w": 24, "h": 25, "z": 0},
+                        "data": {
+                            "datasetId": dataset_id,
+                            "wells": {
+                                "category": [{"field": d} for d in dims[:3]]
+                                + ([{"field": date, "grain": "month"}] if date else []),
+                                "values": detail_values,
+                            },
+                            "filters": [],
+                        },
+                    },
+                ],
+            }
+        )
     return {
         "theme": "executive",
         "mode": "system",
-        "pages": [{"id": "page-1", "name": name, "visuals": visuals}],
+        "calculations": calculations,
+        "parameters": parameters,
+        "pages": pages,
     }

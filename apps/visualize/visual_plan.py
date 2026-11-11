@@ -87,6 +87,8 @@ VISUAL_TYPES = (
     "navigator",
     # A frozen chart (e.g. a prediction pinned from Predict), drawn from its stored option.
     "snapshot",
+    # Three short bullets about a measure (total and change, leader, biggest mover).
+    "summary",
 )
 LOCAL_TYPES = frozenset({"text", "parameter", "button", "navigator", "snapshot"})
 SLICER_STYLES = ("dropdown", "list", "tiles", "between", "date_range", "relative")
@@ -494,6 +496,17 @@ def plan(
                 kinds,
                 today,
             )
+        return queries
+    if vtype == "summary":
+        measure = (values or [{"field": "*"}])[:1]
+        date_field = _name(wells["legend"][0]) if wells.get("legend") else _first_date(kinds)
+        queries["main"] = query([], measure)
+        if date_field and kinds.get(date_field) == "datetime":
+            queries["trend"] = query([{"field": date_field, "grain": "month"}], measure)
+        if category:
+            queries["breakdown"] = query(category[:1], measure)
+            if date_field and kinds.get(date_field) == "datetime":
+                queries["movers"] = query([*category[:1], {"field": date_field, "grain": "month"}], measure)
         return queries
     if vtype in {"card", "multi_card"}:
         queries["main"] = query([], values or [{"field": "*"}])

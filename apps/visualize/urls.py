@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from apps.visualize import dashboard_views, views
+from apps.visualize import ai_views, dashboard_views, share_views, views
 
 router = DefaultRouter()
 router.register(r"charts", views.SavedChartViewSet, basename="viz-chart")
@@ -46,5 +46,12 @@ urlpatterns = [
     path("workbook/", views.WorkbookView.as_view(), name="viz-workbook"),
     path("visuals/", dashboard_views.VisualsView.as_view(), name="viz-visuals"),
     path("assistant/", views.AssistantView.as_view(), name="viz-assistant"),
+    path("ai/page/", ai_views.AIPageView.as_view(), name="viz-ai-page"),
+    path("ai/ask/", ai_views.AIAskView.as_view(), name="viz-ai-ask"),
+    path("ai/format/", ai_views.AIFormatView.as_view(), name="viz-ai-format"),
+    path("ai/suggest/", ai_views.AISuggestView.as_view(), name="viz-ai-suggest"),
+    path("explain/", ai_views.ExplainView.as_view(), name="viz-explain"),
+    path("shared/<str:token>/", share_views.SharedDashboardView.as_view(), name="viz-shared"),
+    path("shared/<str:token>/visuals/", share_views.SharedVisualsView.as_view(), name="viz-shared-visuals"),
     path("", include(router.urls)),
 ]

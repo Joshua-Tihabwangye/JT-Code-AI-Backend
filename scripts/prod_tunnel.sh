@@ -5,11 +5,12 @@
 #   bash scripts/prod_tunnel.sh user@your-server close  # close the tunnel
 #
 # Every dashboard on the server listens on 127.0.0.1 only; this forwards the same ports
-# over SSH, so nothing is ever exposed to the internet. Stop the local development stack
-# first (make compose-down): it uses the same local ports.
+# over SSH, so nothing is ever exposed to the internet. 54322 is the database, for pgAdmin
+# (127.0.0.1:54322, user postgres). Stop the local Docker stack first (make docker-down):
+# it uses the same local ports.
 set -Eeuo pipefail
 
-readonly PORTS=(8000 3000 9090 8080 5540 54323)
+readonly PORTS=(8000 3000 9090 8080 5540 54322)
 server="${1:?usage: scripts/prod_tunnel.sh user@server [close]}"
 socket="${TMPDIR:-/tmp}/jt-code-tunnel-${server//[^A-Za-z0-9]/_}.sock"
 

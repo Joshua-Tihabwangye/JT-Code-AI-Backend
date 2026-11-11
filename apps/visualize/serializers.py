@@ -10,6 +10,7 @@ from apps.visualize import catalog, samples
 from apps.visualize.models import (
     Dashboard,
     DashboardMember,
+    DashboardShareLink,
     DashboardVersion,
     Measure,
     PersonalView,
@@ -406,6 +407,97 @@ class VisualsRequestSerializer(serializers.Serializer):
 class AutoDashboardSerializer(serializers.Serializer):
     datasetId = serializers.UUIDField()
     name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class TemplateDashboardSerializer(serializers.Serializer):
+    """A dashboard from a template: each role of the template mapped to a dataset column."""
+
+    templateId = serializers.CharField(max_length=40)
+    datasetId = serializers.UUIDField()
+    mapping = serializers.DictField(child=serializers.CharField(max_length=200, allow_blank=True))
+    name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class AIPageSerializer(serializers.Serializer):
+    datasetId = serializers.UUIDField()
+    prompt = serializers.CharField(max_length=1000)
+    dashboardId = serializers.UUIDField(required=False)
+
+
+class AIAskSerializer(serializers.Serializer):
+    datasetId = serializers.UUIDField()
+    question = serializers.CharField(max_length=500)
+    filters = serializers.ListField(child=serializers.JSONField(), required=False, max_length=80)
+    theme = serializers.JSONField(required=False)
+    mode = serializers.ChoiceField(choices=["light", "dark"], default="light")
+    today = serializers.DateField(required=False)
+    dashboardId = serializers.UUIDField(required=False)
+
+
+class AIFormatSerializer(serializers.Serializer):
+    prompt = serializers.CharField(max_length=500)
+    spec = serializers.JSONField()
+
+
+class AISuggestSerializer(serializers.Serializer):
+    datasetId = serializers.UUIDField()
+    visuals = serializers.ListField(child=serializers.JSONField(), required=False, max_length=100)
+    dashboardId = serializers.UUIDField(required=False)
+
+
+class ExplainSerializer(serializers.Serializer):
+    """Why a measure changed in a period (a clicked point) versus the period just before."""
+
+    datasetId = serializers.UUIDField()
+    measure = serializers.JSONField()
+    dateField = serializers.CharField(max_length=200)
+    period = serializers.ListField(child=serializers.CharField(max_length=40), min_length=2, max_length=2)
+    # The clicked point's date grain: the period before is then the previous calendar period.
+    grain = serializers.ChoiceField(choices=["year", "quarter", "month", "week", "day"], required=False)
+    filters = serializers.ListField(child=serializers.JSONField(), required=False, max_length=80)
+    today = serializers.DateField(required=False)
+    dashboardId = serializers.UUIDField(required=False)
+
+
+class ShareLinkSerializer(serializers.ModelSerializer):
+    createdBy = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    expiresAt = serializers.DateTimeField(source="expires_at", required=False, allow_null=True)
+    revokedAt = serializers.DateTimeField(source="revoked_at", read_only=True)
+    lastUsedAt = serializers.DateTimeField(source="last_used_at", read_only=True)
+
+    class Meta:
+        model = DashboardShareLink
+        fields = (
+            "id",
+            "kind",
+            "name",
+            "prefix",
+            "createdBy",
+            "createdAt",
+            "expiresAt",
+            "revokedAt",
+            "lastUsedAt",
+        )
+        read_only_fields = ("id", "prefix")
+
+    def get_createdBy(self, obj: DashboardShareLink) -> str:
+        return str(getattr(obj.created_by, "email", "") or "")
+
+
+class SharedVisualsSerializer(serializers.Serializer):
+    """Visuals of a shared dashboard, by id (the spec comes from the server, never the client)."""
+
+    visualIds = serializers.ListField(
+        child=serializers.CharField(max_length=80), required=False, max_length=60
+    )
+    # Or, with the viewer's state per visual: {id, filters (a click elsewhere), highlight, level (drill)}.
+    visuals = serializers.ListField(child=serializers.JSONField(), required=False, max_length=60)
+    filters = serializers.ListField(child=serializers.JSONField(), required=False, max_length=80)
+    # Parameter values by parameter id (a number for what-if, the option index for field parameters).
+    parameters = serializers.DictField(child=serializers.FloatField(), required=False)
+    mode = serializers.ChoiceField(choices=["light", "dark"], default="light")
+    today = serializers.DateField(required=False)
 
 
 class DashboardExportSerializer(serializers.Serializer):

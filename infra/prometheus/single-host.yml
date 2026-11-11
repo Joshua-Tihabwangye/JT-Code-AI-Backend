@@ -1,4 +1,4 @@
-# Prometheus for docker-compose.prod.yml (single server). /metrics on the API requires
+# Prometheus for compose.yaml (single server). /metrics on the API requires
 # METRICS_AUTH_TOKEN; the container writes it to an in-memory file read below.
 global:
   scrape_interval: 15s
