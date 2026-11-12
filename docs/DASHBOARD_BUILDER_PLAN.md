@@ -766,3 +766,97 @@ and keeps the SQL/pandas parity rule.
   - Gallery charts opened in Explore had no fields; they now get the dataset's best mapping.
   - Dashboard table styles positioned the transform preview off the page.
   - Assistant "Open in Studio" became "Open in Explore".
+
+### Phase 6 — done 2026-10-16
+
+- **New dashboard dialog:** Blank · Auto · Template · Ask AI, from the Dashboards home (the quick
+  Blank and Build buttons stay).
+- **Templates (`templates.py`):**
+  - Nine templates: sales, CRM, finance, HR, web, mobile, marketing, inventory and retail.
+  - Each lists the roles it needs (number, date, category); `guess()` suggests a column for
+    each from names and kinds, and the mapping wizard lets the user change them.
+  - `build()` lays out slicers, KPI cards (plain measures or calculations such as Margin %),
+    a main chart, a side chart and three bottom charts. KPI cards fill the 24-column row.
+  - Endpoints: `GET dashboards/templates/?datasetId=` and `POST dashboards/from-template/`.
+  - Every card shows an SVG layout preview in the template's colour, in light and dark.
+- **Auto-dashboard:**
+  - Six KPIs, including the Profit margin and Vs target calculations.
+  - A Metric field parameter that switches the ranking bar's measure.
+  - A matrix with a colour scale.
+  - A Details drill-through page.
+- **AI (`dashboard_ai.py`, `ai_views.py`):**
+  - Every model call is metered as `chat_messages`. The answer must be JSON, and each proposed
+    visual is checked against the dataset's columns and `dashboard_spec`; visuals that fail are
+    dropped.
+  - When the model is unavailable or unusable, free rules answer from the columns and values
+    the prompt names. The UI says which one answered and the credits used.
+  - **Create a page from a prompt** (`ai/page/`): previewed as a miniature layout before Apply
+    or Discard. It works from the New dashboard dialog and from the editor's AI menu, which
+    adds a page.
+  - **Suggest visuals** (`ai/suggest/`): rule-based and free; click one to add it.
+  - **Q&A** (`ai/ask/`): answers a question with one visual plus a sentence computed from the
+    rendered data; the answer can be pinned to any page.
+  - **Auto-format** (`ai/format/`): keywords (executive, midnight, dark, compact, aligned…) are
+    free; otherwise the model picks theme, mode and density. The changes are shown as a
+    before → after table before Apply.
+- **Smart summary visual (`summary`):**
+  - Up to three bullets of 12 words or fewer: the total and its month-on-month change, the
+    leader and its share, and the biggest mover.
+  - All numbers come from the query store.
+- **Explain this change (`explain/`, free):**
+  - From a period's right-click menu on a trend.
+  - Compares the period with the previous calendar month, quarter or year (or the same length
+    for other grains).
+  - Lists the three members (of each low-cardinality category) that moved the measure most.
+    Members that moved exactly like one already listed (a country of one region) are skipped,
+    and a share is shown only when it is between 0 and 100 %.
+- **Present mode:**
+  - Full screen; arrow keys or the bar change page; auto-play every 10 s; Esc leaves.
+  - Visual headers and the filters pane are hidden.
+- **Sharing:**
+  - **Workspace:** a "Everyone in my workspace" toggle (`isShared`, owner only).
+  - **Public links:** `DashboardShareLink` (migration 0005) stores only the token's SHA-256
+    and its first 8 characters. Links can have an expiry and are revoked with a timestamp.
+    Owners and editors manage them under `dashboards/<id>/share-links/`, and the token is
+    shown once.
+  - **Public endpoints:** `shared/<token>/` and `shared/<token>/visuals/` take no
+    authentication and use a per-link throttle (`THROTTLE_VISUALIZE_SHARE`).
+    - The server keeps the spec. The client asks for visuals by id, with its clicks
+      (filters, highlight) and a drill level inside each visual's own hierarchy.
+    - Filters may only use fields the dashboard uses, including inside `or` filters.
+    - The author's locked and hidden filters always apply. Hidden pages stay hidden.
+    - Personalization is off. Datasets are the owner's.
+    - Unknown, revoked and expired tokens all answer the same 404.
+  - **Frontend routes:** `/share/:token` and `/embed/:token` render the dashboard read-only,
+    with slicers, clicks and drill. The theme comes resolved in the response.
+  - **Maps:** the world map geometry (public-domain Natural Earth) is now public, so maps
+    draw for signed-out viewers.
+- **Accessibility and performance:**
+  - Tiles are focusable; arrow keys move between them in reading order, and Enter opens
+    focus mode.
+  - The sales template (15 visuals) redraws after a slicer change in about 1.3 s at
+    1366×768, without page scrolling.
+- **Dev helper:** `join_local_organization <email> --owner <email> [--create]` (DEBUG only;
+  with `--create` the password comes from `JOIN_PASSWORD`). It adds a viewer colleague for
+  local testing; e2e uses it.
+- **Tests:**
+  - `tests/test_visualize_ai_share.py`: templates, AI page/ask/format with model and fallback,
+    explain, summary, suggestions, and share-link security.
+  - Frontend unit tests for the shared request.
+  - Integration checks for templates, AI page, explain and a share link.
+  - e2e: template + timing + keyboard, Ask AI page, Q&A + pin, explain, present, a public link
+    signed out in light and dark (filtered, then revoked), and a viewer user who personalizes,
+    reloads and resets.
+- **Fixed during testing:**
+  - Calculated KPIs failed when visuals were sent unresolved; test helpers now resolve them
+    like the browser does.
+  - The interact e2e step assumed page 2 was the one it added (the auto-dashboard now has a
+    drill-through page).
+  - The AI page title kept trailing punctuation.
+  - A lone AI KPI card spanned the full row.
+  - Preview boxes overflowed the preview.
+- **Open:**
+  - Production edge headers must allow framing of `/embed/*`; the frontend sets none today.
+  - The last full e2e rerun after the final fixes stopped early on a Chrome "Target closed"
+    crash in an earlier step. The run before it passed every Phase 6 step. Billing still
+    fails as before (Stripe is not configured locally).

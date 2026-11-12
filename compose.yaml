@@ -126,6 +126,8 @@ services:
       GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+      # The recovery mail carries the 6-digit code the frontend's reset form asks for.
+      GOTRUE_MAILER_TEMPLATES_RECOVERY: http://supabase-gateway:8000/templates/recovery.html
       GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
     depends_on:
       supabase-db: {condition: service_healthy}
@@ -211,7 +213,9 @@ services:
     restart: unless-stopped
     logging: *logging
     ports: ["127.0.0.1:54321:8000"]
-    volumes: [./docker/supabase/nginx.conf:/etc/nginx/conf.d/default.conf:ro]
+    volumes:
+      - ./docker/supabase/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/native/supabase-templates:/etc/nginx/supabase-templates:ro
     depends_on:
       supabase-auth: {condition: service_healthy}
       supabase-rest: {condition: service_healthy}
