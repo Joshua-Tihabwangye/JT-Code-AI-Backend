@@ -433,6 +433,33 @@ def dataset_ids(spec: dict[str, Any]) -> set[str]:
     }
 
 
+def fields_used(spec: dict[str, Any]) -> set[str]:
+    """Every column the dashboard refers to: wells, filters, drill-through fields and relationship
+    keys. A shared (public) dashboard may only be filtered on these."""
+    found: set[str] = set()
+    for item in spec.get("filters") or []:
+        found.add(item["field"])
+    for link in spec.get("relationships") or []:
+        found.update(str(end.get("field")) for end in (link.get("from") or {}, link.get("to") or {}))
+    for page in spec.get("pages") or []:
+        found.update(page.get("drillthroughFields") or [])
+        found.update(item["field"] for item in page.get("filters") or [])
+        for visual in page.get("visuals") or []:
+            data = visual.get("data") or {}
+            for refs in (data.get("wells") or {}).values():
+                for ref in refs if isinstance(refs, list) else []:
+                    if isinstance(ref, dict) and isinstance(ref.get("field"), str):
+                        found.add(ref["field"])
+            found.update(item["field"] for item in data.get("filters") or [])
+            chart = (visual.get("format") or {}).get("chart") or {}
+            for value in (
+                (chart.get("fields") or {}).values() if isinstance(chart.get("fields"), dict) else []
+            ):
+                found.update(v for v in (value if isinstance(value, list) else [value]) if isinstance(v, str))
+    found.discard("*")
+    return found
+
+
 def clean_personal_state(raw: Any) -> dict[str, Any]:
     """A viewer's overrides: per-visual changes, slicer/filter state and display choices."""
     if not isinstance(raw, dict):

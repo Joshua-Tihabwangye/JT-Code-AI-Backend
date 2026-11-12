@@ -287,7 +287,7 @@ def _check_secret(problems: list[str], name: str) -> None:
 
 
 def _single_host() -> bool:
-    """App, Redis and Kafka share one server's private Docker network (docker-compose.prod.yml)."""
+    """App, Redis and Kafka share one server's private Docker network (compose.yaml)."""
     return _val("SINGLE_HOST_DEPLOYMENT", "false").lower() in {"1", "true", "yes", "on"}
 
 

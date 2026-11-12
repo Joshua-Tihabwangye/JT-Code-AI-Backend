@@ -1,0 +1,66 @@
+# Local full-Docker stack: the production topology of compose.yaml on this machine.
+#
+#   make docker-up      # = scripts/compose_up.sh with JT_CODE_STACK=local
+#
+# which runs:  docker compose -f compose.yaml -f compose.local.yaml --env-file .env.docker up
+#
+# Same images, same services and the same security posture as production: Redis passwords,
+# separate cache/broker Redis, Kafka SCRAM users with ACLs, self-hosted Supabase, the migrate
+# gate. Only what needs a public domain changes: the app runs the `development` settings profile
+# (plain http://localhost URLs; Stripe, Sentry and n8n optional), auth e-mail goes to Mailpit,
+# and the project is named jt-code-local so its volumes never mix with a production stack.
+# Every published port stays on 127.0.0.1.
+
+name: jt-code-local
+
+x-local-app-env: &local-app-env
+  DJANGO_SETTINGS_MODULE: config.settings.development
+  OTEL_ENVIRONMENT: local
+
+services:
+  migrate:
+    image: jt-code-api:local
+    env_file: !override [.env.docker]
+    environment: *local-app-env
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  api:
+    image: jt-code-api:local
+    env_file: !override [.env.docker]
+    environment: *local-app-env
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  worker:
+    image: jt-code-api:local
+    env_file: !override [.env.docker]
+    environment: *local-app-env
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  worker-documents:
+    image: jt-code-api-office:local
+    env_file: !override [.env.docker]
+    environment: *local-app-env
+    extra_hosts: ["host.docker.internal:host-gateway"]
+  beat:
+    image: jt-code-api:local
+    env_file: !override [.env.docker]
+    environment: *local-app-env
+  consumer:
+    image: jt-code-api:local
+    env_file: !override [.env.docker]
+    environment: *local-app-env
+
+  supabase-auth:
+    depends_on:
+      mailpit: {condition: service_healthy}
+
+  mailpit:
+    # Catches the sign-up, magic-link and recovery e-mails GoTrue sends; read them in the browser.
+    image: axllent/mailpit:v1.21.8
+    restart: unless-stopped
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports: ["127.0.0.1:8025:8025"]
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12

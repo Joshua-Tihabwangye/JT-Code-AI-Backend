@@ -30,13 +30,16 @@ class ExportError(ValueError):
     """The export request is invalid (bad images, nothing to export)."""
 
 
-def _resolve_ref(ref: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
-    """A well item with its field parameter (default option) and calculation filled in."""
+def _resolve_ref(
+    ref: dict[str, Any], spec: dict[str, Any], values: dict[str, float] | None = None
+) -> dict[str, Any]:
+    """A well item with its field parameter (chosen, else default option) and calculation filled in."""
     out = dict(ref)
     if out.get("param"):
         parameter = next((p for p in spec.get("parameters") or [] if p.get("id") == out["param"]), None)
         if parameter and parameter.get("kind") == "fields" and parameter.get("options"):
-            index = min(int(parameter.get("default") or 0), len(parameter["options"]) - 1)
+            chosen = (values or {}).get(parameter["id"], parameter.get("default") or 0)
+            index = max(0, min(round(chosen), len(parameter["options"]) - 1))
             option = parameter["options"][index]
             out = {**out, **option, "grain": option.get("grain") or out.get("grain")}
     if out.get("calc"):
@@ -52,18 +55,23 @@ def _resolve_ref(ref: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in out.items() if value is not None}
 
 
-def prepare_visual(visual: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
+def prepare_visual(
+    visual: dict[str, Any], spec: dict[str, Any], values: dict[str, float] | None = None
+) -> dict[str, Any]:
+    """The visual as a viewer first sees it; ``values`` are parameter values by parameter id."""
     wells = {
-        key: [_resolve_ref(ref, spec) for ref in refs]
+        key: [_resolve_ref(ref, spec, values) for ref in refs]
         for key, refs in ((visual.get("data") or {}).get("wells") or {}).items()
     }
     return {**visual, "data": {**visual.get("data", {}), "wells": wells}}
 
 
-def context_for(spec: dict[str, Any]) -> dict[str, Any]:
+def context_for(spec: dict[str, Any], values: dict[str, float] | None = None) -> dict[str, Any]:
     return {
         "parameters": {
-            p["name"]: p.get("default", 0) for p in spec.get("parameters") or [] if p.get("kind") == "whatif"
+            p["name"]: (values or {}).get(p["id"], p.get("default", 0))
+            for p in spec.get("parameters") or []
+            if p.get("kind") == "whatif"
         },
         "calculations": {c["name"]: c["expression"] for c in spec.get("calculations") or []},
         "relationships": spec.get("relationships") or [],

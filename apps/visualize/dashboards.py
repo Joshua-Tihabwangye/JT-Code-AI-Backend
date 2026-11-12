@@ -287,5 +287,48 @@ def _render_dataset(
             cache.set(visual_key, result, VISUAL_TTL)
 
 
+def run_queries(dataset: Dataset, queries: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Run clean queries (by name) on Postgres, else aggregate them with pandas in the engine."""
+    token = store.dataset_token(dataset)
+    keys = {name: visual_plan.query_key(token, query) for name, query in queries.items()}
+    results: dict[str, dict[str, Any]] = {}
+    for name, key in keys.items():
+        hit = cache.get("viz-q:" + key)
+        if hit is not None:
+            results[name] = hit
+    missing = {name: query for name, query in queries.items() if name not in results}
+    if not missing:
+        return results
+    try:
+        record = store.ensure_table(dataset)
+    except Exception:  # noqa: BLE001 - the engine below still answers
+        record = None
+    if record is not None:
+        for name, query in missing.items():
+            results[name] = store.run_query(record, query)
+            cache.set("viz-q:" + keys[name], results[name], QUERY_TTL)
+        return results
+    item = {
+        "visual": {"id": "q", "type": "text"},
+        "queries": missing,
+        "results": {},
+        "keys": {n: keys[n] for n in missing},
+    }
+    output = services.engine(
+        "viz_visuals",
+        dataset,
+        items=[item],
+        theme=themes.resolve(None, "light"),
+        categoryOrder={},
+        kinds=_kinds(dataset),
+    )
+    for name in missing:
+        value = (output.get("results") or {}).get(keys[name])
+        if value is not None:
+            results[name] = value
+            cache.set("viz-q:" + keys[name], value, QUERY_TTL)
+    return results
+
+
 def max_visuals() -> int:
     return int(getattr(settings, "VISUALIZE_MAX_BATCH_VISUALS", 60))

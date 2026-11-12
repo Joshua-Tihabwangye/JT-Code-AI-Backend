@@ -4,7 +4,10 @@ the starter auto-dashboard and the batched visuals endpoint."""
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import secrets
+import uuid
 from typing import Any
 
 from django.db import transaction
@@ -30,8 +33,16 @@ from apps.identity.authorization import (
     user_has_role,
 )
 from apps.identity.models import Role, UserOrganization
-from apps.visualize import autodash, dashboard_export, dashboard_spec, dashboards, services, themes
-from apps.visualize.models import Dashboard, DashboardMember, DashboardVersion, Measure, PersonalView, Theme
+from apps.visualize import autodash, dashboard_export, dashboard_spec, dashboards, services, templates, themes
+from apps.visualize.models import (
+    Dashboard,
+    DashboardMember,
+    DashboardShareLink,
+    DashboardVersion,
+    Measure,
+    PersonalView,
+    Theme,
+)
 from apps.visualize.serializers import (
     AutoDashboardSerializer,
     DashboardExportSerializer,
@@ -41,6 +52,8 @@ from apps.visualize.serializers import (
     DashboardVersionSerializer,
     MeasureSerializer,
     PersonalViewSerializer,
+    ShareLinkSerializer,
+    TemplateDashboardSerializer,
     ThemeSerializer,
     VisualsRequestSerializer,
 )
@@ -48,6 +61,11 @@ from apps.visualize.views import _download
 
 SNAPSHOT_EVERY = dt.timedelta(minutes=10)
 MAX_VERSIONS = 100
+MAX_SHARE_LINKS = 20
+
+
+def share_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 class VisualizeQueryThrottle(PerUserRateThrottle):
@@ -420,6 +438,99 @@ class DashboardViewSet(viewsets.ModelViewSet):
             dashboard, context={"roles": {str(dashboard.id): "owner"}, "request": request}
         ).data
         return Response(body, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        parameters=[OpenApiParameter("datasetId", OpenApiTypes.UUID, required=False)],
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    @action(detail=False, methods=["get"])
+    def templates(self, request: Request) -> Response:
+        """The template gallery; with ``datasetId``, each template's suggested column mapping."""
+        profile = None
+        dataset_id = request.query_params.get("datasetId")
+        if dataset_id:
+            dataset = self._dataset(request, dataset_id)
+            profile = services.ensure_profile(dataset)
+        return Response({"templates": [templates.describe(t, profile) for t in templates.TEMPLATES]})
+
+    @extend_schema(request=TemplateDashboardSerializer, responses={201: DashboardSerializer})
+    @action(detail=False, methods=["post"], url_path="from-template")
+    def from_template(self, request: Request) -> Response:
+        serializer = TemplateDashboardSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        organization = _organization(request)
+        require_organization_write_access(request.user, organization.id)
+        template = templates.BY_ID.get(data["templateId"])
+        if template is None:
+            raise NotFound("Template not found.")
+        dataset = self._dataset(request, str(data["datasetId"]))
+        profile = services.ensure_profile(dataset)
+        name = (data.get("name") or f"{dataset.name} · {template.name}")[:200]
+        try:
+            built = templates.build(template, str(dataset.id), data["mapping"], profile, name)
+        except templates.TemplateError as exc:
+            raise SpecInvalid(str(exc)) from exc
+        dashboard = Dashboard.objects.create(
+            organization=organization, owner=request.user, name=name, spec=_clean(built)
+        )
+        _snapshot(dashboard, request.user, f"Created from the {template.name} template")
+        body = DashboardSerializer(
+            dashboard, context={"roles": {str(dashboard.id): "owner"}, "request": request}
+        ).data
+        return Response(body, status=status.HTTP_201_CREATED)
+
+    def _dataset(self, request: Request, dataset_id: str) -> Dataset:
+        try:
+            uuid.UUID(str(dataset_id))
+        except ValueError as exc:
+            raise NotFound("Dataset not found.") from exc
+        dataset = datasets_analyzable_by(request.user, _organization(request)).filter(id=dataset_id).first()
+        if dataset is None:
+            raise NotFound("Dataset not found.")
+        return dataset
+
+    @extend_schema(request=ShareLinkSerializer, responses={200: ShareLinkSerializer(many=True)})
+    @action(detail=True, methods=["get", "post"], url_path="share-links")
+    def share_links(self, request: Request, id=None) -> Response:
+        """Read-only public links and embeds. Only owners and editors manage them; the token is
+        returned once, on creation."""
+        dashboard = self.get_object()
+        _require_edit(request, dashboard)
+        if request.method == "GET":
+            links = dashboard.share_links.select_related("created_by")
+            return Response(ShareLinkSerializer(links, many=True).data)
+        serializer = ShareLinkSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if dashboard.share_links.filter(revoked_at__isnull=True).count() >= MAX_SHARE_LINKS:
+            raise SpecInvalid(f"A dashboard can have at most {MAX_SHARE_LINKS} active links.")
+        expires = serializer.validated_data.get("expires_at")
+        if expires is not None and expires <= timezone.now():
+            raise SpecInvalid("Choose an expiry date in the future.")
+        token = secrets.token_urlsafe(32)
+        link = DashboardShareLink.objects.create(
+            dashboard=dashboard,
+            kind=serializer.validated_data.get("kind") or DashboardShareLink.Kind.LINK,
+            name=serializer.validated_data.get("name") or "",
+            token_hash=share_hash(token),
+            prefix=token[:8],
+            created_by=request.user,
+            expires_at=expires,
+        )
+        body = {**ShareLinkSerializer(link).data, "token": token}
+        return Response(body, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=None, responses={204: None})
+    @action(detail=True, methods=["delete"], url_path=r"share-links/(?P<link_id>[0-9a-f-]{36})")
+    def revoke_share_link(self, request: Request, id=None, link_id: str = "") -> Response:
+        dashboard = self.get_object()
+        _require_edit(request, dashboard)
+        updated = dashboard.share_links.filter(id=link_id, revoked_at__isnull=True).update(
+            revoked_at=timezone.now()
+        )
+        if not updated and not dashboard.share_links.filter(id=link_id).exists():
+            raise NotFound("Link not found.")
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ThemeViewSet(viewsets.ModelViewSet):

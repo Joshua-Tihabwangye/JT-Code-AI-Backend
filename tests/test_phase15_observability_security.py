@@ -640,6 +640,8 @@ PUBLIC_OPERATIONS = {
     ("GET", "/api/v1/health/live/"),
     ("GET", "/api/v1/health/ready/"),
     ("GET", "/api/v1/health/startup/"),
+    # Public-domain world geometry: shared dashboards draw maps for viewers who are not signed in.
+    ("GET", "/api/v1/visualize/maps/world/"),
 }
 
 

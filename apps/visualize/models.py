@@ -139,6 +139,34 @@ class PersonalView(models.Model):
         return self.name
 
 
+class DashboardShareLink(models.Model):
+    """A read-only public link (or embed) to a dashboard. Only the SHA-256 of the token is stored:
+    the token itself is shown once, when the link is created. Revoking or expiry ends access."""
+
+    class Kind(models.TextChoices):
+        LINK = "link", "Link"
+        EMBED = "embed", "Embed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dashboard = models.ForeignKey(Dashboard, on_delete=models.CASCADE, related_name="share_links")
+    kind = models.CharField(max_length=8, choices=Kind.choices, default=Kind.LINK)
+    name = models.CharField(max_length=120, blank=True)
+    token_hash = models.CharField(max_length=64, unique=True)
+    # The first characters of the token, so owners can tell links apart.
+    prefix = models.CharField(max_length=8)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.kind} {self.prefix}…"
+
+
 class Theme(models.Model):
     """A custom dashboard theme (palette, canvas and tile colours, fonts, KPI style), as JSON."""
 

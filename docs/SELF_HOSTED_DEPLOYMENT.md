@@ -1,8 +1,8 @@
 # Self-hosted production on one server
 
-`docker-compose.prod.yml` runs everything on a single host: the API, Celery workers and
-beat, the Kafka consumer, self-hosted Supabase (PostgreSQL, Auth, Storage, PostgREST and
-Studio), two Redis servers and one Kafka broker (Redpanda). n8n stays external (`N8N_BASE_URL`).
+`compose.yaml` runs everything on a single host: the API, Celery workers and
+beat, the Kafka consumer, self-hosted Supabase (PostgreSQL, Auth, Storage and PostgREST),
+two Redis servers and one Kafka broker (Redpanda). n8n stays external (`N8N_BASE_URL`).
 
 ## What "single host" means
 
@@ -35,13 +35,23 @@ replicas, a TLS database URL and JWKS-signed sessions again.
 
 ```bash
 git clone <repo> jt-code-backend && cd jt-code-backend
-cp .env.production.example .env.production && chmod 600 .env.production
-openssl rand -hex 32   # run once per password/secret and paste into .env.production
-# Supabase API keys are derived from SUPABASE_JWT_SECRET:
-python scripts/generate_supabase_keys.py "<SUPABASE_JWT_SECRET>"   # paste both lines in
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-docker compose -f docker-compose.prod.yml ps -a
+make prod-env          # .env.production (mode 600): every password and secret generated,
+                       # Supabase API keys derived from SUPABASE_JWT_SECRET
+$EDITOR .env.production   # domains, SMTP, Stripe, Sentry, Gemini, n8n API key
+make prod-check        # preflight: compose variables, Supabase keys, production validation
+make compose-up-prod   # runs the preflight again, then docker compose --env-file .env.production up -d --build
+make compose-ps-prod
 ```
+
+`make prod-env` only fills empty values and appends keys a newer template added; it never
+rotates an existing secret, because the database volume keeps the passwords it was first
+initialised with. Everything uses `.env.production`; `.env` is never read, so a developer
+machine's native `.env` cannot leak into production containers. By hand, every command is
+`docker compose --env-file .env.production ...`. `scripts/compose_env.py` needs only
+`python3` (standard library), so it runs on a fresh server before anything is installed.
+
+To run this same topology on a laptop (localhost, no domain), use the local Docker stack:
+[LOCAL_DOCKER.md](LOCAL_DOCKER.md).
 
 Start-up order: Supabase, Redis and Kafka become healthy, `kafka-setup` creates the Kafka
 users and ACLs, then `migrate` runs migrations, creates the private storage bucket and the
@@ -49,7 +59,7 @@ Kafka topics, and runs `verify_messaging --strict` and `verify_supabase`. If any
 and the app containers do not start:
 
 ```bash
-docker compose -f docker-compose.prod.yml logs migrate kafka-setup
+docker compose --env-file .env.production logs migrate kafka-setup
 ```
 
 ## HTTPS and firewall
@@ -86,7 +96,7 @@ The production stack includes the full monitoring chain, all on the server's loc
 | Prometheus | http://127.0.0.1:9090/targets | Every target should be **UP**: API (with the metrics token), workers, consumer, Redpanda, both Redis exporters |
 | Kafka (Redpanda Console) | http://127.0.0.1:8080 | Topics, messages, consumer groups and lag |
 | Redis (RedisInsight) | http://127.0.0.1:5540 | Add `redis-cache` and `redis-broker` (port 6379) with their passwords |
-| Database (Supabase Studio) | http://127.0.0.1:54323 | No login of its own; keep it on localhost only |
+| Database (pgAdmin on your computer) | `127.0.0.1:54322` | Register a server: host 127.0.0.1, port 54322, database and user `postgres`, password `SUPABASE_DB_PASSWORD` |
 | API readiness | http://127.0.0.1:8000/api/v1/health/ready/ | `{"status":"ok"}` when the database, Redis and broker are reachable |
 
 How the pieces connect: the API, workers and consumer expose Prometheus metrics; Prometheus
@@ -109,11 +119,11 @@ are kept in memory by Tempo and are lost on restart.
 From the server shell:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec kafka rpk cluster health
-docker compose -f docker-compose.prod.yml exec kafka rpk group describe jt-code.integration-webhooks \
+docker compose --env-file .env.production exec kafka rpk cluster health
+docker compose --env-file .env.production exec kafka rpk group describe jt-code.integration-webhooks \
   -X user=jt-admin -X pass="$KAFKA_ADMIN_PASSWORD" -X sasl.mechanism=SCRAM-SHA-256
-docker compose -f docker-compose.prod.yml exec redis-broker redis-cli info memory
-docker compose -f docker-compose.prod.yml exec consumer python -c \
+docker compose --env-file .env.production exec redis-broker redis-cli info memory
+docker compose --env-file .env.production exec consumer python -c \
   "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9808/metrics').read().decode())" | grep jt_kafka
 ```
 
@@ -121,7 +131,7 @@ docker compose -f docker-compose.prod.yml exec consumer python -c \
 
 ```bash
 git pull
-docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+docker compose --env-file .env.production up -d --build
 ```
 
 `migrate` runs again on every `up` (migrations, topics, verification) before the new
@@ -134,12 +144,12 @@ containers start.
 
   ```bash
   # crontab -e (on the server), 02:30 every night:
-  30 2 * * * cd /path/to/jt-code-backend && docker compose -f docker-compose.prod.yml exec -T supabase-db \
+  30 2 * * * cd /path/to/jt-code-backend && docker compose --env-file .env.production exec -T supabase-db \
     pg_dump -U postgres -Fc postgres > backups/jt-code-$(date +\%F).dump
   ```
 
   Restore into a fresh database with `pg_restore -U postgres -d postgres --clean <file>`
-  (`docker compose -f docker-compose.prod.yml exec -T supabase-db ...` with the dump on stdin).
+  (`docker compose --env-file .env.production exec -T supabase-db ...` with the dump on stdin).
   Test a restore regularly; an untested backup is not a backup.
 - **Uploaded files (required):** the `supabase-storage-data` volume holds every asset. Back it
   up the same way as the Kafka volume below (stop `supabase-storage` briefly, then `tar`).
@@ -148,11 +158,11 @@ containers start.
   events stay in the outbox. To snapshot them anyway, stop the service briefly:
 
   ```bash
-  docker compose -f docker-compose.prod.yml stop kafka
+  docker compose --env-file .env.production stop kafka
   docker run --rm -v jt-code-backend_kafka-data:/data -v "$PWD":/backup alpine \
     tar czf /backup/kafka-data-$(date +%F).tgz -C /data .
-  docker compose -f docker-compose.prod.yml start kafka
+  docker compose --env-file .env.production start kafka
   ```
 
 - **Secrets:** keep a copy of `.env.production` in a password manager. Rotating a Kafka
-  password: change it in `.env.production` and run `up -d` (`kafka-setup` updates the user).
+  password: change it in `.env.production` and run `make compose-up-prod` (`kafka-setup` updates the user).

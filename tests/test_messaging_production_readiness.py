@@ -340,7 +340,7 @@ def test_deploys_provision_topics_and_gate_on_messaging_checks():
     assert migrate.index("ensure_kafka_topics") < migrate.index("verify_messaging")
 
     # Production and the native local broker never auto-create topics; migrate provisions them.
-    production = (ROOT / "docker-compose.prod.yml").read_text()
+    production = (ROOT / "compose.yaml").read_text()
     assert "kafka-init" not in production
     assert "auto.create.topics.enable=false" in (ROOT / "infra/native/kafka.properties").read_text()
 
@@ -354,7 +354,7 @@ def test_terraform_creates_distinct_kafka_role_secrets():
         assert "kafka_role_credentials" in (ROOT / f"infra/terraform/envs/{env}/main.tf").read_text()
 
 
-# Single-server production (docker-compose.prod.yml) ------------------------------------------
+# Single-server production (compose.yaml) ------------------------------------------
 
 
 def _strict_problems(monkeypatch, env: dict[str, str]) -> list[str]:
@@ -371,13 +371,13 @@ def _strict_problems(monkeypatch, env: dict[str, str]) -> list[str]:
 
 
 def _single_host_env() -> dict[str, str]:
-    """``.env.production.example`` with dummy secrets, plus the values docker-compose.prod.yml injects."""
+    """``.env.production.example`` with dummy secrets, plus the values compose.yaml injects."""
     import re
 
     from config.settings.validation import _REQUIRED_STRICT
     from tests.test_phase17_infrastructure import _DUMMY
 
-    compose_text = (ROOT / "docker-compose.prod.yml").read_text()
+    compose_text = (ROOT / "compose.yaml").read_text()
     # Fill only what an operator must fill: values validation requires and values the compose
     # file refuses to start without (${VAR:?...}). Optional integrations stay empty, as in reality.
     required = {*_REQUIRED_STRICT, *re.findall(r"\$\{(\w+):\?", compose_text), "GEMINI_API_KEY"}
@@ -437,7 +437,7 @@ def test_without_single_host_mode_production_still_demands_tls_and_replication(m
 
 
 def test_production_compose_exposes_nothing_publicly_and_configures_each_role():
-    compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
     services = compose["services"]
     for name, service in services.items():
         for port in service.get("ports", []):
@@ -471,7 +471,7 @@ def test_verify_messaging_requires_broker_persistence_on_a_single_host(
 
 
 def test_compose_stacks_let_prometheus_and_health_checks_reach_the_api():
-    compose = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
     env = compose["x-app-env"]
     assert {"api", "127.0.0.1"} <= set(env["DJANGO_INTERNAL_HOSTS"].split(","))
     for profile in ("development", "staging", "production"):
@@ -502,7 +502,7 @@ def test_prometheus_scrapes_every_metrics_source_in_both_stacks():
 
 
 def test_production_monitoring_requires_sign_in_and_stays_on_localhost():
-    services = yaml.safe_load((ROOT / "docker-compose.prod.yml").read_text())["services"]
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
     grafana = services["grafana"]["environment"]
     assert grafana["GF_AUTH_ANONYMOUS_ENABLED"] == "false"
     assert grafana["GF_SECURITY_ADMIN_PASSWORD"].startswith("${GRAFANA_ADMIN_PASSWORD:?")
@@ -515,7 +515,7 @@ def test_production_monitoring_requires_sign_in_and_stays_on_localhost():
         "redis-exporter-broker",
     ):
         assert name in services
-    assert "/run/jt-code" in services["prometheus"]["tmpfs"]
+    assert any(m.split(":")[0] == "/run/jt-code" for m in services["prometheus"]["tmpfs"])
     for name in ("worker", "worker-documents"):
         assert services[name]["environment"]["CELERY_METRICS_PORT"] == "9808"
 
@@ -534,9 +534,10 @@ def test_monitoring_relaxations_stay_narrow(monkeypatch, override, expected):
 
 def test_launchers_open_the_dashboards_for_both_stacks():
     launcher = (ROOT / "scripts/compose_up.sh").read_text()
-    for url in ("http://127.0.0.1:3000/login", "http://127.0.0.1:9090/targets", "http://127.0.0.1:54323"):
+    for url in ("http://127.0.0.1:3000/login", "http://127.0.0.1:9090/targets", "http://127.0.0.1:5540"):
         assert url in launcher
-    assert "docker-compose.prod.yml" in launcher and "AUTO_OPEN_ONLY" in launcher
+    assert "127.0.0.1:54322" in launcher  # the database, for pgAdmin
+    assert "compose.yaml" in launcher and "AUTO_OPEN_ONLY" in launcher
     tunnel = (ROOT / "scripts/prod_tunnel.sh").read_text()
     assert "ExitOnForwardFailure=yes" in tunnel and "AUTO_OPEN_ONLY=1" in tunnel
     makefile = (ROOT / "Makefile").read_text()

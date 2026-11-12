@@ -1,4 +1,4 @@
-.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images compose-up-prod compose-down-prod prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images docker-env docker-check docker-up docker-down docker-reset docker-ps docker-logs docker-logins docker-grafana-reset prod-env prod-check compose-up-prod compose-down-prod compose-ps-prod compose-logs-prod prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -42,7 +42,18 @@ help:
 	@echo "  native-observability-up / -down  Prometheus, Grafana, Tempo, OTel (opt-in)"
 	@echo "Infrastructure (Phase 17):"
 	@echo "  images        Build the API, office images"
-	@echo "  compose-up-prod  Production stack (docker-compose.prod.yml + .env.production); opens dashboards"
+	@echo "Docker, local (compose.yaml + compose.local.yaml + .env.docker, localhost only):"
+	@echo "  docker-up     Whole stack in Docker; creates .env.docker on first run; opens dashboards"
+	@echo "  docker-ps / docker-logs [SERVICE=api] / docker-down"
+	@echo "  docker-check  Preflight .env.docker without starting anything"
+	@echo "  docker-logins Every local login: Grafana, pgAdmin database, Redis, Kafka"
+	@echo "  docker-grafana-reset  Set Grafana's admin password back to GRAFANA_ADMIN_PASSWORD"
+	@echo "  docker-reset  Stop and DELETE the local Docker volumes (database, broker, Kafka)"
+	@echo "Docker, production server (compose.yaml + .env.production):"
+	@echo "  prod-env      Create/extend .env.production with generated secrets (keeps existing ones)"
+	@echo "  prod-check    Preflight .env.production (same checks the app runs at start-up)"
+	@echo "  compose-up-prod  Preflight, then start the production stack; opens dashboards"
+	@echo "  compose-ps-prod / compose-logs-prod [SERVICE=api] / compose-down-prod"
 	@echo "  prod-tunnel SERVER=user@host  SSH tunnel to a remote server's dashboards; opens them"
 	@echo "  k8s-generate  Regenerate infra/k8s/base and components"
 	@echo "  k8s-render    Render the staging and production overlays"
@@ -214,11 +225,57 @@ images:
 	docker build --target runtime -t jt-code-api:local .
 	docker build --target office -t jt-code-api-office:local .
 
+PYTHON3 ?= python3
+
+docker-env:
+	@$(PYTHON3) scripts/compose_env.py init local
+
+docker-check:
+	@$(PYTHON3) scripts/compose_env.py check local
+
+docker-up:
+	@JT_CODE_STACK=local bash scripts/compose_up.sh
+
+docker-down:
+	@bash scripts/compose.sh local down
+
+docker-ps:
+	@bash scripts/compose.sh local ps -a
+
+docker-logs:
+	@bash scripts/compose.sh local logs -f --tail=200 $(SERVICE)
+
+docker-logins:
+	@bash scripts/compose_logins.sh local
+
+# Grafana applies GF_SECURITY_ADMIN_PASSWORD only when its volume is first created; this re-applies
+# the value from .env.docker to the existing database (password on stdin, never in argv).
+docker-grafana-reset:
+	@grep -m1 '^GRAFANA_ADMIN_PASSWORD=' .env.docker | cut -d= -f2- | \
+	  bash scripts/compose.sh local exec -T grafana grafana cli admin reset-admin-password --password-from-stdin
+
+docker-reset:
+	@printf 'This deletes the local Docker database, storage, broker and Kafka volumes. Type yes: '; \
+	read answer; [ "$$answer" = yes ] || { echo aborted; exit 1; }; \
+	bash scripts/compose.sh local down --volumes --remove-orphans
+
+prod-env:
+	@$(PYTHON3) scripts/compose_env.py init production
+
+prod-check:
+	@$(PYTHON3) scripts/compose_env.py check production
+
 compose-up-prod:
 	@JT_CODE_STACK=production bash scripts/compose_up.sh
 
 compose-down-prod:
-	docker compose -f docker-compose.prod.yml --env-file .env.production down
+	@bash scripts/compose.sh production down
+
+compose-ps-prod:
+	@bash scripts/compose.sh production ps -a
+
+compose-logs-prod:
+	@bash scripts/compose.sh production logs -f --tail=200 $(SERVICE)
 
 prod-tunnel:
 	@bash scripts/prod_tunnel.sh $(SERVER)

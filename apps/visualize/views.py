@@ -21,7 +21,7 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import APIException, NotFound, PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -473,14 +473,15 @@ class DatasetReplaceView(APIView):
 
 
 class WorldMapView(APIView):
-    """The world GeoJSON (Natural Earth, public domain) that map charts register with ECharts."""
+    """The world GeoJSON (Natural Earth, public domain) that map charts register with ECharts.
+    Public: shared dashboards and embeds draw maps for viewers who are not signed in."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     @extend_schema(responses={(200, "application/json"): OpenApiTypes.OBJECT})
     def get(self, request: Request) -> HttpResponse:
         response = HttpResponse(services._static("world.json"), content_type="application/json")
-        response["Cache-Control"] = "private, max-age=86400"
+        response["Cache-Control"] = "public, max-age=86400"
         return response
 
 

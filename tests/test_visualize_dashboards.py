@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import pytest
 
-from apps.visualize import store
+from apps.visualize import dashboard_export, store, visual_plan
 from apps.visualize.models import Dashboard, DashboardVersion
 from tests.test_visualize_api import _client, _member, _org, _sample
 
 BASE = "/api/v1/visualize"
+LOCAL = visual_plan.LOCAL_TYPES
 
 
 def _auto(api, dataset_id: str) -> dict:
@@ -19,10 +20,17 @@ def _auto(api, dataset_id: str) -> dict:
 
 
 def _visuals(api, dashboard: dict, filters=None, **extra) -> dict:
-    page = dashboard["spec"]["pages"][0]
+    # As the browser does: field parameters and calculations resolved, their context sent along.
+    spec = dashboard["spec"]
+    page = spec["pages"][0]
+    visuals = [dashboard_export.prepare_visual(v, spec) for v in page["visuals"]]
+    context = dashboard_export.context_for(spec)
+    calculations = [{"name": k, "expression": v} for k, v in context["calculations"].items()]
+    body = {"visuals": visuals, "filters": filters or [], "mode": "dark", "theme": "midnight"}
+    body |= {"parameters": context["parameters"], "calculations": calculations}
     response = api.post(
         f"{BASE}/visuals/",
-        {"visuals": page["visuals"], "filters": filters or [], "mode": "dark", "theme": "midnight", **extra},
+        {**body, **extra},
         format="json",
     )
     assert response.status_code == 200, response.content
@@ -51,7 +59,8 @@ def test_auto_dashboard_draws_every_visual_from_the_query_store_and_caches_it():
     assert kpi["kpi"]["display"] and kpi["kpi"]["delta"]["display"][0] in "▲▼■"
 
     again = _visuals(api, dashboard)
-    assert again["meta"]["cachedVisuals"] == len(visuals) and again["meta"]["engineRuns"] == 0
+    drawn = [v for v in visuals if v["type"] not in LOCAL]
+    assert again["meta"]["cachedVisuals"] == len(drawn) and again["meta"]["engineRuns"] == 0
 
     filtered = _visuals(api, dashboard, filters=[{"field": "region", "op": "in", "value": ["East"]}])
     total = next(v for v in first["visuals"] if v["id"] == "kpi-0")["kpi"]["value"]
@@ -142,7 +151,7 @@ def test_saving_uses_versions_and_snapshots():
     ).exists()
     listed = api.get(f"{BASE}/dashboards/").json()
     rows = listed["results"] if isinstance(listed, dict) else listed
-    assert rows[0]["pages"] == 1 and "spec" not in rows[0] and rows[0]["datasetIds"]
+    assert rows[0]["pages"] == 2 and "spec" not in rows[0] and rows[0]["datasetIds"]
 
 
 @pytest.mark.django_db
@@ -161,7 +170,7 @@ def test_sharing_viewers_personal_views_and_editors():
     assert viewer_api.patch(url, {"name": "Mine"}, format="json").status_code == 403
     # The viewer cannot open the dataset itself, but sees it inside the shared dashboard.
     blocked = _visuals(viewer_api, shared.json())
-    assert all(v["status"] == "error" for v in blocked["visuals"] if v["type"] != "text")
+    assert all(v["status"] == "error" for v in blocked["visuals"] if v["type"] not in LOCAL)
     allowed = _visuals(viewer_api, shared.json(), dashboardId=dashboard["id"])
     assert all(v["status"] == "ok" for v in allowed["visuals"])
     # Personalize without touching the author's version.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Create the Kafka SCRAM users and their ACLs. Idempotent: runs on every
-# `docker compose -f docker-compose.prod.yml up` once the broker is healthy.
+# `docker compose up` once the broker is healthy (from the repo root, using `.env`).
 #   jt-admin     superuser (bootstrap.yaml): creates and configures topics
 #   jt-producer  API/workers/beat: write + describe on <prefix>.*, idempotent writes
 #   jt-consumer  run_kafka_consumer: read + describe on <prefix>.*, read on its groups

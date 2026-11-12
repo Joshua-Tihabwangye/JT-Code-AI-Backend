@@ -274,7 +274,10 @@ clean infrastructure) is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
   - Production is a manually approved promotion of the same digests.
 - **Local stack:** native processes, no Docker (`make native-up`, see
   [docs/NATIVE_LOCAL_DEVELOPMENT.md](docs/NATIVE_LOCAL_DEVELOPMENT.md)).
-  `docker-compose.prod.yml` is only for the single-host production server.
+  To run everything in Docker on localhost instead: `make docker-up`
+  ([docs/LOCAL_DOCKER.md](docs/LOCAL_DOCKER.md)). The production server uses `compose.yaml`
+  with `.env.production` (`make prod-env`, `make compose-up-prod`; see
+  [docs/SELF_HOSTED_DEPLOYMENT.md](docs/SELF_HOSTED_DEPLOYMENT.md)).
 
 ## Architecture
 

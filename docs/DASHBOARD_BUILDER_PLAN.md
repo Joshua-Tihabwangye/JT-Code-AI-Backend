@@ -410,6 +410,60 @@ and keeps the SQL/pandas parity rule.
   - interactive HTML (ECharts options laid out like the page).
 - **Not in this phase:** PowerPoint (needs python-pptx), scheduled e-mails, column from examples.
 
+### 6.6 Phase 6 design (AI and presentation)
+
+- **Templates** (`templates.py`): 9 templates — Sales overview, CRM pipeline, Finance P&L, HR
+  analytics, Web analytics, Mobile app analytics, Marketing campaigns, Inventory and operations,
+  Retail.
+  - Each template is a list of *roles* (date, amount, category, target, …, required or optional)
+    plus visual blueprints that use them; blueprints whose optional roles are missing are
+    skipped.
+  - `guess(profile)` proposes a column for every role from kinds and names. The one-step mapping
+    wizard shows those guesses; the user confirms or changes them, then the API builds the spec
+    with the auto-dashboard layout.
+  - Cards preview each template's layout as small pictures, in light and dark.
+- **New dashboard dialog**: Blank · Auto-dashboard · Template · Ask AI.
+- **Auto-dashboard** additions:
+  - margin % and vs-target % as calculations when profit/revenue or target columns exist;
+  - a metric switcher (field parameter over the main measures) bound to the ranking;
+  - a colour scale on the matrix;
+  - a page 2 "Details" drill-through table.
+- **AI** (metered as `chat_messages`, only when the user asks). Every AI answer is a JSON spec
+  that is validated (`dashboard_spec`) and shown as a preview, with Apply / Discard. A free
+  rule-based answer is used whenever the model is unavailable or its JSON is unusable.
+  - *Create page*: the prompt becomes visual blueprints (type, fields, aggregation) and slicers,
+    laid out by the auto-dashboard rules.
+  - *Suggest visuals*: free, rule-based recommendations not already on the page, shown as
+    pictures; click to add.
+  - *Ask a question*: the model turns the question into one visual and its filters; the numbers
+    come from rendering it (Postgres/pandas), and the answer sentence is that visual's insight.
+    The visual can be pinned.
+  - *Summary visual* (`summary` type): 3 bullets of ≤ 12 words, computed in Python (total and
+    change versus the previous period, leader and its share, biggest mover). It follows slicers
+    and is free.
+  - *Explain this change* (`explain/`): for a period on a date chart, versus the period before,
+    the categories that contributed most (per low-cardinality dimension), from grouped queries.
+  - *Auto-format* ("make it executive / dark / compact"): keywords map to theme, mode, density,
+    grid alignment and consistent titles. The model is used only when no keyword matches, and
+    picks from the allowed options.
+- **Present mode**: full screen, no chrome, ←/→ between pages, optional auto-cycle (10/30/60 s),
+  Esc to leave.
+- **Share links and embeds** (`DashboardShareLink`):
+  - The token is random, stored only as a SHA-256 hash, can be revoked, and may expire.
+  - Public read-only routes `/share/<token>` and `/embed/<token>` serve the stored dashboard.
+  - Renders take only visual ids, filters and parameter values, never visual definitions.
+  - Filters may use only the fields the dashboard itself uses, so a link cannot probe other
+    columns.
+  - Anonymous requests have their own throttle. Links are off until the owner or an editor
+    creates one.
+- **Accessibility and performance**:
+  - tiles are focusable figures with labels and a visible focus ring;
+  - keyboard: Tab between tiles, Enter for focus mode, T for "show as table";
+  - charts mount when scrolled into view;
+  - the e2e checks that a 15-visual page draws in under 2 s and fits 1366×768.
+- **Final e2e (brief §18)**: create → auto-dashboard → click a bar filters a KPI → slicer → a
+  second user (viewer) personalizes a visual → reset → save → reload persists → export PDF.
+
 ## 7. Edge cases to guard
 
 - **Dataset changes.** A dataset replaced or edited after a dashboard was built can lose columns.
@@ -650,3 +704,159 @@ and keeps the SQL/pandas parity rule.
     read, e.g. matrix → table gave an error tile. `retype` now moves the fields.
   - Python chart options now inherit the theme, grid and tooltip defaults.
   - The theme dialog now sits above the editor's handles.
+
+### Phase 5 — done 2026-10-16
+
+- **Navigation:**
+  - One module bar: `Dataset ▾ | Dashboards · Data · Explore · Predict · Gallery · Reports | Ask
+    AI`.
+  - `/app/visualize` is the Dashboards home, with a "start here" row (samples, upload), filters
+    for mine/shared and a My visuals strip.
+  - The Overview and Studio pages are gone: `/studio` redirects to `/explore`, and chart
+    hand-offs (gallery, insights, assistant) open in Explore.
+- **Applied steps (`viz_steps.py`):**
+  - 26 validated step types run in order. They cover clean, rows, columns, text, numbers/dates,
+    group/pivot/unpivot, merge/append and a date table with fiscal year.
+  - Calculated columns use the safe expression language in row mode; conditions use the
+    dashboard filter operators.
+  - Preview stops after any step. Merge and append load other datasets the user may analyse (404
+    otherwise). Saving creates a new dataset; the original never changes.
+- **Data tab:**
+  - A compact toolbar: Dataset ▾, Add data ▾, Download ▾, Explore, Predict, Build dashboard →.
+  - Quality bars (valid/problem/empty) under every grid header.
+  - Quality chips that filter the grid, and one-click fixes that add steps.
+  - A Transform tab: searchable catalogue, Applied steps (select, disable, reorder, delete,
+    rename), live preview, save as a new dataset.
+  - Smaller profile cards with 12-bin histograms (new in the profile), a statistics panel, and
+    keep only / exclude / replace on top values.
+  - Insight cards with a headline (≤ 6 words), a number, a chart picture, Explore and Add to
+    dashboard; the sentence is behind ⓘ.
+- **Measures library:** `Measure` model (migration 0004) and `measures/` CRUD. Saving and adding
+  are done from the Build pane's Calculations section.
+- **Relationships:** `spec.relationships`, with suggestions from same-named columns. A filter on
+  one dataset's field reaches a related dataset as `key IN (matching keys)`, queried in Postgres
+  and cached; no matching keys gives an impossible condition, and more than 5,000 keys is skipped.
+- **Explore:**
+  - Dashboard visuals in a card grid (up to 12); the selected card is large and shows a one-line
+    insight (≤ 15 words, from Python).
+  - The editor's Build and Format panes, plus chart-type pictures.
+  - Live mini previews of the rule-based suggestions.
+  - A View data drawer: data behind the chart, raw rows and a plain query description.
+  - Pin to dashboard (existing page, or a new dashboard), Save to My visuals (new `visual:` saved
+    charts), PNG and CSV.
+- **Gallery:**
+  - Static SVG pictures for all 85 charts (about 30 shape templates).
+  - A short line and required-field chips per card; Use in Explore / Add to dashboard on hover.
+  - "Recommended for <dataset>" on top.
+- **Predict:** a left wizard (type → data and target → settings → run) and results without the raw
+  table, with "How this was calculated" folded. Pin to dashboard: the forecast pins live (a line
+  with a forecast line that follows slicers); other results pin as `snapshot` visuals.
+- **Snapshots:** the stored chart is sanitized on save (formatter markers kept, string formatters,
+  links and remote images dropped).
+- **Reports:**
+  - An export hub for any dashboard: Excel (summary, chart sheets with native charts, table
+    data, raw data), interactive HTML (ECharts inlined), JSON, and PDF/PNG.
+  - PDF/PNG pages are painted in the browser: the page is cloned with computed styles inlined
+    and chart canvases turned into images, then drawn via SVG `foreignObject`. weasyprint packs
+    the PDF through the existing data-only fetcher in `apps/core/pdf.py`.
+  - My visuals is listed below.
+- **Fixed during testing:**
+  - "Blank out N/A" failed on number columns, where pandas had already read N/A as blank. It is
+    now a no-op there.
+  - Gallery charts opened in Explore had no fields; they now get the dataset's best mapping.
+  - Dashboard table styles positioned the transform preview off the page.
+  - Assistant "Open in Studio" became "Open in Explore".
+
+### Phase 6 — done 2026-10-16
+
+- **New dashboard dialog:** Blank · Auto · Template · Ask AI, from the Dashboards home (the quick
+  Blank and Build buttons stay).
+- **Templates (`templates.py`):**
+  - Nine templates: sales, CRM, finance, HR, web, mobile, marketing, inventory and retail.
+  - Each lists the roles it needs (number, date, category); `guess()` suggests a column for
+    each from names and kinds, and the mapping wizard lets the user change them.
+  - `build()` lays out slicers, KPI cards (plain measures or calculations such as Margin %),
+    a main chart, a side chart and three bottom charts. KPI cards fill the 24-column row.
+  - Endpoints: `GET dashboards/templates/?datasetId=` and `POST dashboards/from-template/`.
+  - Every card shows an SVG layout preview in the template's colour, in light and dark.
+- **Auto-dashboard:**
+  - Six KPIs, including the Profit margin and Vs target calculations.
+  - A Metric field parameter that switches the ranking bar's measure.
+  - A matrix with a colour scale.
+  - A Details drill-through page.
+- **AI (`dashboard_ai.py`, `ai_views.py`):**
+  - Every model call is metered as `chat_messages`. The answer must be JSON, and each proposed
+    visual is checked against the dataset's columns and `dashboard_spec`; visuals that fail are
+    dropped.
+  - When the model is unavailable or unusable, free rules answer from the columns and values
+    the prompt names. The UI says which one answered and the credits used.
+  - **Create a page from a prompt** (`ai/page/`): previewed as a miniature layout before Apply
+    or Discard. It works from the New dashboard dialog and from the editor's AI menu, which
+    adds a page.
+  - **Suggest visuals** (`ai/suggest/`): rule-based and free; click one to add it.
+  - **Q&A** (`ai/ask/`): answers a question with one visual plus a sentence computed from the
+    rendered data; the answer can be pinned to any page.
+  - **Auto-format** (`ai/format/`): keywords (executive, midnight, dark, compact, aligned…) are
+    free; otherwise the model picks theme, mode and density. The changes are shown as a
+    before → after table before Apply.
+- **Smart summary visual (`summary`):**
+  - Up to three bullets of 12 words or fewer: the total and its month-on-month change, the
+    leader and its share, and the biggest mover.
+  - All numbers come from the query store.
+- **Explain this change (`explain/`, free):**
+  - From a period's right-click menu on a trend.
+  - Compares the period with the previous calendar month, quarter or year (or the same length
+    for other grains).
+  - Lists the three members (of each low-cardinality category) that moved the measure most.
+    Members that moved exactly like one already listed (a country of one region) are skipped,
+    and a share is shown only when it is between 0 and 100 %.
+- **Present mode:**
+  - Full screen; arrow keys or the bar change page; auto-play every 10 s; Esc leaves.
+  - Visual headers and the filters pane are hidden.
+- **Sharing:**
+  - **Workspace:** a "Everyone in my workspace" toggle (`isShared`, owner only).
+  - **Public links:** `DashboardShareLink` (migration 0005) stores only the token's SHA-256
+    and its first 8 characters. Links can have an expiry and are revoked with a timestamp.
+    Owners and editors manage them under `dashboards/<id>/share-links/`, and the token is
+    shown once.
+  - **Public endpoints:** `shared/<token>/` and `shared/<token>/visuals/` take no
+    authentication and use a per-link throttle (`THROTTLE_VISUALIZE_SHARE`).
+    - The server keeps the spec. The client asks for visuals by id, with its clicks
+      (filters, highlight) and a drill level inside each visual's own hierarchy.
+    - Filters may only use fields the dashboard uses, including inside `or` filters.
+    - The author's locked and hidden filters always apply. Hidden pages stay hidden.
+    - Personalization is off. Datasets are the owner's.
+    - Unknown, revoked and expired tokens all answer the same 404.
+  - **Frontend routes:** `/share/:token` and `/embed/:token` render the dashboard read-only,
+    with slicers, clicks and drill. The theme comes resolved in the response.
+  - **Maps:** the world map geometry (public-domain Natural Earth) is now public, so maps
+    draw for signed-out viewers.
+- **Accessibility and performance:**
+  - Tiles are focusable; arrow keys move between them in reading order, and Enter opens
+    focus mode.
+  - The sales template (15 visuals) redraws after a slicer change in about 1.3 s at
+    1366×768, without page scrolling.
+- **Dev helper:** `join_local_organization <email> --owner <email> [--create]` (DEBUG only;
+  with `--create` the password comes from `JOIN_PASSWORD`). It adds a viewer colleague for
+  local testing; e2e uses it.
+- **Tests:**
+  - `tests/test_visualize_ai_share.py`: templates, AI page/ask/format with model and fallback,
+    explain, summary, suggestions, and share-link security.
+  - Frontend unit tests for the shared request.
+  - Integration checks for templates, AI page, explain and a share link.
+  - e2e: template + timing + keyboard, Ask AI page, Q&A + pin, explain, present, a public link
+    signed out in light and dark (filtered, then revoked), and a viewer user who personalizes,
+    reloads and resets.
+- **Fixed during testing:**
+  - Calculated KPIs failed when visuals were sent unresolved; test helpers now resolve them
+    like the browser does.
+  - The interact e2e step assumed page 2 was the one it added (the auto-dashboard now has a
+    drill-through page).
+  - The AI page title kept trailing punctuation.
+  - A lone AI KPI card spanned the full row.
+  - Preview boxes overflowed the preview.
+- **Open:**
+  - Production edge headers must allow framing of `/embed/*`; the frontend sets none today.
+  - The last full e2e rerun after the final fixes stopped early on a Chrome "Target closed"
+    crash in an earlier step. The run before it passed every Phase 6 step. Billing still
+    fails as before (Stripe is not configured locally).
