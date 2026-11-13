@@ -45,6 +45,11 @@ def _strict_env() -> dict[str, str]:
         "N8N_SENTRY_RELAY_SECRET": "ci-n8n-sentry-relay-secret",
         "STRIPE_SECRET_KEY": "sk_live_ci9mY7Kq2Vx5Zp8Lr3",
         "STRIPE_WEBHOOK_SECRET": "whsec_ci9mY7Kq2Vx5Zp8Lr3",
+        "SMTP_HOST": "smtp.gmail.com",
+        "SMTP_PORT": "587",
+        "SMTP_USER": "alerts@example.com",
+        "SMTP_PASSWORD": "app-password-ci-1234",  # pragma: allowlist secret
+        "SMTP_FROM_EMAIL": "alerts@example.com",
         "SENTRY_DSN": "https://public@example.ingest.sentry.io/1",
         "SENTRY_ENVIRONMENT": "production",
         "AI_PROVIDER": "disabled",

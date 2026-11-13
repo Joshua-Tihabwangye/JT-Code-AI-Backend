@@ -1230,24 +1230,24 @@ class PredictionTask:
 
 INPUTS = Slot(
     "features",
-    "Input columns",
+    "Columns to learn from (optional)",
     "any",
     required=False,
     multiple=True,
-    help="Empty uses every other column; categories are one-hot encoded and dates split into parts.",
+    help="Leave empty to use every other column.",
 )
 
 PREDICTION_TASKS: tuple[PredictionTask, ...] = (
     PredictionTask(
         "forecast",
-        "Forecast a time series",
-        "Project a measure forward (sales, demand, revenue) with uncertainty bands.",
+        "Forecast future values",
+        "See where a number is heading (sales, demand, revenue) and the likely range around it.",
         (
-            Slot("date", "Date / time", "datetime"),
-            Slot("target", "Measure to forecast", "numeric"),
+            Slot("date", "Date column", "datetime"),
+            Slot("target", "Number to forecast", "numeric"),
             Slot(
                 "split_by",
-                "Forecast each (optional)",
+                "A separate forecast for each (optional)",
                 "dimension",
                 required=False,
                 help="e.g. one forecast per region",
@@ -1269,9 +1269,9 @@ PREDICTION_TASKS: tuple[PredictionTask, ...] = (
     ),
     PredictionTask(
         "trend",
-        "Trend & seasonality analysis",
-        "Growth rates, moving averages, seasonal patterns, change points and unusual periods.",
-        (Slot("date", "Date / time", "datetime"), Slot("target", "Measure", "numeric")),
+        "Spot trends and seasons",
+        "Is a number going up or down? Growth rates, repeating seasonal patterns and unusual periods.",
+        (Slot("date", "Date column", "datetime"), Slot("target", "Number to follow over time", "numeric")),
         (("robust", "Automatic (robust trend + anomaly detection)"),),
         (
             TIME_GRAIN,
@@ -1286,18 +1286,18 @@ PREDICTION_TASKS: tuple[PredictionTask, ...] = (
     ),
     PredictionTask(
         "drivers",
-        "Key drivers (what influences an outcome)",
-        "Find which factors and segments push an outcome up or down — churn, sales, satisfaction.",
-        (Slot("target", "Outcome to explain", "any"), INPUTS),
+        "Find what affects a result",
+        "Which columns and groups push a result up or down (churn, sales, satisfaction).",
+        (Slot("target", "Result to explain", "any"), INPUTS),
         (("segments", "Segment comparison + random forest importance"),),
         (Option("positive", "Outcome value to explain (blank = automatic)", "select", "", ()),),
         ("Top influencers with lift", "Feature importance", "Best and worst segments"),
     ),
     PredictionTask(
         "regression",
-        "Predict a number",
-        "Estimate a numeric outcome (price, demand, score) from other columns.",
-        (Slot("target", "Number to predict", "numeric"), INPUTS),
+        "Estimate a number",
+        "Estimate a number such as a price, demand or score from the other columns.",
+        (Slot("target", "Number to estimate", "numeric"), INPUTS),
         (
             ("auto", "Best of all (cross-validated)"),
             ("linear", "Linear regression"),
@@ -1318,9 +1318,10 @@ PREDICTION_TASKS: tuple[PredictionTask, ...] = (
     ),
     PredictionTask(
         "classification",
-        "Predict a category",
-        "Classify rows (churn, approval, segment) and judge the classifier.",
-        (Slot("target", "Category to predict", "any"), INPUTS),
+        "Predict a yes/no or a group",
+        "Predict which group each row belongs to, e.g. will a customer leave (yes/no) "
+        "or which plan they pick.",
+        (Slot("target", "Yes/no or group to predict", "any"), INPUTS),
         (
             ("auto", "Best of all (cross-validated)"),
             ("logistic", "Logistic regression"),
@@ -1340,8 +1341,8 @@ PREDICTION_TASKS: tuple[PredictionTask, ...] = (
     ),
     PredictionTask(
         "clustering",
-        "Find segments",
-        "Group similar rows (customers, products) without labels.",
+        "Group similar rows",
+        "Find natural groups in the data, such as types of customers or products, without labels.",
         (INPUTS,),
         (
             ("kmeans", "k-means"),
@@ -1353,8 +1354,8 @@ PREDICTION_TASKS: tuple[PredictionTask, ...] = (
     ),
     PredictionTask(
         "anomaly",
-        "Detect anomalies",
-        "Flag unusual rows (fraud, faults, data errors).",
+        "Find unusual values",
+        "Spot rows that do not fit the usual pattern: data errors, fraud or sudden spikes.",
         (INPUTS,),
         (
             ("isolation_forest", "Isolation forest"),
@@ -1384,6 +1385,13 @@ IMPORT_FORMATS: tuple[dict[str, str], ...] = (
     {"id": "json", "name": "JSON (array of records)", "extensions": ".json"},
     {"id": "jsonl", "name": "JSON Lines", "extensions": ".jsonl,.ndjson"},
     {"id": "xlsx", "name": "Excel workbook (first sheet)", "extensions": ".xlsx"},
+    {"id": "pdf", "name": "PDF (its tables; scanned pages are read by OCR)", "extensions": ".pdf"},
+    {"id": "docx", "name": "Word document (its tables)", "extensions": ".docx"},
+    {
+        "id": "image",
+        "name": "Picture of a table (read by OCR)",
+        "extensions": ".png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff",
+    },
 )
 EXPORT_FORMATS: tuple[dict[str, str], ...] = (
     {"id": "csv", "name": "CSV"},

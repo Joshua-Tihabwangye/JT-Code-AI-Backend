@@ -15,6 +15,7 @@ from typing import Any
 
 ISSUE_TYPES: dict[str, dict[str, str]] = {
     "duplicate_row": {"label": "Duplicate row", "color": "#8B5CF6", "severity": "warning"},
+    "near_duplicate_row": {"label": "Near-duplicate row", "color": "#A78BFA", "severity": "warning"},
     "duplicate_id": {"label": "Duplicate ID", "color": "#DB2777", "severity": "error"},
     "missing_id": {"label": "Missing ID", "color": "#E11D48", "severity": "error"},
     "id_gap": {"label": "Missing IDs in a sequence", "color": "#BE123C", "severity": "warning"},
@@ -22,6 +23,7 @@ ISSUE_TYPES: dict[str, dict[str, str]] = {
     "placeholder": {"label": "Placeholder value", "color": "#FB923C", "severity": "warning"},
     "type_mismatch": {"label": "Wrong type", "color": "#C026D3", "severity": "error"},
     "invalid_date": {"label": "Invalid or implausible date", "color": "#0D9488", "severity": "warning"},
+    "mixed_date_format": {"label": "Mixed date formats", "color": "#14B8A6", "severity": "warning"},
     "invalid_email": {"label": "Invalid email", "color": "#9333EA", "severity": "error"},
     "outlier": {"label": "Extreme outlier", "color": "#EF4444", "severity": "info"},
     "negative": {"label": "Unexpected negative", "color": "#EA580C", "severity": "warning"},
@@ -107,6 +109,21 @@ def scan(raw: Any) -> list[Finding]:
                 f"{int(duplicated.sum()):,} row(s) repeat an earlier row exactly.",
                 "Delete the repeated rows unless they are genuine repeat records.",
                 count=int(duplicated.sum()),
+            )
+        )
+
+    # Rows that differ only in capitals or spacing ("East " vs "east") are probably the same record.
+    normalized = stripped_frame.apply(lambda s: s.str.lower().str.replace(r"\s+", " ", regex=True))
+    near = (normalized.duplicated(keep="first").to_numpy()) & ~duplicated
+    if near.any():
+        findings.append(
+            Finding(
+                "near_duplicate_row",
+                None,
+                np.flatnonzero(near),
+                (f"{int(near.sum()):,} row(s) repeat an earlier row except for capital letters or spaces."),
+                "Make the spelling consistent (trim spaces, one capitalisation), then remove the repeats.",
+                count=int(near.sum()),
             )
         )
 
@@ -295,6 +312,7 @@ def scan(raw: Any) -> list[Finding]:
                         examples=[str(v) for v in stripped[bad][:5]],
                     )
                 )
+            findings.extend(_mixed_date_formats(column, stripped, present & ~bad))
         elif not is_id and present.any():
             if "email" in str(column).lower() or present_values.str.match(EMAIL.pattern).mean() >= 0.8:
                 invalid = present & ~stripped.str.match(EMAIL.pattern).to_numpy()
@@ -323,6 +341,40 @@ def scan(raw: Any) -> list[Finding]:
                 )
             )
     return findings
+
+
+def _date_shape(value: str) -> str:
+    """The written form of a date: digits → 9, letters → a, runs collapsed ("31/01/2025" → "9/9/9")."""
+    shape = re.sub(r"[A-Za-z]+", "a", re.sub(r"\d+", "9", value))
+    return re.sub(r"\s+", " ", shape)
+
+
+def _mixed_date_formats(column: str, stripped: Any, valid: Any) -> list[Finding]:
+    """Dates written in more than one way in one column (2025-01-31, 31/01/2025, Jan 31 2025)."""
+    import numpy as np
+
+    if valid.sum() < 5:
+        return []
+    shapes = stripped.where(valid).dropna().map(_date_shape)
+    counts = shapes.value_counts()
+    if len(counts) < 2 or counts.iloc[1:].sum() < max(1, 0.01 * len(shapes)):
+        return []
+    main = counts.index[0]
+    other = np.flatnonzero(valid & (stripped.map(_date_shape) != main).to_numpy())
+    examples = [str(stripped.iloc[i]) for i in other[:5]]
+    return [
+        Finding(
+            "mixed_date_format",
+            column,
+            other,
+            (
+                f"{column} writes dates in {len(counts)} different ways; "
+                f"{len(other):,} differ from the usual one."
+            ),
+            "Convert the column to dates so every value uses one format (for example 2025-01-31).",
+            examples=examples,
+        )
+    ]
 
 
 def _id_gaps(column: str, values: Any) -> list[Finding]:

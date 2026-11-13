@@ -19,6 +19,5 @@ KAFKA_SECURITY_PROTOCOL = env("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")  # noqa: F
 KAFKA_TOPIC_PREFIX = env("KAFKA_TOPIC_PREFIX", "jt-code.dev")  # noqa: F405
 N8N_BASE_URL = env("N8N_BASE_URL", "http://localhost:5678")  # noqa: F405
 N8N_CALLBACK_BASE_URL = env("N8N_CALLBACK_BASE_URL", "http://localhost:8000/api/v1")  # noqa: F405
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 validate_settings("development")

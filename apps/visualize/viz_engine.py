@@ -1007,6 +1007,37 @@ def _forecast_option(series, fit, ctx, date, target):
     return option
 
 
+def _date_range(
+    frame: Any, kinds: dict[str, str], date_range: Any, fields: dict[str, Any], ctx: dict[str, Any]
+) -> Any:
+    """Keeps the rows between two dates (the history the prediction learns from)."""
+    import pandas as pd
+
+    if not isinstance(date_range, dict) or not (date_range.get("from") or date_range.get("to")):
+        return frame
+    column = str(date_range.get("column") or fields.get("date") or "")
+    if column not in frame.columns or kinds.get(column) != "datetime":
+        raise AnalysisError("Choose a date column for the date range.")
+    values = pd.to_datetime(frame[column], errors="coerce", utc=True)
+    mask = values.notna()
+    try:
+        if date_range.get("from"):
+            mask &= values >= pd.Timestamp(str(date_range["from"]), tz="UTC")
+        if date_range.get("to"):
+            # The end date is included (whole day).
+            mask &= values < pd.Timestamp(str(date_range["to"]), tz="UTC") + pd.Timedelta(days=1)
+    except (ValueError, TypeError) as exc:
+        raise AnalysisError("The date range is not valid.") from exc
+    kept = frame[mask.to_numpy()]
+    if len(kept.index) < 3:
+        raise AnalysisError("Fewer than 3 rows fall inside the chosen dates; widen the date range.")
+    ctx["notes"].append(
+        f"Using {len(kept.index):,} of {len(frame.index):,} rows, "
+        f"{date_range.get('from') or 'start'} to {date_range.get('to') or 'end'}."
+    )
+    return kept
+
+
 def predict_forecast(frame, kinds, fields, options, ctx, model_name):
     import numpy as np
     import pandas as pd
@@ -1014,6 +1045,20 @@ def predict_forecast(frame, kinds, fields, options, ctx, model_name):
     date, target, split = fields["date"], fields["target"], fields.get("split_by")
     horizon = int(options.get("horizon", 12))
     series, grain, freq = _resample(frame, date, target, options)
+    until = ctx.get("forecast_until")
+    if until:
+        # "Forecast until <date>": as many periods as fit between the last period and that date.
+        try:
+            end = pd.Timestamp(str(until))
+            last = series.index[-1]
+            if getattr(last, "tzinfo", None) is not None and end.tzinfo is None:
+                end = end.tz_localize(last.tzinfo)
+            steps = len(pd.date_range(last, end, freq=freq)) - 1
+        except (ValueError, TypeError) as exc:
+            raise AnalysisError("The forecast end date is not a valid date.") from exc
+        if steps < 1:
+            raise AnalysisError("Choose a forecast end date after the last date in the data.")
+        horizon = min(steps, 365)
     if len(series) > 3000:
         series = series.iloc[-3000:]
         ctx["notes"].append("Using the latest 3,000 periods.")
@@ -1796,6 +1841,8 @@ def predict(
         raise AnalysisError("Unknown model for this task.")
     ctx = c.context(request.get("style") or {}, limits, kinds)
     frame = d.typed(frame, kinds)
+    frame = _date_range(frame, kinds, request.get("dateRange"), fields, ctx)
+    ctx["forecast_until"] = request.get("forecastUntil") or ""
     try:
         metrics, charts, table, result, summary, comparison, model_name = PREDICTORS[task.id](
             frame, kinds, fields, options, ctx, model_name
@@ -1827,8 +1874,11 @@ def predict(
         raise AnalysisError("The prediction result exceeds the configured artifact limit.")
     if len(json.dumps(charts, separators=(",", ":"), default=str)) > limits["max_spec_bytes"] * 2:
         raise AnalysisError("The prediction charts are too large; reduce the data.")
+    # How each number and chart was reached: formulas, steps and the model's method.
+    method = _load("jt_viz_explain", "viz_explain.py").attach(task.id, model_name, metrics, charts)
     names = d._model_names()
     return {
+        "method": method,
         "task": task.id,
         "model": model_name,
         "modelName": names.get(model_name, model_name),
@@ -2158,6 +2208,8 @@ def import_table(request: dict[str, Any], limits: dict[str, Any]) -> Any:
     if len(content) > limits["max_bytes"]:
         raise AnalysisError("The file exceeds the configured byte limit.")
     fmt = str(request.get("format") or "csv").lower()
+    if fmt in DOCUMENT_FORMATS:
+        return _normalize_columns(_document_frame(fmt, content), limits)
     try:
         if fmt == "xlsx":
             if not content.startswith(b"PK"):
@@ -2206,6 +2258,24 @@ def import_table(request: dict[str, Any], limits: dict[str, Any]) -> Any:
     except Exception as exc:  # noqa: BLE001 - malformed workbooks raise library-specific errors
         raise AnalysisError(f"The {fmt.upper()} file could not be read ({type(exc).__name__}).") from exc
     return _normalize_columns(frame, limits)
+
+
+# Tables read out of documents and pictures (viz_documents.py: pdfplumber, python-docx, RapidOCR).
+DOCUMENT_FORMATS = {"pdf", "docx", "image", "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"}
+
+
+def _document_frame(fmt: str, content: bytes) -> Any:
+    docs = _load("jt_viz_documents", "viz_documents.py")
+    try:
+        if fmt == "pdf":
+            rows = docs.pdf_rows(content)
+        elif fmt == "docx":
+            rows = docs.docx_rows(content)
+        else:
+            rows = docs.image_rows(content)
+        return docs.rows_to_frame(rows)
+    except docs.DocumentError as exc:
+        raise AnalysisError(str(exc)) from exc
 
 
 def _decode(content: bytes) -> str:

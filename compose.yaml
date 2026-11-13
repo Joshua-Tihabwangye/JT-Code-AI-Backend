@@ -116,18 +116,30 @@ services:
       GOTRUE_JWT_ISSUER: ${SUPABASE_PUBLIC_URL}/auth/v1
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: ${SUPABASE_MAILER_AUTOCONFIRM:-false}
-      GOTRUE_SMTP_ADMIN_EMAIL: ${SUPABASE_SMTP_ADMIN_EMAIL:?use make docker-up (local) or make compose-up-prod (server)}
-      GOTRUE_SMTP_HOST: ${SUPABASE_SMTP_HOST:?use make docker-up (local) or make compose-up-prod (server)}
-      GOTRUE_SMTP_PORT: ${SUPABASE_SMTP_PORT:-587}
-      GOTRUE_SMTP_USER: ${SUPABASE_SMTP_USER:-}
-      GOTRUE_SMTP_PASS: ${SUPABASE_SMTP_PASS:-}
-      GOTRUE_SMTP_SENDER_NAME: ${SUPABASE_SMTP_SENDER_NAME:-JT-Code}
+      # Sign-up confirmation and password-reset emails, over the same SMTP the API uses (SMTP_* in the
+      # env file; Gmail: smtp.gmail.com:587 with an App Password).
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM_EMAIL:?use make docker-up (local) or make compose-up-prod (server)}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:?use make docker-up (local) or make compose-up-prod (server)}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASSWORD:-}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_FROM_NAME:-JT-Code}
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
-      # The recovery mail carries the 6-digit code the frontend's reset form asks for.
+      # Branded emails (infra/native/supabase-templates, served by the gateway). The recovery mail carries
+      # the 6-digit code the frontend's reset form asks for; the others carry a confirmation link.
+      GOTRUE_MAILER_TEMPLATES_CONFIRMATION: http://supabase-gateway:8000/templates/confirmation.html
       GOTRUE_MAILER_TEMPLATES_RECOVERY: http://supabase-gateway:8000/templates/recovery.html
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: http://supabase-gateway:8000/templates/magic_link.html
+      GOTRUE_MAILER_TEMPLATES_EMAIL_CHANGE: http://supabase-gateway:8000/templates/email_change.html
+      GOTRUE_MAILER_TEMPLATES_INVITE: http://supabase-gateway:8000/templates/invite.html
+      GOTRUE_MAILER_SUBJECTS_CONFIRMATION: Confirm your JT-Code account
+      GOTRUE_MAILER_SUBJECTS_RECOVERY: Your JT-Code password reset code
+      GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your JT-Code sign-in link
+      GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE: Confirm your new JT-Code email
+      GOTRUE_MAILER_SUBJECTS_INVITE: You're invited to JT-Code
       GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
     depends_on:
       supabase-db: {condition: service_healthy}

@@ -444,6 +444,21 @@ def _check_billing(problems: list[str], *, strict: bool) -> None:
         problems.append("STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret (whsec_).")
 
 
+def _check_email(problems: list[str], *, strict: bool) -> None:
+    """SMTP for Django and Supabase Auth (sign-up confirmation and password-reset emails)."""
+    _check_int(problems, "SMTP_PORT")
+    security = _val("SMTP_SECURITY").lower()
+    if security not in {"", "starttls", "ssl", "none"}:
+        problems.append("SMTP_SECURITY must be starttls, ssl or none.")
+    if not strict:
+        return
+    for name in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM_EMAIL"):
+        if not _val(name):
+            problems.append(f"{name} is required in staging/production (auth emails are sent over SMTP).")
+    if security == "none" or (not security and _val("SMTP_PORT", "587") not in {"465", "587"}):
+        problems.append("SMTP must use starttls (port 587) or ssl (port 465) in staging/production.")
+
+
 def _check_observability(problems: list[str], *, strict: bool) -> None:
     tolerance = _val("WEBHOOK_REPLAY_TOLERANCE_SECONDS", "300")
     if tolerance.isdigit() and not 30 <= int(tolerance) <= 900:
@@ -534,6 +549,7 @@ def validate_environment(profile: str) -> list[str]:
     _check_agents(problems)
     _check_analytics(problems)
     _check_billing(problems, strict=strict)
+    _check_email(problems, strict=strict)
     _check_tools(problems, strict=strict)
     _check_observability(problems, strict=strict)
     _check_n8n(problems, strict=strict)

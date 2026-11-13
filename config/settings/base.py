@@ -470,6 +470,9 @@ ANALYTICS_STALLED_AFTER_MINUTES = int(env("ANALYTICS_STALLED_AFTER_MINUTES", "15
 ANALYTICS_SANDBOX_MEMORY_MB = int(env("ANALYTICS_SANDBOX_MEMORY_MB", "1536"))
 ANALYTICS_SANDBOX_CPU_SECONDS = int(env("ANALYTICS_SANDBOX_CPU_SECONDS", "240"))
 ANALYTICS_SANDBOX_TIMEOUT_SECONDS = int(env("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250"))
+# Fork each sandboxed engine run from a pre-loaded process (pandas, NumPy, ... imported once) instead
+# of starting a fresh interpreter: the same isolation per request, without seconds of imports.
+ANALYTICS_SANDBOX_ZYGOTE = env_bool("ANALYTICS_SANDBOX_ZYGOTE", True)
 # Data visualization tool (apps.visualize). Rendering runs in the analytics sandbox;
 # only the assistant calls a model, and only when a user sends a prompt.
 VISUALIZE_ASSISTANT_MODEL_ALIAS = env("VISUALIZE_ASSISTANT_MODEL_ALIAS", "")
@@ -589,6 +592,31 @@ TOOL_GITHUB_BRANCH_PREFIX = env("TOOL_GITHUB_BRANCH_PREFIX", "jt-code/")
 SLACK_API_BASE = env("SLACK_API_BASE", "https://slack.com/api")
 ENABLE_MCP = env_bool("ENABLE_MCP", True)
 MCP_TOOL_TIMEOUT_SECONDS = int(env("MCP_TOOL_TIMEOUT_SECONDS", "30"))
+
+# Outgoing email over SMTP. Gmail: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USER = the Gmail
+# address, SMTP_PASSWORD = a Google App Password. Supabase Auth sends the sign-up and password-reset
+# emails with the same SMTP_* values (compose passes them to GoTrue). Without SMTP_HOST, Django prints
+# mail to the console instead of sending it.
+SMTP_HOST = env("SMTP_HOST", "")
+SMTP_PORT = int(env("SMTP_PORT", "") or 587)
+# starttls (587), ssl (465) or none (a local catcher such as Mailpit); derived from the port when unset.
+SMTP_SECURITY = env("SMTP_SECURITY", "").lower() or {465: "ssl", 587: "starttls"}.get(SMTP_PORT, "none")
+SMTP_FROM_EMAIL = env("SMTP_FROM_EMAIL", "")
+SMTP_FROM_NAME = env("SMTP_FROM_NAME", "JT-Code")
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend"
+    if SMTP_HOST
+    else "django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_HOST = SMTP_HOST or "localhost"
+EMAIL_PORT = SMTP_PORT
+EMAIL_HOST_USER = env("SMTP_USER", "")
+EMAIL_HOST_PASSWORD = env("SMTP_PASSWORD", "")
+EMAIL_USE_TLS = SMTP_SECURITY == "starttls"
+EMAIL_USE_SSL = SMTP_SECURITY == "ssl"
+EMAIL_TIMEOUT = 20
+DEFAULT_FROM_EMAIL = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or EMAIL_HOST_USER or 'no-reply@localhost'}>"
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
 # Billing
 BILLING_CREDIT_VALUE_USD = env_float("BILLING_CREDIT_VALUE_USD", 0.01)

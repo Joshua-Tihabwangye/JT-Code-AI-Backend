@@ -273,6 +273,13 @@ INTEGRATION_DETECTORS: tuple[IntegrationSpec, ...] = (
         modules=("docx", "pypdf", "markdown"),
         purpose="Source extraction and rendering (apps.documents, apps.knowledge)",
     ),
+    IntegrationSpec(
+        key="table_extraction",
+        label="Table extraction (pdfplumber / pypdfium2 / RapidOCR)",
+        distributions=("pdfplumber", "rapidocr-onnxruntime"),
+        modules=("pdfplumber", "pypdfium2", "rapidocr_onnxruntime", "onnxruntime"),
+        purpose="Data Visualization import: tables from PDFs and OCR of pictures (sandboxed engine)",
+    ),
     # Retired by ADR-003. Any reference is a Phase 0 exit-criteria violation.
     IntegrationSpec(
         key="pinecone",
