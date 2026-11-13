@@ -14,6 +14,7 @@ import uuid
 from typing import Any
 
 from django.conf import settings
+from django.db import models
 from django.http import HttpResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -47,6 +48,7 @@ from apps.visualize.serializers import (
     DatasetEditSerializer,
     DatasetImportSerializer,
     OrganizeRequestSerializer,
+    PredictionPresetSerializer,
     PredictRequestSerializer,
     RenderRequestSerializer,
     SampleRequestSerializer,
@@ -67,6 +69,16 @@ IMPORT_EXTENSIONS = {
     ".jsonl": "jsonl",
     ".ndjson": "jsonl",
     ".xlsx": "xlsx",
+    # Tables read out of documents and pictures (OCR for images and scanned PDFs).
+    ".pdf": "pdf",
+    ".docx": "docx",
+    ".png": "png",
+    ".jpg": "jpg",
+    ".jpeg": "jpeg",
+    ".webp": "webp",
+    ".bmp": "bmp",
+    ".tif": "tif",
+    ".tiff": "tiff",
 }
 
 
@@ -210,7 +222,8 @@ def _import_upload(request: Request) -> tuple[bytes, dict[str, Any], str, str, s
     fmt = serializer.validated_data.get("format") or IMPORT_EXTENSIONS.get(extension)
     if fmt is None:
         raise VisualizationError(
-            "Unsupported file type. Use CSV, TSV, TXT, JSON, JSON Lines or Excel (.xlsx)."
+            "Unsupported file type. Use CSV, TSV, TXT, JSON, JSON Lines, Excel (.xlsx), PDF, Word (.docx) "
+            "or an image of a table (PNG, JPEG, WebP, BMP, TIFF)."
         )
     content = upload.read(settings.ANALYTICS_MAX_DATASET_BYTES + 1)
     output = _engine(
@@ -574,6 +587,12 @@ class PredictView(APIView):
                 model=data.get("model") or "",
                 options=data.get("options") or {},
                 style=data.get("style") or {},
+                dateRange={
+                    key: (value.isoformat() if hasattr(value, "isoformat") else value)
+                    for key, value in (data.get("dateRange") or {}).items()
+                    if value
+                },
+                forecastUntil=data["forecastUntil"].isoformat() if data.get("forecastUntil") else "",
             )
         result_csv = output.pop("result")
         result_id = services.remember_result(
@@ -963,3 +982,31 @@ def _chart_block(chart: SavedChart, note: str = "") -> dict[str, Any]:
         "stats": chart.stats,
         "note": note or chart.description,
     }
+
+
+class PredictionPresetViewSet(viewsets.ModelViewSet):
+    """The signed-in user's custom predictions (private to them, inside their organization)."""
+
+    permission_classes = [IsAuthenticated]
+    lookup_field = "id"
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    serializer_class = PredictionPresetSerializer
+
+    def get_queryset(self):
+        from apps.visualize.models import PredictionPreset
+
+        if getattr(self, "swagger_fake_view", False):
+            return PredictionPreset.objects.none()
+        organization = _organization(self.request)
+        queryset = PredictionPreset.objects.filter(organization=organization, owner=self.request.user)
+        dataset_id = self.request.query_params.get("datasetId")
+        if dataset_id:
+            queryset = queryset.filter(models.Q(dataset_id=dataset_id) | models.Q(dataset__isnull=True))
+        return queryset.order_by("-updated_at")
+
+    def perform_create(self, serializer: Any) -> None:
+        organization = _organization(self.request)
+        require_organization_write_access(self.request.user, organization.id)
+        dataset_id = serializer.validated_data.pop("dataset_id", None)
+        dataset = _dataset(self.request, dataset_id, analyze=False) if dataset_id else None
+        serializer.save(organization=organization, owner=self.request.user, dataset=dataset)

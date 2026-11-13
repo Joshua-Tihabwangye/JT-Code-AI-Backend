@@ -243,3 +243,42 @@ class DatasetTable(models.Model):
 
     def __str__(self) -> str:
         return self.table_name
+
+
+class PredictionPreset(models.Model):
+    """A custom prediction a user defined for their data: what to predict, from which columns, how.
+
+    Shown with the built-in prediction types on the Predict page; private to its owner.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        "identity.Organization", on_delete=models.CASCADE, related_name="prediction_presets"
+    )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="prediction_presets"
+    )
+    dataset = models.ForeignKey(
+        "analytics.Dataset",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="prediction_presets",
+    )
+    name = models.CharField(max_length=120)
+    description = models.CharField(max_length=500, blank=True)
+    task = models.CharField(max_length=40)
+    model = models.CharField(max_length=40, blank=True)
+    fields = models.JSONField(default=dict, blank=True)
+    options = models.JSONField(default=dict, blank=True)
+    date_range = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("organization", "owner", "-updated_at"), name="visualize_preset_owner_idx")
+        ]
+
+    def __str__(self) -> str:
+        return self.name

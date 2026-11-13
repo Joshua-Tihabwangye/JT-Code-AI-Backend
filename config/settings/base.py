@@ -470,6 +470,9 @@ ANALYTICS_STALLED_AFTER_MINUTES = int(env("ANALYTICS_STALLED_AFTER_MINUTES", "15
 ANALYTICS_SANDBOX_MEMORY_MB = int(env("ANALYTICS_SANDBOX_MEMORY_MB", "1536"))
 ANALYTICS_SANDBOX_CPU_SECONDS = int(env("ANALYTICS_SANDBOX_CPU_SECONDS", "240"))
 ANALYTICS_SANDBOX_TIMEOUT_SECONDS = int(env("ANALYTICS_SANDBOX_TIMEOUT_SECONDS", "250"))
+# Fork each sandboxed engine run from a pre-loaded process (pandas, NumPy, ... imported once) instead
+# of starting a fresh interpreter: the same isolation per request, without seconds of imports.
+ANALYTICS_SANDBOX_ZYGOTE = env_bool("ANALYTICS_SANDBOX_ZYGOTE", True)
 # Data visualization tool (apps.visualize). Rendering runs in the analytics sandbox;
 # only the assistant calls a model, and only when a user sends a prompt.
 VISUALIZE_ASSISTANT_MODEL_ALIAS = env("VISUALIZE_ASSISTANT_MODEL_ALIAS", "")

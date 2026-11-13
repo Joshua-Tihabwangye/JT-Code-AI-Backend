@@ -554,6 +554,18 @@
       "path": "/visualize/predict/results/{param}/"
     },
     {
+      "method": "GET",
+      "path": "/visualize/prediction-presets/"
+    },
+    {
+      "method": "POST",
+      "path": "/visualize/prediction-presets/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/visualize/prediction-presets/{param}/"
+    },
+    {
       "method": "POST",
       "path": "/visualize/render/"
     },

@@ -111,7 +111,9 @@ TEMPLATES = {
         "title": "Your JT-Code sign-in link",
         "preheader": "Sign in to JT-Code with one click.",
         "heading": "Sign in to JT-Code",
-        "body": para("Use the button below to sign in as <strong>{{ .Email }}</strong>. The link works once and expires shortly.")
+        "body": para(
+            "Use the button below to sign in as <strong>{{ .Email }}</strong>. The link works once and expires shortly."
+        )
         + button("Sign in")
         + fallback(),
         "footer": "If you did not try to sign in, ignore this email.",

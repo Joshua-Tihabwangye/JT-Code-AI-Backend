@@ -431,10 +431,12 @@ def test_streamlit_and_plotly_are_gone_from_the_stack():
     assert (root / "apps/visualize/static/vendor/echarts.min.js").exists()
 
 
-def test_sandbox_child_gets_no_credentials_and_isolated_interpreter(monkeypatch):
+def test_sandbox_child_gets_no_credentials_and_isolated_interpreter(monkeypatch, settings):
     import subprocess
 
     from apps.analytics import sandbox
+
+    settings.ANALYTICS_SANDBOX_ZYGOTE = False  # the fresh-interpreter path; the zygote has its own tests
 
     captured = {}
 
@@ -463,6 +465,7 @@ def test_sandbox_enforces_memory_and_time_limits(settings, monkeypatch):
 
     from apps.analytics import sandbox
 
+    settings.ANALYTICS_SANDBOX_ZYGOTE = False  # the fresh-interpreter path; the zygote has its own tests
     settings.ANALYTICS_SANDBOX_MEMORY_MB = 48
     with pytest.raises((AnalysisError, sandbox.SandboxError)):
         sandbox.run_engine("profile", b"x\n1\n", mime_type="text/csv")

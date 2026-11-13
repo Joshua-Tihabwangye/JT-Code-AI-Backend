@@ -79,6 +79,23 @@ class WorkbookRequestSerializer(serializers.Serializer):
         return value
 
 
+class PredictDateRangeSerializer(serializers.Serializer):
+    column = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    to = serializers.DateField(required=False, allow_null=True)
+
+    def get_fields(self) -> dict[str, Any]:
+        # "from" is a Python keyword, so the field is added under its JSON name here.
+        fields = super().get_fields()
+        fields["from"] = serializers.DateField(required=False, allow_null=True)
+        return fields
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        start, end = attrs.get("from"), attrs.get("to")
+        if start and end and start > end:
+            raise serializers.ValidationError("The start date must be before the end date.")
+        return attrs
+
+
 class PredictRequestSerializer(serializers.Serializer):
     datasetId = serializers.UUIDField()
     task = serializers.ChoiceField(choices=[task.id for task in catalog.PREDICTION_TASKS])
@@ -86,6 +103,10 @@ class PredictRequestSerializer(serializers.Serializer):
     fields = serializers.JSONField(required=False)
     options = serializers.JSONField(required=False)
     style = StyleSerializer(required=False)
+    # The history to learn from (a date column, inclusive from/to) and, for forecasts, the date to
+    # forecast until (it sets the number of periods ahead).
+    dateRange = PredictDateRangeSerializer(required=False)
+    forecastUntil = serializers.DateField(required=False, allow_null=True)
 
     def validate_fields(self, value: Any) -> dict[str, Any]:
         return _bounded_object(value, "fields")
@@ -506,3 +527,47 @@ class DashboardExportSerializer(serializers.Serializer):
     format = serializers.ChoiceField(choices=["xlsx", "html", "pdf", "json"])
     mode = serializers.ChoiceField(choices=["light", "dark"], default="light")
     images = serializers.ListField(child=serializers.JSONField(), required=False, max_length=20)
+
+
+class PredictionPresetSerializer(serializers.ModelSerializer):
+    """A user's custom prediction (camelCase like the rest of the visualization API)."""
+
+    datasetId = serializers.UUIDField(source="dataset_id", required=False, allow_null=True)
+    dateRange = serializers.JSONField(source="date_range", required=False)
+    createdAt = serializers.DateTimeField(source="created_at", read_only=True)
+    updatedAt = serializers.DateTimeField(source="updated_at", read_only=True)
+    task = serializers.ChoiceField(choices=[task.id for task in catalog.PREDICTION_TASKS])
+
+    class Meta:
+        from apps.visualize.models import PredictionPreset
+
+        model = PredictionPreset
+        fields = (
+            "id",
+            "name",
+            "description",
+            "task",
+            "model",
+            "fields",
+            "options",
+            "dateRange",
+            "datasetId",
+            "createdAt",
+            "updatedAt",
+        )
+        read_only_fields = ("id",)
+
+    def validate_fields(self, value: Any) -> dict[str, Any]:
+        return _bounded_object(value, "fields")
+
+    def validate_options(self, value: Any) -> dict[str, Any]:
+        return _bounded_object(value, "options")
+
+    def validate_dateRange(self, value: Any) -> dict[str, Any]:  # noqa: N802 - DRF's validate_<field>
+        return _bounded_object(value or {}, "dateRange")
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        task = catalog.PREDICTION_TASKS_BY_ID[attrs.get("task") or getattr(self.instance, "task", "")]
+        if attrs.get("model") and attrs["model"] not in dict(task.models):
+            raise serializers.ValidationError({"model": "Unknown model for this prediction type."})
+        return attrs

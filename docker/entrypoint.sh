@@ -21,6 +21,8 @@ prepare_metrics_dir
 
 case "$role" in
   api)
+    # Start the pre-loaded analytics fork server with each API process (apps/analytics/zygote.py).
+    export JT_PREWARM_ENGINE=1
     exec uvicorn config.asgi:application \
       --host 0.0.0.0 --port "${PORT:-8000}" \
       --workers "${WEB_CONCURRENCY:-2}" \

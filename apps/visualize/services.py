@@ -11,6 +11,7 @@ import base64
 import hashlib
 import html
 import json
+import threading
 import uuid
 from functools import cache
 from pathlib import Path
@@ -28,13 +29,64 @@ VIZ_ENGINE = Path(__file__).with_name("viz_engine.py")
 _RESULT_PREFIX = "viz-result"
 
 
+# Pure functions of (data, request): their answers are reused from the cache for identical requests.
+_CACHEABLE_OPERATIONS = frozenset(
+    {"viz_render", "viz_table", "viz_insights", "viz_preview", "viz_quality", "viz_predict"}
+)
+_ENGINE_CACHE_SECONDS = 30 * 60
+_ENGINE_CACHE_MAX_BYTES = 2 * 1024 * 1024
+_DATA_CACHE_MAX_BYTES = 96 * 1024 * 1024
+_data_cache: dict[str, bytes] = {}  # data digest -> bytes, most recent last
+_data_cache_lock = threading.Lock()
+
+
+def _data_digest(dataset: Dataset | None, content: bytes) -> str:
+    """Identity of the data an engine call reads, without downloading it when the store knows it."""
+    if dataset is not None:
+        asset = dataset.asset if dataset.asset_id else None
+        if asset is not None and asset.checksum_sha256:
+            return f"asset:{asset.checksum_sha256}"
+        return "inline:" + hashlib.sha256(str(dataset.inline_data or "").encode("utf-8")).hexdigest()
+    return "bytes:" + hashlib.sha256(content).hexdigest()
+
+
+def _dataset_content(dataset: Dataset, digest: str) -> bytes:
+    """Dataset bytes, kept in a small per-process cache so they are not re-downloaded per request."""
+    with _data_cache_lock:
+        cached = _data_cache.pop(digest, None)
+        if cached is not None:
+            _data_cache[digest] = cached
+            return cached
+    content = dataset_bytes(dataset)
+    if len(content) <= _DATA_CACHE_MAX_BYTES // 4:
+        with _data_cache_lock:
+            _data_cache[digest] = content
+            while sum(len(item) for item in _data_cache.values()) > _DATA_CACHE_MAX_BYTES:
+                _data_cache.pop(next(iter(_data_cache)))
+    return content
+
+
 def engine(
     operation: str, dataset: Dataset | None = None, content: bytes = b"", **request: Any
 ) -> dict[str, Any]:
     if dataset is not None:
-        content = dataset_bytes(dataset)
         request.setdefault("mime_type", dataset.mime_type)
-    return run_engine(operation, content, script=VIZ_ENGINE, **request)
+    digest = _data_digest(dataset, content)
+    key = None
+    if operation in _CACHEABLE_OPERATIONS:
+        fingerprint = json.dumps(
+            {"op": operation, "data": digest, "request": request}, sort_keys=True, default=str
+        )
+        key = "viz-engine:" + hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+        hit = caches["default"].get(key)
+        if hit is not None:
+            return dict(hit)
+    if dataset is not None:
+        content = _dataset_content(dataset, digest)
+    response = run_engine(operation, content, script=VIZ_ENGINE, **request)
+    if key is not None and len(json.dumps(response, default=str)) <= _ENGINE_CACHE_MAX_BYTES:
+        caches["default"].set(key, response, _ENGINE_CACHE_SECONDS)
+    return response
 
 
 def ensure_profile(dataset: Dataset) -> dict[str, Any]:

@@ -474,3 +474,112 @@ def test_world_map_is_served_for_map_charts():
     assert response.status_code == 200
     world = json.loads(response.content)
     assert world["type"] == "FeatureCollection" and len(world["features"]) > 150
+
+
+@pytest.mark.django_db
+def test_quality_scan_finds_near_duplicates_and_mixed_date_formats():
+    org, owner = _org("quality-more")
+    api = _client(owner, org)
+    csv = (
+        "customer,region,signup\n"
+        "Ann,East,2025-01-02\n"
+        "ann ,east,2025-01-02\n"
+        "Bob,West,03/01/2025\n"
+        "Cy,North,2025-01-04\n"
+        "Dee,South,2025-01-05\n"
+        "Eve,West,2025-01-06\n"
+    )
+    dataset = api.post(
+        "/api/v1/analysis/datasets/", {"name": "Signups", "inline_data": csv}, format="json"
+    ).json()
+    report = api.get(f"/api/v1/visualize/datasets/{dataset['id']}/quality/").json()
+    issues = {issue["type"]: issue for issue in report["issues"]}
+    assert issues["near_duplicate_row"]["rows"] == [1]
+    assert issues["mixed_date_format"]["column"] == "signup"
+    assert issues["mixed_date_format"]["examples"] == ["03/01/2025"]
+
+
+@pytest.mark.django_db
+def test_forecast_uses_a_date_range_and_forecasts_until_a_date_with_explanations():
+    org, owner = _org("predict-dates")
+    api = _client(owner, org)
+    months = [f"{2021 + m // 12}-{m % 12 + 1:02d}-01" for m in range(48)]
+    csv = "month,sales\n" + "".join(
+        f"{month},{100 + i * 3 + (i % 12) * 5}\n" for i, month in enumerate(months)
+    )
+    dataset = api.post(
+        "/api/v1/analysis/datasets/", {"name": "Monthly", "inline_data": csv}, format="json"
+    ).json()
+    response = api.post(
+        "/api/v1/visualize/predict/",
+        {
+            "datasetId": dataset["id"],
+            "task": "forecast",
+            "model": "linear_trend",
+            "fields": {"date": "month", "target": "sales"},
+            "options": {"time_grain": "M"},
+            "dateRange": {"column": "month", "from": "2022-01-01", "to": "2024-12-31"},
+            "forecastUntil": "2025-06-01",
+        },
+        format="json",
+    )
+    assert response.status_code == 200, response.content
+    body = response.json()
+    # 36 months of history kept; Jan–Jun 2025 forecast (6 periods).
+    assert any("36 of 48 rows" in note for note in body["notes"]), body["notes"]
+    assert body["charts"][0]["title"].endswith("6-period forecast")
+    # How it was reached: the model's method, metric formulas and chart steps.
+    assert "a + b × t" in body["method"]
+    assert all(metric.get("formula") for metric in body["metrics"] if metric["key"] in {"mae", "mape"})
+    explanation = body["charts"][0]["explanation"]
+    assert explanation["method"] and explanation["steps"] and "±" in explanation["formula"]
+
+    reversed_range = api.post(
+        "/api/v1/visualize/predict/",
+        {
+            "datasetId": dataset["id"],
+            "task": "forecast",
+            "fields": {"date": "month", "target": "sales"},
+            "dateRange": {"from": "2024-01-01", "to": "2023-01-01"},
+        },
+        format="json",
+    )
+    assert reversed_range.status_code == 400
+
+
+@pytest.mark.django_db
+def test_custom_predictions_are_saved_privately_per_user():
+    org, owner = _org("presets")
+    api = _client(owner, org)
+    dataset = _sample(api, "customer_churn")
+    created = api.post(
+        "/api/v1/visualize/prediction-presets/",
+        {
+            "name": "Who will leave",
+            "task": "classification",
+            "model": "random_forest",
+            "fields": {"target": "churned", "features": ["tenure_months", "contract"]},
+            "datasetId": dataset["id"],
+        },
+        format="json",
+    )
+    assert created.status_code == 201, created.content
+    preset = created.json()
+    assert preset["name"] == "Who will leave" and preset["datasetId"] == dataset["id"]
+    listed = api.get(f"/api/v1/visualize/prediction-presets/?datasetId={dataset['id']}").json()
+    assert [item["id"] for item in (listed["results"] if isinstance(listed, dict) else listed)] == [
+        preset["id"]
+    ]
+
+    colleague = _client(_member(org, "presets", "analyst"), org)
+    others = colleague.get("/api/v1/visualize/prediction-presets/").json()
+    assert not (others["results"] if isinstance(others, dict) else others)
+    assert colleague.delete(f"/api/v1/visualize/prediction-presets/{preset['id']}/").status_code == 404
+
+    bad_model = api.post(
+        "/api/v1/visualize/prediction-presets/",
+        {"name": "x", "task": "forecast", "model": "logistic", "fields": {}},
+        format="json",
+    )
+    assert bad_model.status_code == 400
+    assert api.delete(f"/api/v1/visualize/prediction-presets/{preset['id']}/").status_code == 204
