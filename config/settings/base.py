@@ -590,6 +590,31 @@ SLACK_API_BASE = env("SLACK_API_BASE", "https://slack.com/api")
 ENABLE_MCP = env_bool("ENABLE_MCP", True)
 MCP_TOOL_TIMEOUT_SECONDS = int(env("MCP_TOOL_TIMEOUT_SECONDS", "30"))
 
+# Outgoing email over SMTP. Gmail: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USER = the Gmail
+# address, SMTP_PASSWORD = a Google App Password. Supabase Auth sends the sign-up and password-reset
+# emails with the same SMTP_* values (compose passes them to GoTrue). Without SMTP_HOST, Django prints
+# mail to the console instead of sending it.
+SMTP_HOST = env("SMTP_HOST", "")
+SMTP_PORT = int(env("SMTP_PORT", "") or 587)
+# starttls (587), ssl (465) or none (a local catcher such as Mailpit); derived from the port when unset.
+SMTP_SECURITY = env("SMTP_SECURITY", "").lower() or {465: "ssl", 587: "starttls"}.get(SMTP_PORT, "none")
+SMTP_FROM_EMAIL = env("SMTP_FROM_EMAIL", "")
+SMTP_FROM_NAME = env("SMTP_FROM_NAME", "JT-Code")
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend"
+    if SMTP_HOST
+    else "django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_HOST = SMTP_HOST or "localhost"
+EMAIL_PORT = SMTP_PORT
+EMAIL_HOST_USER = env("SMTP_USER", "")
+EMAIL_HOST_PASSWORD = env("SMTP_PASSWORD", "")
+EMAIL_USE_TLS = SMTP_SECURITY == "starttls"
+EMAIL_USE_SSL = SMTP_SECURITY == "ssl"
+EMAIL_TIMEOUT = 20
+DEFAULT_FROM_EMAIL = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL or EMAIL_HOST_USER or 'no-reply@localhost'}>"
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
 # Billing
 BILLING_CREDIT_VALUE_USD = env_float("BILLING_CREDIT_VALUE_USD", 0.01)
 BILLING_FX_BUFFER = env_float("BILLING_FX_BUFFER", 1.05)

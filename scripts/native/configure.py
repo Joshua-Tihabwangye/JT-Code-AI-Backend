@@ -427,6 +427,27 @@ def write_units(units: list[Unit]) -> None:
     print(f"wrote {len(units)} units into {UNIT_DIR}")
 
 
+def smtp_settings(repo_env: dict[str, str]) -> dict[str, str]:
+    """GoTrue's mail server: the SMTP_* the API uses (e.g. Gmail), or the local Mailpit when unset."""
+    if repo_env.get("SMTP_HOST"):
+        return {
+            "GOTRUE_SMTP_HOST": repo_env["SMTP_HOST"],
+            "GOTRUE_SMTP_PORT": repo_env.get("SMTP_PORT") or "587",
+            "GOTRUE_SMTP_USER": repo_env.get("SMTP_USER", ""),
+            "GOTRUE_SMTP_PASS": repo_env.get("SMTP_PASSWORD", ""),
+            "GOTRUE_SMTP_ADMIN_EMAIL": repo_env.get("SMTP_FROM_EMAIL") or repo_env.get("SMTP_USER", ""),
+            "GOTRUE_SMTP_SENDER_NAME": repo_env.get("SMTP_FROM_NAME") or "JT-Code",
+        }
+    return {
+        "GOTRUE_SMTP_HOST": "127.0.0.1",
+        "GOTRUE_SMTP_PORT": PORTS["MAILPIT_SMTP_PORT"],
+        "GOTRUE_SMTP_USER": "",
+        "GOTRUE_SMTP_PASS": "",
+        "GOTRUE_SMTP_ADMIN_EMAIL": "admin@jt-code.local",
+        "GOTRUE_SMTP_SENDER_NAME": "JT-Code Local",
+    }
+
+
 def app_env_settings(values: dict[str, str]) -> dict[str, str]:
     db = f"postgresql://jt_code:{values['JT_DB_PASSWORD']}@127.0.0.1:5432"
     return {
@@ -520,6 +541,7 @@ def main(argv: list[str]) -> int:
         "N8N_DISPATCH_SECRET": repo_env.get("N8N_DISPATCH_SECRET", ""),
         "N8N_WEBHOOK_SECRET": repo_env.get("N8N_WEBHOOK_SECRET", ""),
         "N8N_SENTRY_RELAY_SECRET": repo_env.get("N8N_SENTRY_RELAY_SECRET", ""),
+        **smtp_settings(repo_env),
     }
     render_templates(context)
     render_grafana_env(values)

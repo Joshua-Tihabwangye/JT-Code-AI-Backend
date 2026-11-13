@@ -36,6 +36,11 @@ def _strict_env() -> dict[str, str]:
         "SUPABASE_STORAGE_BUCKET": "jt-code-assets",
         "STRIPE_SECRET_KEY": "sk_live_9mY7Kq2Vx5Zp8Lr3",
         "STRIPE_WEBHOOK_SECRET": "whsec_9mY7Kq2Vx5Zp8Lr3",
+        "SMTP_HOST": "smtp.gmail.com",
+        "SMTP_PORT": "587",
+        "SMTP_USER": "alerts@example.com",
+        "SMTP_PASSWORD": "app-password-1234",
+        "SMTP_FROM_EMAIL": "alerts@example.com",
         "N8N_BASE_URL": "https://n8n.example.com",
         "N8N_API_KEY": "n8n-api-key",
         "N8N_WEBHOOK_SECRET": "ci-n8n-callback-secret-0123456789abcdef",  # pragma: allowlist secret

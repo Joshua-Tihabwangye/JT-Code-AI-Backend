@@ -306,6 +306,10 @@
       "path": "/knowledge/sources/{param}/sync/"
     },
     {
+      "method": "POST",
+      "path": "/payment-methods/"
+    },
+    {
       "method": "GET",
       "path": "/payment-methods/me/"
     },
