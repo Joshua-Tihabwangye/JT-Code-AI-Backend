@@ -10,7 +10,7 @@ psycopg[binary]>=3.2,<4
 PyJWT[crypto]>=2.10,<3
 
 # Async & Background Tasks
-redis>=5.2,<7
+redis>=5.2,<9
 celery[redis]>=5.5,<6
 
 # Event Streaming
