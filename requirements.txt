@@ -34,7 +34,7 @@ uvicorn[standard]>=0.34,<1
 whitenoise>=6.9,<7
 
 # AI Providers
-openai>=1.40,<2
+openai>=1.40,<4
 
 # Agent Runtime (LangGraph + LangChain core messages)
 langgraph>=0.3,<2
