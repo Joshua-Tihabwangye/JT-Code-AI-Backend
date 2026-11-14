@@ -1,4 +1,4 @@
-.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images docker-env docker-check docker-up docker-down docker-sync-db-passwords docker-reset docker-ps docker-logs docker-logins docker-grafana-reset prod-env prod-check compose-up-prod compose-down-prod compose-ps-prod compose-logs-prod prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images docker-env docker-check docker-up docker-down docker-sync-db-passwords docker-repair-redis docker-reset docker-ps docker-logs docker-logins docker-grafana-reset prod-env prod-check compose-up-prod compose-down-prod compose-ps-prod compose-logs-prod prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -238,6 +238,12 @@ docker-up:
 
 docker-down:
 	@bash scripts/compose.sh local down
+
+# Redis broker crash-looping with "Bad file format reading the append only file" (after a hard shutdown):
+# cut the damaged append-only file back to its last valid entry (only the newest queued jobs can be lost).
+docker-repair-redis:
+	@bash scripts/compose.sh local stop redis-broker
+	@yes | bash scripts/compose.sh local run --rm -T --no-deps --entrypoint redis-check-aof redis-broker --fix /data/appendonlydir/appendonly.aof.manifest
 
 # After .env.docker was regenerated while the database volume kept its old passwords.
 docker-sync-db-passwords:

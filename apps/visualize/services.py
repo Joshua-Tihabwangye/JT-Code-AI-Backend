@@ -31,7 +31,15 @@ _RESULT_PREFIX = "viz-result"
 
 # Pure functions of (data, request): their answers are reused from the cache for identical requests.
 _CACHEABLE_OPERATIONS = frozenset(
-    {"viz_render", "viz_table", "viz_insights", "viz_preview", "viz_quality", "viz_predict"}
+    {
+        "viz_render",
+        "viz_table",
+        "viz_insights",
+        "viz_preview",
+        "viz_quality",
+        "viz_predict",
+        "viz_prediction_options",
+    }
 )
 _ENGINE_CACHE_SECONDS = 30 * 60
 _ENGINE_CACHE_MAX_BYTES = 2 * 1024 * 1024

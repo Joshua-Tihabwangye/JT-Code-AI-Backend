@@ -432,6 +432,33 @@ class DatasetQualityView(APIView):
         return Response({"datasetId": str(dataset.id), **_engine("viz_quality", dataset)})
 
 
+class DatasetQuestionsView(APIView):
+    """Questions worth asking about the dataset, picked from its columns (for the assistant)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [VisualizeThrottle]
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    def get(self, request: Request, dataset_id: uuid.UUID) -> Response:
+        from apps.visualize import recommend
+
+        dataset = _dataset(request, dataset_id, analyze=False)
+        profile = services.ensure_profile(dataset)
+        return Response({"datasetId": str(dataset.id), "questions": recommend.questions(profile)})
+
+
+class DatasetPredictionOptionsView(APIView):
+    """What the dataset can predict (read by pandas): it fills the custom prediction form."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [VisualizeThrottle]
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    def get(self, request: Request, dataset_id: uuid.UUID) -> Response:
+        dataset = _dataset(request, dataset_id)
+        return Response({"datasetId": str(dataset.id), **_engine("viz_prediction_options", dataset)})
+
+
 def _manageable(request: Request, dataset_id: uuid.UUID) -> Dataset:
     from apps.analytics.access import can_manage_dataset
 
