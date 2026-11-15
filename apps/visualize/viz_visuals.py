@@ -1710,6 +1710,43 @@ def _apply_legend(visual: dict[str, Any], option: dict[str, Any]) -> None:
             grid[side] = max(int(grid.get(side, 0) or 0), room)
 
 
+def _apply_axes(visual: dict[str, Any], option: dict[str, Any]) -> None:
+    """The user's axis settings (Format ▸ Axes): titles, label angle, visibility, gridlines and the value
+    scale (minimum, maximum, logarithmic). ``x`` is the horizontal axis, ``y`` the vertical one."""
+    settings = _fmt(visual, "axes")
+    for key, axis_key in (("x", "xAxis"), ("y", "yAxis")):
+        chosen = settings.get(key)
+        if not isinstance(chosen, dict):
+            continue
+        axes = option.get(axis_key)
+        targets = axes if isinstance(axes, list) else [axes]
+        for index, axis in enumerate(targets):
+            if not isinstance(axis, dict):
+                continue
+            if chosen.get("show") is False:
+                axis["show"] = False
+                continue
+            if index == 0 and isinstance(chosen.get("title"), str) and chosen["title"].strip():
+                axis["name"] = chosen["title"].strip()[:80]
+                axis["nameLocation"] = "middle"
+                axis["nameGap"] = 34 if key == "y" else 28
+            if isinstance(chosen.get("rotate"), (int, float)):
+                axis.setdefault("axisLabel", {})["rotate"] = max(-90, min(90, int(chosen["rotate"])))
+            if isinstance(chosen.get("gridlines"), bool):
+                axis["splitLine"] = {**(axis.get("splitLine") or {}), "show": chosen["gridlines"]}
+            if axis.get("type") in {"value", "log"}:
+                for bound in ("min", "max"):
+                    if isinstance(chosen.get(bound), (int, float)):
+                        axis[bound] = chosen[bound]
+                if chosen.get("log") is True:
+                    axis["type"] = "log"
+                    # A logarithmic scale cannot start at zero or below.
+                    if isinstance(axis.get("min"), (int, float)) and axis["min"] <= 0:
+                        axis.pop("min")
+                elif chosen.get("log") is False and axis.get("type") == "log":
+                    axis["type"] = "value"
+
+
 def build(
     visual: dict[str, Any], queries: dict[str, Any], results: dict[str, Any], ctx: Ctx, **geo: Any
 ) -> dict[str, Any]:
@@ -1765,6 +1802,7 @@ def build(
         return out
     if isinstance(out.get("option"), dict):
         _apply_legend(visual, out["option"])
+        _apply_axes(visual, out["option"])
     auto = out.pop("autoTitle", None)
     title = _title(visual, auto or (out.get("kpi") or {}).get("label") or "")
     truncated = any(r.get("truncated") for r in results.values())
