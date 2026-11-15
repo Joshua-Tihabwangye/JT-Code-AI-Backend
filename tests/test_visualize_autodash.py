@@ -41,7 +41,7 @@ def test_stock_prices_are_averaged_volume_summed_one_line_per_ticker():
     # Parts of a whole only for a summed measure.
     assert visuals["share"]["type"] == "donut"
     assert visuals["share"]["data"]["wells"]["values"] == [{"field": "volume", "agg": "sum"}]
-    assert spec["theme"] == "corporate"
+    assert spec["theme"] == "colorblind"  # distinct colours for one line per ticker
 
 
 def test_two_measures_without_dates_or_groups_are_compared_in_a_scatter():

@@ -456,3 +456,47 @@ def chart_scores(prompt: str) -> list[tuple[str, float]]:
 def match_charts(prompt: str, limit: int = 20) -> list[str]:
     """Rank catalog charts by relevance to a prompt (for the assistant's allow-list)."""
     return [chart_id for chart_id, _ in chart_scores(prompt)[:limit]]
+
+
+def questions(profile: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    """Questions worth asking about this dataset, chosen from its columns (kind + the columns used).
+
+    The client words them in the user's language; asking one sends that text to the assistant.
+    """
+    from apps.visualize.autodash import _agg, _grain
+
+    roles = column_roles(profile)
+    measures = [m for m in roles["numeric"] if not any(w in m.lower() for w in ("target", "predicted"))]
+    dims = roles["dimension"]
+    dates = roles["datetime"]
+    stats = {entry["name"]: entry for entry in _columns(profile)}
+    found: list[dict[str, Any]] = []
+
+    def add(kind: str, **columns: str) -> None:
+        if len(found) < limit and not any(q["kind"] == kind for q in found):
+            found.append({"kind": kind, "columns": columns})
+
+    main = measures[0] if measures else None
+    flow = next((m for m in measures if _agg(m, stats) == "sum"), None)
+    if main and dates:
+        add("trend", measure=main, date=dates[0])
+    if main and dims:
+        add("top", measure=main, dimension=dims[0])
+    if main and dates:
+        add("forecast", measure=main, date=dates[0], grain=_grain(profile, dates[0]))
+    target = roles["binary"][0] if roles["binary"] else main
+    if target and len(roles["all"]) > 2:
+        add("drivers", target=target)
+    if flow and dims:
+        small = next((d for d in dims if _cardinality(profile, d) <= 8), None)
+        if small:
+            add("share", measure=flow, dimension=small)
+    if len(measures) >= 2:
+        add("relationship", first=measures[0], second=measures[1])
+    if main:
+        add("unusual", measure=main)
+    if main and len(dims) > 1:
+        add("compare", measure=measures[1] if len(measures) > 1 else main, dimension=dims[1])
+    if main:
+        add("distribution", measure=main)
+    return found

@@ -149,15 +149,16 @@ def _grain(profile: dict[str, Any], date: str | None) -> str:
     return "year"
 
 
+# Themes whose first colours are clearly different, so several series (one line per ticker, a donut's
+# slices) can be told apart: the colour-blind-safe Okabe–Ito set for finance, JT Vivid otherwise.
+# (Executive, Corporate and CRM start with three blues: good for a single series, poor for comparisons.)
 THEME_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("corporate", ("price", "close", "open", "ticker", "stock", "symbol", "balance", "interest", "yield")),
-    ("crm", ("customer", "churn", "tenure", "plan", "contract", "subscriber", "lead", "campaign")),
-    ("executive", ("revenue", "sales", "profit", "margin", "order", "region", "product")),
+    ("colorblind", ("price", "close", "open", "ticker", "stock", "symbol", "balance", "interest", "yield")),
 )
 
 
 def _theme_for(columns: list[str]) -> str:
-    """A colour theme that suits the subject: finance, customers, sales; JT Vivid otherwise."""
+    """A colour theme with distinct series colours that suits the subject (finance), JT Vivid otherwise."""
     words = set().union(*(_words(column) for column in columns)) if columns else set()
     for theme, hints in THEME_HINTS:
         if sum(1 for hint in hints if hint in words) >= 2:

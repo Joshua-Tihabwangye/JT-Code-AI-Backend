@@ -2822,6 +2822,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
         return c.render(frame, kinds, request, limits)
     if operation == "viz_predict":
         return predict(frame, kinds, request, limits)
+    if operation == "viz_prediction_options":
+        return _load("jt_viz_predict_options", "viz_predict_options.py").options(frame, kinds)
     if operation == "viz_insights":
         return {"profile": profile, "insights": insights(d.typed(frame, kinds), profile, kinds)}
     if operation == "viz_organize":

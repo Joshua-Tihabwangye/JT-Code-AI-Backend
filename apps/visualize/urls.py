@@ -36,6 +36,16 @@ urlpatterns = [
     path(
         "datasets/<uuid:dataset_id>/quality/", views.DatasetQualityView.as_view(), name="viz-dataset-quality"
     ),
+    path(
+        "datasets/<uuid:dataset_id>/questions/",
+        views.DatasetQuestionsView.as_view(),
+        name="viz-dataset-questions",
+    ),
+    path(
+        "datasets/<uuid:dataset_id>/prediction-options/",
+        views.DatasetPredictionOptionsView.as_view(),
+        name="viz-dataset-prediction-options",
+    ),
     path("datasets/<uuid:dataset_id>/edit/", views.DatasetEditView.as_view(), name="viz-dataset-edit"),
     path(
         "datasets/<uuid:dataset_id>/replace/", views.DatasetReplaceView.as_view(), name="viz-dataset-replace"

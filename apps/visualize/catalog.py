@@ -1554,9 +1554,69 @@ READ_GUIDE: dict[str, str] = {
 }
 
 
+# The Python libraries that do the work on each Data Visualization page (distribution, display name,
+# what it does there). Versions are read from the installed packages when the catalog is served.
+PAGE_LIBRARIES: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "dashboards": (
+        ("pandas", "pandas", "Builds every visual's numbers: filters, groups and totals."),
+        ("numpy", "NumPy", "Fast maths on the columns."),
+        ("statsmodels", "statsmodels", "Trend and forecast lines on charts."),
+        ("openpyxl", "openpyxl", "Excel export."),
+    ),
+    "data": (
+        ("pandas", "pandas", "Reads, profiles, checks and transforms the data."),
+        ("numpy", "NumPy", "Statistics and outlier checks."),
+        ("openpyxl", "openpyxl", "Reads Excel workbooks."),
+        ("pdfplumber", "pdfplumber", "Reads tables in PDF files."),
+        ("pypdfium2", "pypdfium2", "Renders scanned PDF pages for OCR."),
+        ("python-docx", "python-docx", "Reads tables in Word documents."),
+        ("rapidocr-onnxruntime", "RapidOCR", "Reads the text in pictures of tables."),
+        ("onnxruntime", "ONNX Runtime", "Runs the OCR model."),
+        ("pillow", "Pillow", "Opens and prepares pictures."),
+    ),
+    "explore": (
+        ("pandas", "pandas", "Groups and aggregates the data for the chart."),
+        ("numpy", "NumPy", "Calculations behind every chart."),
+        ("scipy", "SciPy", "Statistics: distributions, correlations and tests."),
+        ("scikit-learn", "scikit-learn", "Clusters, regression lines and PCA."),
+        ("statsmodels", "statsmodels", "Trend lines, smoothing and decomposition."),
+    ),
+    "predict": (
+        ("scikit-learn", "scikit-learn", "Trains, tests and compares the models."),
+        ("statsmodels", "statsmodels", "Time-series forecasts (Holt–Winters, ARIMA)."),
+        ("scipy", "SciPy", "Statistical tests and uncertainty ranges."),
+        ("pandas", "pandas", "Reads the dataset and prepares the inputs."),
+        ("numpy", "NumPy", "Calculations and error measures."),
+    ),
+    "reports": (
+        ("pandas", "pandas", "Tables for the reports."),
+        ("openpyxl", "openpyxl", "Excel workbooks with native charts."),
+    ),
+}
+PAGE_LIBRARIES["gallery"] = PAGE_LIBRARIES["explore"]
+
+
+def page_libraries() -> dict[str, list[dict[str, str]]]:
+    from importlib import metadata
+
+    def version(distribution: str) -> str:
+        try:
+            return metadata.version(distribution)
+        except metadata.PackageNotFoundError:
+            return ""
+
+    return {
+        page: [
+            {"id": dist, "name": name, "version": version(dist), "role": role} for dist, name, role in items
+        ]
+        for page, items in PAGE_LIBRARIES.items()
+    }
+
+
 def public_catalog() -> dict[str, Any]:
     """The catalog as served to clients."""
     return {
+        "libraries": page_libraries(),
         "version": 1,
         "categories": [asdict(category) for category in CATEGORIES],
         "charts": [

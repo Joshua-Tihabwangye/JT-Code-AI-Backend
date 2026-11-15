@@ -241,6 +241,50 @@ def test_gallery_charts_colours_and_legend_position():
         )
 
 
+def test_axis_settings_from_the_format_pane():
+    kinds = _kinds("retail_sales")
+    column = _visual(
+        "axes",
+        "column",
+        category=[{"field": "channel"}],
+        values=[{"field": "revenue"}],
+        format={
+            "axes": {
+                "x": {"title": "Sales channel", "rotate": 45, "gridlines": True},
+                "y": {"title": "Revenue", "min": 0, "max": 9e9, "log": True, "gridlines": False},
+            }
+        },
+    )
+    hidden = _visual(
+        "hidden",
+        "line",
+        category=[{"field": "date", "grain": "month"}],
+        values=[{"field": "revenue"}],
+        format={"axes": {"y": {"show": False}, "x": {"min": 5}}},
+    )
+    items = [{"visual": v, "queries": visual_plan.plan(v, kinds, [], TODAY)} for v in (column, hidden)]
+    out = viz_engine.dashboard_visuals(
+        {
+            "data": base64.b64encode(samples.sample_csv("retail_sales").encode()).decode(),
+            "theme": themes.resolve("vivid", "dark"),
+            "items": items,
+        },
+        LIMITS,
+    )
+    first, second = out["visuals"]
+    x_axis, y_axis = (first["option"][k] for k in ("xAxis", "yAxis"))
+    x_axis = x_axis[0] if isinstance(x_axis, list) else x_axis
+    y_axis = y_axis[0] if isinstance(y_axis, list) else y_axis
+    assert x_axis["name"] == "Sales channel" and x_axis["axisLabel"]["rotate"] == 45
+    assert x_axis["splitLine"]["show"] is True and "min" not in x_axis  # a category axis has no scale
+    assert y_axis["name"] == "Revenue" and y_axis["type"] == "log" and y_axis["max"] == 9e9
+    assert "min" not in y_axis  # a log scale cannot start at zero
+    assert y_axis["splitLine"]["show"] is False
+    hidden_y = second["option"]["yAxis"]
+    hidden_y = hidden_y[0] if isinstance(hidden_y, list) else hidden_y
+    assert hidden_y["show"] is False
+
+
 def test_hierarchy_slicers_return_a_tree():
     kinds = _kinds("retail_sales")
     visual = _visual(

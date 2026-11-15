@@ -583,3 +583,49 @@ def test_custom_predictions_are_saved_privately_per_user():
     )
     assert bad_model.status_code == 400
     assert api.delete(f"/api/v1/visualize/prediction-presets/{preset['id']}/").status_code == 204
+
+
+@pytest.mark.django_db
+def test_prediction_options_are_read_from_the_dataset():
+    org, owner = _org("predict-options")
+    api = _client(owner, org)
+    csv = "order_id,date,region,status,sales,notes\n" + "".join(
+        f"ORD-{i:04d},2024-{i % 12 + 1:02d}-01,{['East', 'West', 'North'][i % 3]},"
+        f"{['open', 'won'][i % 2]},{100 + i},free text {i}\n"
+        for i in range(60)
+    )
+    dataset = api.post(
+        "/api/v1/analysis/datasets/", {"name": "Orders", "inline_data": csv}, format="json"
+    ).json()
+    response = api.get(f"/api/v1/visualize/datasets/{dataset['id']}/prediction-options/")
+    assert response.status_code == 200, response.content
+    body = response.json()
+    columns = {column["name"]: column for column in body["columns"]}
+    # Numbers can be forecast and estimated; groups can be classified; IDs and free text are not inputs.
+    assert columns["sales"]["goals"]["forecast"] == "" and columns["sales"]["goals"]["estimate"] == ""
+    assert columns["status"]["goals"]["classify"] == "" and columns["status"]["values"] == ["open", "won"]
+    assert columns["region"]["goals"]["estimate"] == "needs_number"
+    assert columns["order_id"]["identifier"] and columns["order_id"]["goals"]["classify"] == "identifier"
+    assert not columns["order_id"]["input"] and not columns["notes"]["input"] and columns["region"]["input"]
+    assert body["dateColumns"] == [
+        {"name": "date", "first": "2024-01-01", "last": "2024-12-01", "periods": 12, "grain": "month"}
+    ]
+    catalog = api.get("/api/v1/visualize/catalog/").json()
+    predict = {library["id"]: library for library in catalog["libraries"]["predict"]}
+    assert predict["scikit-learn"]["version"] and predict["statsmodels"]["name"] == "statsmodels"
+
+
+@pytest.mark.django_db
+def test_assistant_questions_are_built_from_the_dataset_columns():
+    org, owner = _org("questions")
+    api = _client(owner, org)
+    dataset = _sample(api, "retail_sales")
+    response = api.get(f"/api/v1/visualize/datasets/{dataset['id']}/questions/")
+    assert response.status_code == 200, response.content
+    questions = response.json()["questions"]
+    kinds = [question["kind"] for question in questions]
+    assert {"trend", "top", "forecast"} <= set(kinds) and len(kinds) == len(set(kinds)) <= 8
+    names = {column["name"] for column in dataset["profile"]["columnProfiles"]}
+    for question in questions:
+        for key, value in question["columns"].items():
+            assert key == "grain" or value in names, (question, value)
