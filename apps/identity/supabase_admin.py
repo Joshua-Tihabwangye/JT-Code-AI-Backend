@@ -36,16 +36,21 @@ def delete_auth_user(supabase_user_id: str) -> None:
         raise SupabaseAdminError(f"Supabase refused user deletion (HTTP {response.status_code}).")
 
 
-def create_auth_user(email: str, password: str) -> tuple[str, bool]:
+def create_auth_user(email: str, password: str, metadata: dict | None = None) -> tuple[str, bool]:
     """Create a confirmed email/password user; return ``(user_id, created)``.
 
-    An existing user with the same email is reused (its password is not changed).
+    ``metadata`` becomes the user's ``user_metadata`` (the same keys the sign-up page sends:
+    ``first_name``, ``last_name``, …), so Django provisioning can fill the profile. An existing user
+    with the same email is reused (its password and metadata are not changed here).
     """
     base = _supabase_api_base_url()
+    body: dict = {"email": email, "password": password, "email_confirm": True}
+    if metadata:
+        body["user_metadata"] = metadata
     try:
         response = httpx.post(
             f"{base}/auth/v1/admin/users",
-            json={"email": email, "password": password, "email_confirm": True},
+            json=body,
             headers=_admin_headers(),
             timeout=10.0,
         )
@@ -100,3 +105,36 @@ def set_password(supabase_user_id: str, password: str) -> None:
         raise ValueError(response.json().get("msg") or "The new password was rejected.")
     if response.status_code >= 400:
         raise SupabaseAdminError(f"Supabase refused the password update (HTTP {response.status_code}).")
+
+
+def update_user_metadata(supabase_user_id: str, metadata: dict) -> None:
+    """Merge ``metadata`` into the Supabase user's ``user_metadata`` (GoTrue merges keys)."""
+    url = f"{_supabase_api_base_url()}/auth/v1/admin/users/{supabase_user_id}"
+    try:
+        response = httpx.put(url, json={"user_metadata": metadata}, headers=_admin_headers(), timeout=10.0)
+    except httpx.HTTPError as exc:
+        raise SupabaseAdminError(f"Supabase admin request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise SupabaseAdminError(f"Supabase refused the metadata update (HTTP {response.status_code}).")
+
+
+def iter_auth_users(*, per_page: int = 200):
+    """Yield every Supabase Auth user (Admin API, paged)."""
+    base = _supabase_api_base_url()
+    page = 1
+    while True:
+        try:
+            response = httpx.get(
+                f"{base}/auth/v1/admin/users",
+                params={"page": page, "per_page": per_page},
+                headers=_admin_headers(),
+                timeout=10.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise SupabaseAdminError(f"Supabase admin request failed: {exc}") from exc
+        users = response.json().get("users", [])
+        yield from users
+        if len(users) < per_page:
+            return
+        page += 1

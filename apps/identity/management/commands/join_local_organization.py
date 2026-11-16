@@ -16,9 +16,12 @@ from __future__ import annotations
 import os
 
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
+from apps.identity.management.commands.create_local_account import signup_metadata
 from apps.identity.models import Organization, User, UserOrganization
+from apps.identity.provisioning import fill_empty_profile
 from apps.identity.supabase_admin import SupabaseAdminError, create_auth_user
 
 
@@ -32,6 +35,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--create", action="store_true", help="Create the member's login (JOIN_PASSWORD)."
         )
+        parser.add_argument("--first-name", default="", help="Profile first name for a created login.")
+        parser.add_argument("--last-name", default="", help="Profile last name for a created login.")
 
     def handle(self, *args, **options) -> None:
         if not settings.DEBUG:
@@ -41,11 +46,15 @@ class Command(BaseCommand):
             password = os.environ.get("JOIN_PASSWORD", "")
             if len(password) < 8:
                 raise CommandError("Set JOIN_PASSWORD (8+ characters) to create the login.")
+            metadata = signup_metadata(options["first_name"], options["last_name"])
             try:
-                supabase_user_id, _ = create_auth_user(email, password)
+                supabase_user_id, _ = create_auth_user(email, password, metadata)
             except (SupabaseAdminError, ValueError) as exc:
                 raise CommandError(str(exc)) from exc
-            User.objects.get_or_create(supabase_user_id=supabase_user_id, defaults={"email": email})
+            created_user, _ = User.objects.get_or_create(
+                supabase_user_id=supabase_user_id, defaults={"email": email, "password": make_password(None)}
+            )
+            fill_empty_profile(created_user, metadata)
         member = User.objects.filter(email__iexact=email).first()
         owner = User.objects.filter(email__iexact=options["owner"].strip()).first()
         if member is None or owner is None:

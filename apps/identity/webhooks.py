@@ -4,12 +4,14 @@ import hmac
 import json
 
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
 from apps.identity.models import User
+from apps.identity.provisioning import fill_empty_profile
 
 
 def _authenticated(request: HttpRequest) -> bool:
@@ -76,30 +78,27 @@ def supabase_webhook(request: HttpRequest):
         supabase_id = record.get("id")
         if not supabase_id:
             return JsonResponse({"detail": "Missing Supabase user id."}, status=400)
-
-        email = record.get("email", "")
-        user_metadata = record.get("user_metadata", {}) or {}
-        full_name = user_metadata.get("full_name", "") or user_metadata.get("name", "")
-        display_name = full_name or ""
-        avatar_url = user_metadata.get("avatar_url", "") or ""
-
-        profile_defaults = {
-            "email": email,
-            "full_name": full_name,
-            "display_name": display_name,
-            "avatar_url": avatar_url,
-        }
         if _suspended(record):
             User.objects.filter(supabase_user_id=supabase_id).update(is_active=False)
             return JsonResponse({"received": True})
+
+        email = record.get("email") if isinstance(record.get("email"), str) else ""
+        # A Database Webhook on auth.users sends the table row (``raw_user_meta_data``); the Auth API
+        # shape is ``user_metadata``. Accept both.
+        metadata = record.get("raw_user_meta_data") or record.get("user_metadata") or {}
         user, created = User.objects.get_or_create(
             supabase_user_id=supabase_id,
-            defaults={**profile_defaults, "is_active": True},
+            defaults={"email": email, "is_active": True, "password": make_password(None)},
         )
-        if not created:
-            # A local suspension is an authorization decision. A routine upstream
-            # profile UPDATE must never silently reactivate that account.
-            User.objects.filter(pk=user.pk).update(**profile_defaults)
+        # GoTrue updates auth.users on every sign-in (last_sign_in_at), so an UPDATE is routine. It
+        # only refreshes the e-mail and fills *empty* profile fields; it never blanks a value, never
+        # overwrites a profile edit and never reactivates a locally suspended account.
+        if not created and email and user.email != email:
+            User.objects.filter(pk=user.pk).update(email=email)
+            user.email = email
+        fill_empty_profile(user, metadata)
+        if not user.display_name and user.full_name:
+            User.objects.filter(pk=user.pk).update(display_name=user.full_name)
         return JsonResponse({"received": True})
 
     return JsonResponse({"received": True})

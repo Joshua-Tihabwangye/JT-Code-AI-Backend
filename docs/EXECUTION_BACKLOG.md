@@ -33,7 +33,7 @@ Standard gates (referenced below):
 | P0-3 | `CLAUDE.md` guardrails in BE, and a pointer `CLAUDE.md` in FE | Files exist |
 | P0-4 | Regenerate the frontend contract snapshot (157 calls) | `pytest tests/test_phase18_verification.py -k contract` green |
 
-## Phase 1: Identity profile integrity (F9, F14 + the reported bug)
+## Phase 1: Identity profile integrity (F9, F14 + the reported bug) ☑
 
 Goal: a user's Django profile always reflects their Supabase sign-up data, no path creates an
 e-mail-only row, and existing rows can be repaired.
@@ -140,3 +140,36 @@ Gate: `bash -n` + shellcheck (when available) and BE-gate (`tests/test_compose_s
 ### 2026-11-16: Phase 0 ☑
 Audit, backlog and guardrails written. Contract snapshot regenerated: 157 calls, all resolve
 (`pytest tests/test_phase18_verification.py -k contract`: 4 passed).
+
+### 2026-11-16: Phase 1 ☑ (P1-8 ⚠)
+- P1-1: `provision_on_authentication` fills empty profile fields from the token's `user_metadata` once per
+  provisioning window (1 h), for existing rows too. Shared helpers `profile_values_from_metadata` /
+  `fill_empty_profile` (also OAuth names and avatars). `dial_code` is capped at its column length (8;
+  it was 10).
+- P1-2: the webhook reads `raw_user_meta_data` or `user_metadata`. UPDATEs never blank or overwrite a
+  field and never reactivate a suspended user.
+- P1-3: Supabase-managed users get an unusable Django password (`!…`); migration
+  `identity.0009_unusable_passwords` converts existing `''` rows.
+- P1-4: `create_local_account` / `join_local_organization` take `--first-name/--last-name` and send them
+  as Supabase `user_metadata`. `supabase_admin` gains `update_user_metadata` and `iter_auth_users`.
+- P1-5: `PATCH /accounts/me/` writes `first_name`, `last_name` and `full_name` together.
+- P1-6: `manage.py sync_supabase_profiles [--dry-run]`.
+- P1-7: the sign-up page and the API repository send `terms_accepted` / `privacy_accepted` /
+  `consent_version`. Provisioning records the two consents once; a withdrawal is never re-granted.
+- P1-8 ⚠ operator: the native row for the operator's e-mail has no Supabase metadata to copy (it came from
+  `create_local_account` without names). Fill it in Settings → Profile, or run
+  `make native-up` and then `.venv/bin/python manage.py create_local_account <email> --first-name … --last-name …`
+  (fills empty fields; the password is unchanged). For other old rows, run
+  `manage.py sync_supabase_profiles --dry-run` first, then without `--dry-run`. The Docker stack applies
+  migration 0009 on the next `make docker-up`.
+
+Gate:
+- ruff check + format: ok.
+- `makemigrations --check`: no changes.
+- pytest (`test_identity_auth`, `test_supabase_identity`, `test_identity_profile_sync` [12 new],
+  `test_phase2_authz_tenancy`, `test_phase18_verification`): all green except
+  `test_load_harness_runs_a_smoke_scenario_against_a_live_server`. That test failed once on latency
+  (p95 7.4 s under `-n 6` with load average ~9). It passes alone, both on the baseline and with these
+  changes, and it only hits endpoints this phase does not touch.
+- FE: typecheck ok; lint 0 errors (the 62 warnings predate this phase; the changed files are clean);
+  188/188 tests pass.

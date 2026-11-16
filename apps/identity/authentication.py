@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 import jwt
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from rest_framework import authentication, exceptions
 
 from apps.identity.models import User
@@ -132,15 +133,27 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
             raise exceptions.AuthenticationFailed("Anonymous Supabase sessions are not permitted.")
 
         email = claims.get("email") if isinstance(claims.get("email"), str) else ""
-        user, created = User.objects.get_or_create(supabase_user_id=subject, defaults={"email": email})
+        # Supabase owns the credentials (the bcrypt hash is in auth.users); the Django password is
+        # explicitly unusable so the row cannot be used for a Django login.
+        user, created = User.objects.get_or_create(
+            supabase_user_id=subject, defaults={"email": email, "password": make_password(None)}
+        )
         if not user.is_active:
             raise exceptions.AuthenticationFailed("This user account is disabled.")
         if not created and email and user.email != email:
             User.objects.filter(pk=user.pk).update(email=email)
             user.email = email
+        from apps.core.edge import client_ip
         from apps.identity.provisioning import provision_on_authentication
 
-        provision_on_authentication(user, claims, created=created)
+        django_request = getattr(request, "_request", request)
+        provision_on_authentication(
+            user,
+            claims,
+            created=created,
+            ip=None if (ip := client_ip(django_request)) == "unknown" else ip,
+            user_agent=django_request.META.get("HTTP_USER_AGENT", ""),
+        )
         return user, claims
 
     def authenticate_header(self, request) -> str:

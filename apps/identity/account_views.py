@@ -66,11 +66,19 @@ def avatar_url_for(user: Any) -> str | None:
     return user.avatar_url or None
 
 
+def profile_name_parts(user: Any) -> tuple[str, str]:
+    """First and last name: the explicit fields when set, else split from ``full_name``."""
+    if user.first_name or user.last_name:
+        return user.first_name, user.last_name
+    first, _, last = (user.full_name or "").strip().partition(" ")
+    return first, last.strip()
+
+
 def serialize_account(user: Any, organization: Any) -> dict[str, Any]:
     from apps.governance.models import ConsentRecord
     from apps.usage.services import active_plan
 
-    first, _, last = (user.full_name or "").strip().partition(" ")
+    first, last = profile_name_parts(user)
     granted = set(
         ConsentRecord.objects.filter(user=user, status=ConsentRecord.Status.GRANTED).values_list(
             "consent_type", flat=True
@@ -113,9 +121,12 @@ class AccountView(APIView):
                 {"email": ["Change your e-mail address through sign-in settings (Supabase Auth)."]},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        first, _, last = (user.full_name or "").partition(" ")
+        first, last = profile_name_parts(user)
         if "firstName" in data or "lastName" in data:
-            user.full_name = f"{data.get('firstName', first)} {data.get('lastName', last)}".strip()
+            # first_name/last_name are canonical; full_name is kept in step for lists and exports.
+            user.first_name = data.get("firstName", first).strip()[:150]
+            user.last_name = data.get("lastName", last).strip()[:150]
+            user.full_name = " ".join(filter(None, [user.first_name, user.last_name]))[:255]
         mapping = {
             "contact": "contact",
             "countryCode": "country_code",
