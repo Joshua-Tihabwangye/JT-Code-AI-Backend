@@ -16,10 +16,10 @@ class TextProvider:
 
 @dataclass
 class EchoDevelopmentProvider(TextProvider):
-    prefix: str = "JT-Code development response"
+    prefix: str = "Development mode: no AI model is connected yet, so this is a placeholder reply."
 
     def generate(self, prompt: str) -> str:
-        return f"{self.prefix}: {prompt}"
+        return f'{self.prefix} You said: "{prompt.strip()}"'
 
 
 class DisabledProvider(TextProvider):
