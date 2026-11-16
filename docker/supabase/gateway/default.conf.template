@@ -1,0 +1,137 @@
+# Supabase gateway (self-hosted Supabase in compose.yaml). The nginx image renders this template at start
+# (envsubst limited to SUPABASE_GATEWAY_* by NGINX_ENVSUBST_FILTER) into /etc/nginx/conf.d/default.conf.
+#
+# Two listeners:
+#   8000  public: what browsers reach through the TLS proxy (SUPABASE_PUBLIC_URL). Per-IP limits on
+#         the credential endpoints, a CORS allowlist, and no PostgREST or Auth admin API.
+#   8001  internal: only containers on the compose network (Django's SUPABASE_INTERNAL_URL). Full
+#         route set, including /auth/v1/admin (Django's service-role calls). Never published.
+
+# The real client IP: trust X-Forwarded-For only from loopback and the private ranges Docker uses (the
+# host or edge TLS proxy, which overwrites the header with the client's address).
+set_real_ip_from 127.0.0.1;
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 172.16.0.0/12;
+set_real_ip_from 192.168.0.0/16;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+# Credential endpoints are rate limited per client IP; every other route has an empty key (not counted).
+map $uri $jt_auth_limit_key {
+    default "";
+    ~^/auth/v1/(token|signup|recover|otp|verify|resend|magiclink|reauthenticate|factors) $binary_remote_addr;
+}
+limit_req_zone $jt_auth_limit_key zone=jt_auth:10m rate=${SUPABASE_GATEWAY_AUTH_RATE};
+limit_req_status 429;
+
+client_max_body_size 32m;
+server_tokens off;
+
+server {
+    listen 8000;
+    server_name _;
+
+    # CORS is answered here, as hosted Supabase's gateway does (supabase-js sends `apikey`, which
+    # GoTrue's own CORS handling rejects). Only origins in SUPABASE_CORS_ORIGINS (00-jt-cors.conf) get
+    # an Access-Control-Allow-Origin; an empty value makes nginx omit the header.
+    proxy_hide_header Access-Control-Allow-Origin;
+    proxy_hide_header Access-Control-Allow-Credentials;
+    proxy_hide_header Access-Control-Allow-Methods;
+    proxy_hide_header Access-Control-Allow-Headers;
+    proxy_hide_header Access-Control-Expose-Headers;
+    proxy_hide_header Access-Control-Max-Age;
+    add_header Access-Control-Allow-Origin $jt_cors_origin always;
+    add_header Vary Origin always;
+    add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "authorization, apikey, content-type, x-client-info, x-supabase-api-version, x-upsert, x-metadata, range, prefer, accept-profile, content-profile, cache-control, x-signature, x-requested-with" always;
+    add_header Access-Control-Expose-Headers "content-range, content-length, etag, x-request-id, x-supabase-api-version" always;
+    add_header Access-Control-Max-Age "86400" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    if ($request_method = OPTIONS) {
+        return 204;
+    }
+
+    location = /health {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Email templates GoTrue fetches (GOTRUE_MAILER_TEMPLATES_*).
+    location /templates/ {
+        alias /etc/nginx/supabase-templates/;
+    }
+
+    # Not for browsers: the Auth admin API (service-role key) and PostgREST (the SPA never uses it;
+    # Django-owned tables are locked down, see governance.0011). Reachable on :8001 only.
+    location ^~ /auth/v1/admin {
+        default_type application/json;
+        return 404 '{"message":"Not found"}';
+    }
+    location ^~ /rest/v1/ {
+        default_type application/json;
+        return 404 '{"message":"Not found"}';
+    }
+
+    location /auth/v1/ {
+        limit_req zone=jt_auth burst=20 nodelay;
+        proxy_pass http://supabase-auth:9999/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Prefix /auth/v1;
+        # GoTrue keys its per-IP rate limits on this header (GOTRUE_RATE_LIMIT_HEADER). It is always
+        # overwritten here, so a client cannot choose its own bucket.
+        proxy_set_header X-JT-Client-IP $remote_addr;
+    }
+
+    location /storage/v1/ {
+        proxy_pass http://supabase-storage:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    location / {
+        default_type application/json;
+        return 404 '{"message":"Unknown Supabase route"}';
+    }
+}
+
+server {
+    listen 8001;
+    server_name _;
+
+    location = /health {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /auth/v1/ {
+        proxy_pass http://supabase-auth:9999/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Prefix /auth/v1;
+        proxy_set_header X-JT-Client-IP $remote_addr;
+    }
+
+    location /storage/v1/ {
+        proxy_pass http://supabase-storage:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    location /rest/v1/ {
+        proxy_pass http://supabase-rest:3000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+
+    location / {
+        default_type application/json;
+        return 404 '{"message":"Unknown Supabase route"}';
+    }
+}

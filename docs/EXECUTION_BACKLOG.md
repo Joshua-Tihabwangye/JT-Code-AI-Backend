@@ -66,7 +66,7 @@ Gate: BE-gate with `tests/test_identity_auth.py tests/test_supabase_identity.py 
 
 | P2-7 | (added during Phase 2, G1) `scripts/compose_config_check.py`: the documented `config -q` gate cannot run on the templates (empty `${VAR:?}` secrets, `env_file:` needs the real file names). The checker validates every stack from a temporary copy with dummy values. | new script | Prints `ok` for production, production+edge, local |
 
-## Phase 3: Supabase Auth (GoTrue) and gateway hardening (F3, F6, F7, F10, F13)
+## Phase 3: Supabase Auth (GoTrue) and gateway hardening (F3, F6, F7, F10, F13) ☑
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -74,7 +74,7 @@ Gate: BE-gate with `tests/test_identity_auth.py tests/test_supabase_identity.py 
 | P3-2 | **Session security:** refresh-token rotation + reuse interval 10 s; `GOTRUE_SESSIONS_INACTIVITY_TIMEOUT` (default 7 days) and `TIMEBOX` (30 days); password change requires reauthentication for sessions older than 24 h; secure e-mail change on; anonymous sign-ins off; manual identity linking off | `compose.yaml`, `.env*.example` | config check |
 | P3-3 | **Per-IP rate limits.** The gateway resolves the real client IP (`set_real_ip_from` private ranges, `real_ip_header X-Forwarded-For`) and passes it as `X-JT-Client-IP` (always overwritten); GoTrue gets `GOTRUE_RATE_LIMIT_HEADER=X-JT-Client-IP` plus explicit limits (e-mail sent, verify, token refresh, OTP, anonymous) | `docker/supabase/nginx.conf`, `compose.yaml` | Test asserts the header is set and overwritten; ⚠ live: 2 IPs have separate budgets |
 | P3-4 | **Gateway edge limits:** nginx `limit_req` on `/auth/v1/token`, `/signup`, `/recover`, `/otp`, `/verify`, `/resend` (per real IP, burst), returning 429 | `nginx.conf` | Test asserts the zones exist |
-| P3-5 | **CORS allowlist.** Replace `*` with the origins in `SUPABASE_CORS_ORIGINS` (nginx template + `envsubst`); local default `http://localhost:5173`, production `FRONTEND_URL` | `nginx.conf` → `docker/supabase/nginx.conf.template`, `compose.yaml` | Tests; ⚠ live preflight from `:5173` passes and from `evil.example` gets no ACAO |
+| P3-5 | **CORS allowlist.** Replace `*` with the origins in `SUPABASE_CORS_ORIGINS` (nginx template + `envsubst`); local default `http://localhost:5173`, production `FRONTEND_URL` | `docker/supabase/gateway/{default.conf.template,15-jt-cors-map.sh}`, `compose.yaml` | Tests; ⚠ live preflight from `:5173` passes and from `evil.example` gets no ACAO |
 | P3-6 | **Close public paths:** a public listener (8000) denies `/rest/v1/` and `/auth/v1/admin/`; an internal listener (8001, not published) keeps them for Django (`SUPABASE_INTERNAL_URL=http://supabase-gateway:8001`) | `nginx.conf`, `compose.yaml` | Tests; ⚠ live: `curl :54321/rest/v1/` → 404, Django admin calls still work (`verify_supabase`) |
 | P3-7 | Optional CAPTCHA (`GOTRUE_SECURITY_CAPTCHA_*` + FE widget), off until the operator picks Turnstile or hCaptcha | docs | Documented |
 
@@ -206,3 +206,49 @@ Gate:
 ⚠ Operator: `make docker-up` rebuilds the images (migrations 0009/0010, the new entrypoint, the session
 check). Then sign out in the browser and confirm an old access token gets 401 within 30 s
 (`curl -H "Authorization: Bearer <old token>" localhost:8000/api/v1/auth/ping/`).
+
+### 2026-11-16: Phase 3 ☑ (live checks ⚠)
+- P3-1: GoTrue password policy: `GOTRUE_PASSWORD_MIN_LENGTH` (default 8) and required characters letters
+  + digits, matching the sign-up form. A test cross-checks the frontend schema.
+- P3-2: refresh-token rotation (reuse interval 10 s); reauthentication for password changes on sessions
+  older than 24 h; secure e-mail change; anonymous sign-ins and manual linking off; sessions idle limit
+  168 h and lifetime 720 h (`SUPABASE_SESSIONS_*`).
+- P3-3: `GOTRUE_RATE_LIMIT_HEADER=X-JT-Client-IP`. The gateway resolves the real client IP
+  (`real_ip_header X-Forwarded-For` from loopback/private proxies only) and always overwrites the
+  header. Explicit e-mail / verify / token-refresh / OTP / SSO limits (`SUPABASE_RATE_LIMIT_*`).
+- P3-4: nginx `limit_req` (`SUPABASE_GATEWAY_AUTH_RATE`, default 30 r/m, burst 20) on token, signup,
+  recover, otp, verify, resend, magiclink, reauthenticate and factors, per client IP; returns 429.
+- P3-5: CORS allowlist from `SUPABASE_CORS_ORIGINS` (default `SUPABASE_SITE_URL`). It is generated
+  at container start by `15-jt-cors-map.sh`, which accepts only exact `http(s)://` origins. The
+  `Access-Control-Allow-Origin: *` is gone.
+- P3-6: the public listener (8000, the only published port) returns 404 for `/rest/v1/` and
+  `/auth/v1/admin*`. The internal listener (8001, unpublished) keeps them, and Django's
+  `SUPABASE_INTERNAL_URL` now points at it. `docker/supabase/nginx.conf` was replaced by
+  `docker/supabase/gateway/default.conf.template`.
+- P3-7: CAPTCHA documented as an opt-in in both env templates (provider not chosen yet).
+- Local stack (`compose.local.yaml`): same mechanisms with looser numbers, because every local request
+  shares the Docker gateway's IP and the e2e suites sign up in bursts (gateway 600 r/m; e-mail and
+  verify 1000/h; OTP 300/h).
+
+Verification:
+- The native GoTrue 2.196.0 binary (the image's version) loaded the hardened configuration and stopped
+  only at the deliberately unreachable database. A bad duration is rejected, which shows the values are
+  parsed.
+- `compose_config_check.py`: production, production+edge and local all ok.
+- `compose_env.py check local` against the real `.env.docker`: passes (107 values).
+
+Gate:
+- ruff check + format: ok.
+- `makemigrations --check`: no changes.
+- pytest: 74 passed (`test_gateway_hardening` [13 new], `test_compose_stacks`,
+  `test_supabase_storage_client`, `test_supabase_identity`, `test_phase17_infrastructure`).
+- Not verified here: nginx syntax. nginx is not installed and the Docker daemon needs sudo. The gateway's
+  health check fails the stack if the config does not load.
+
+⚠ Operator, after `make docker-up`:
+1. `make docker-ps` shows `supabase-gateway` healthy.
+2. `curl -si localhost:54321/rest/v1/ | head -1` → 404.
+3. `curl -si -X OPTIONS -H 'Origin: https://evil.example' localhost:54321/auth/v1/token | grep -i access-control-allow-origin`
+   prints nothing; the same request with `Origin: http://localhost:5173` prints it.
+4. A sign-up with password `abcdefgh` (no digit) is rejected.
+5. Sign-in, sign-up and reset still work in the browser.

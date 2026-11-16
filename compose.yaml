@@ -34,7 +34,8 @@ x-app-env: &app-env
   DATABASE_POOLER_MODE: direct
   DATABASE_CONN_MAX_AGE: "60"
   SUPABASE_URL: ${SUPABASE_PUBLIC_URL:?use make docker-up (local) or make compose-up-prod (server)}
-  SUPABASE_INTERNAL_URL: http://supabase-gateway:8000
+  # The gateway's internal listener (8001, never published): the only route to the Auth admin API.
+  SUPABASE_INTERNAL_URL: http://supabase-gateway:8001
   SUPABASE_JWT_VERIFICATION: hs256
   SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:?use make docker-up (local) or make compose-up-prod (server)}
   SUPABASE_JWT_ISSUER: ${SUPABASE_PUBLIC_URL}/auth/v1
@@ -143,6 +144,28 @@ services:
       GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE: Confirm your new JT-Code email
       GOTRUE_MAILER_SUBJECTS_INVITE: You're invited to JT-Code
       GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
+      # Password policy enforced by the server, matching the sign-up form (8+ chars, a letter, a digit);
+      # without it a direct /auth/v1/signup call could set a 6-character password.
+      GOTRUE_PASSWORD_MIN_LENGTH: ${SUPABASE_PASSWORD_MIN_LENGTH:-8}
+      GOTRUE_PASSWORD_REQUIRED_CHARACTERS: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:0123456789"
+      # Sessions: rotating refresh tokens (a replayed old token revokes the family), an idle limit
+      # and a hard lifetime; changing the password needs a session younger than 24 h.
+      GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"
+      GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: "10"
+      GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_REAUTHENTICATION: "true"
+      GOTRUE_SECURITY_MANUAL_LINKING_ENABLED: "false"
+      GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
+      GOTRUE_SESSIONS_INACTIVITY_TIMEOUT: ${SUPABASE_SESSIONS_INACTIVITY_TIMEOUT:-168h}
+      GOTRUE_SESSIONS_TIMEBOX: ${SUPABASE_SESSIONS_TIMEBOX:-720h}
+      # Per-client-IP rate limits: the gateway puts the real client IP in X-JT-Client-IP (it always
+      # overwrites it). Without this every request shares the gateway's IP, i.e. one global bucket.
+      GOTRUE_RATE_LIMIT_HEADER: X-JT-Client-IP
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: ${SUPABASE_RATE_LIMIT_EMAIL_SENT:-60}
+      GOTRUE_RATE_LIMIT_VERIFY: ${SUPABASE_RATE_LIMIT_VERIFY:-60}
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: ${SUPABASE_RATE_LIMIT_TOKEN_REFRESH:-150}
+      GOTRUE_RATE_LIMIT_OTP: ${SUPABASE_RATE_LIMIT_OTP:-30}
+      GOTRUE_RATE_LIMIT_SSO: ${SUPABASE_RATE_LIMIT_SSO:-30}
     depends_on:
       supabase-db: {condition: service_healthy}
     healthcheck:
@@ -226,9 +249,18 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     logging: *logging
+    # Only the public listener is published; 8001 (internal, Auth admin API + PostgREST) stays on the
+    # compose network. docker/supabase/gateway/default.conf.template explains both.
     ports: ["127.0.0.1:54321:8000"]
+    environment:
+      NGINX_ENVSUBST_FILTER: ^SUPABASE_GATEWAY_
+      # Per client IP, on the credential endpoints only (token, signup, recover, otp, verify, ...).
+      SUPABASE_GATEWAY_AUTH_RATE: ${SUPABASE_GATEWAY_AUTH_RATE:-30r/m}
+      # Comma-separated exact origins allowed to call Auth/Storage from a browser.
+      SUPABASE_CORS_ORIGINS: ${SUPABASE_CORS_ORIGINS:-${SUPABASE_SITE_URL}}
     volumes:
-      - ./docker/supabase/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/supabase/gateway/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./docker/supabase/gateway/15-jt-cors-map.sh:/docker-entrypoint.d/15-jt-cors-map.sh:ro
       - ./infra/native/supabase-templates:/etc/nginx/supabase-templates:ro
     depends_on:
       supabase-auth: {condition: service_healthy}
