@@ -81,8 +81,9 @@ def test_echo_adapter_deterministic_output():
         messages=[ChatMessage("user", "hello there"), ChatMessage("assistant", "hi")],
         model=_fake_model("echo-chat"),
     )
-    assert result.content.startswith("JT-Code development response")
+    assert result.content.startswith("Development mode")
     assert "hello there" in result.content
+    assert "JT-Code" not in result.content and "user:" not in result.content  # a plain reply, no names
     assert result.model_name == "echo-chat"
     assert result.usage.input_tokens > 0
     assert result.usage.output_tokens > 0
@@ -135,7 +136,7 @@ def test_generate_completion_falls_back_to_echo_and_records_run():
         task_type="GENERAL_QUESTION",
         trace_id="run-1",
     )
-    assert outcome.content.startswith("JT-Code development response")
+    assert outcome.content.startswith("Development mode")
     assert outcome.run.model.name == "echo-chat"
     assert outcome.run.status == ModelRun.Status.COMPLETED
     assert outcome.fallback_used is True
@@ -271,7 +272,7 @@ def test_completion_api_accepts_and_completes_job(
     assert response.status_code == 202
     job = Job.objects.get(id=response.data["job_id"])
     assert job.status == Job.Status.COMPLETED
-    assert job.result["answer"].startswith("JT-Code development response")
+    assert job.result["answer"].startswith("Development mode")
     assert ModelRun.objects.filter(job_id=job.id, status=ModelRun.Status.COMPLETED).exists()
 
 

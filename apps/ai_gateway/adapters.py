@@ -125,6 +125,9 @@ class ChatAdapter(Protocol):
     ) -> GenerationResult: ...
 
 
+ECHO_REPLY = "Development mode: no AI model is connected yet, so this is a placeholder reply."
+
+
 class EchoChatAdapter:
     """Deterministic, offline stand-in used when ``AI_PROVIDER=echo``."""
 
@@ -140,7 +143,9 @@ class EchoChatAdapter:
         if settings.AI_PROVIDER != "echo":
             raise AIProviderNotConfigured("EchoChatAdapter is only available when AI_PROVIDER=echo.")
         prompt = " | ".join(f"{m.role}: {m.content}" for m in messages)
-        content = f"JT-Code development response: {prompt}"
+        # A plain reply, as a real assistant would give: no speaker name, no transcript.
+        said = next((m.content for m in reversed(messages) if m.role == "user"), "").strip()
+        content = f'{ECHO_REPLY} You said: "{said}"' if said else ECHO_REPLY
         return GenerationResult(
             content=content,
             model_name=getattr(model, "name", "echo-chat"),
