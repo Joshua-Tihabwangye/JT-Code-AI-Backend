@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.identity.authorization import organization_for_request, user_has_role
-from apps.identity.models import OrganizationInvite, Role, UserOrganization, UserRole
+from apps.identity.models import OrganizationInvite, Role, UserOrganization, UserRole, hash_invite_token
 from apps.identity.serializers import UserProfileSerializer, UserSerializer
 
 
@@ -95,11 +95,12 @@ class OrganizationMembersView(APIView):
                 {"detail": "This user is already an organization member."},
                 status=status.HTTP_409_CONFLICT,
             )
+        raw_token = secrets.token_urlsafe(32)
         invite = OrganizationInvite.objects.create(
             organization=organization,
             email=email,
             role=role_name,
-            token=secrets.token_urlsafe(32),
+            token=hash_invite_token(raw_token),
             expires_at=timezone.now() + timedelta(days=7),
         )
         return Response(
@@ -107,7 +108,7 @@ class OrganizationMembersView(APIView):
                 "id": str(invite.id),
                 "email": invite.email,
                 "role": invite.role,
-                "token": invite.token,
+                "token": raw_token,
                 "expires_at": invite.expires_at.isoformat(),
             },
             status=status.HTTP_201_CREATED,
@@ -174,7 +175,7 @@ class OrganizationInviteAcceptView(APIView):
         # The invite token (shared by the inviting admin) proves possession of the invite;
         # the email (from the verified Supabase session) proves it is the intended person.
         token = request.data.get("token") if isinstance(request.data, dict) else None
-        if not isinstance(token, str) or not secrets.compare_digest(token, invite.token):
+        if not isinstance(token, str) or not secrets.compare_digest(hash_invite_token(token), invite.token):
             raise PermissionDenied("A valid invite token is required.")
         if not request.user.email or request.user.email.lower() != invite.email.lower():
             raise PermissionDenied("This invite was issued to a different email address.")

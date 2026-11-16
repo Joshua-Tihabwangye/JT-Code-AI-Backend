@@ -15,8 +15,8 @@ Standard gates (referenced below):
   * `.venv/bin/ruff check . && .venv/bin/ruff format --check .`
   * `.venv/bin/python manage.py makemigrations --check --dry-run`
   * the phase's targeted `pytest` files (`-n 4`);
-  * a compose change also needs `docker compose -f compose.yaml --env-file .env.production.example config -q`
-    and `tests/test_compose_stacks.py`.
+  * a compose change also needs `python3 scripts/compose_config_check.py` (production, production + edge,
+    local) and `tests/test_compose_stacks.py`.
 * **FE-gate:** `npm run typecheck && npm run lint && npm run test`, plus `npm run build` when config or
   bundling changed.
 * **Live check (⚠ operator):** `make docker-up` (rebuilds the images; needs sudo), then
@@ -51,7 +51,7 @@ e-mail-only row, and existing rows can be repaired.
 
 Gate: BE-gate with `tests/test_identity_auth.py tests/test_supabase_identity.py tests/test_identity_profile_sync.py`; FE-gate.
 
-## Phase 2: API authentication hardening (F4, F5, F11, F12)
+## Phase 2: API authentication hardening (F4, F5, F11, F12) ☑
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -63,6 +63,8 @@ Gate: BE-gate with `tests/test_identity_auth.py tests/test_supabase_identity.py 
 | P2-6 | **Django admin:** `AUTH_PASSWORD_VALIDATORS` (length 12, common, numeric, similarity); `DJANGO_ADMIN_ENABLED` (default on, so the operator keeps DLQ access over an SSH tunnel); the public edge blocks `/admin` (P4-3) | `base.py`, `config/urls.py` | Test: admin URL absent when disabled |
 
 Gate: BE-gate with `tests/test_identity_auth.py tests/test_supabase_identity.py tests/test_phase2_authz_tenancy.py tests/test_auth_hardening.py tests/test_compose_stacks.py`.
+
+| P2-7 | (added during Phase 2, G1) `scripts/compose_config_check.py`: the documented `config -q` gate cannot run on the templates (empty `${VAR:?}` secrets, `env_file:` needs the real file names). The checker validates every stack from a temporary copy with dummy values. | new script | Prints `ok` for production, production+edge, local |
 
 ## Phase 3: Supabase Auth (GoTrue) and gateway hardening (F3, F6, F7, F10, F13)
 
@@ -173,3 +175,34 @@ Gate:
   changes, and it only hits endpoints this phase does not touch.
 - FE: typecheck ok; lint 0 errors (the 62 warnings predate this phase; the changed files are clean);
   188/188 tests pass.
+
+### 2026-11-16: Phase 2 ☑
+- P2-1: `apps/identity/sessions.py`. With `SUPABASE_SESSION_CHECK=true` (set in `compose.yaml`, so
+  both Docker stacks), a token's `session_id` must exist in `auth.sessions` for that user, unexpired,
+  for a user who is not banned or deleted. Positive results are cached 30 s
+  (`SUPABASE_SESSION_CHECK_TTL_SECONDS`). Missing `session_id` or a DB error → 401. The setting stays
+  off by default (native, tests), per G8. Tested against a real minimal `auth` schema created in the test
+  transaction.
+- P2-2: `exp`, `iat`, `sub`, `aud`, `role` are required; the audience is always checked
+  (`authenticated`); tokens over 8 KiB or non-ASCII → 401; other HS algorithms rejected.
+- P2-3: more than `AUTH_FAILURE_LIMIT` (60) invalid tokens per IP per `AUTH_FAILURE_WINDOW_SECONDS` (60)
+  locks the IP out for one window (429, metric `jt_security_events_total{kind="auth_failure_lockout"}`).
+- P2-4: uvicorn trusts `X-Forwarded-For` only from loopback and private ranges (was `*`).
+- P2-5: invite tokens are stored as SHA-256 digests (`hash_invite_token`); the raw token is returned once.
+  Migration `identity.0010_hash_invite_tokens` hashes existing invites, so sent links keep working.
+  The M2 test fixture in `test_security_hardening.py` now stores a digest; its assertions are unchanged.
+- P2-6: `AUTH_PASSWORD_VALIDATORS` (12+ characters, common, numeric, similarity) for Django admin
+  accounts; `DJANGO_ADMIN_ENABLED` (default on; the edge blocks `/admin` publicly in Phase 4).
+- P2-7: `scripts/compose_config_check.py` (see the task).
+
+Gate:
+- ruff check + format: ok.
+- `makemigrations --check`: no changes.
+- `compose_config_check.py`: production, production+edge, local all ok.
+- `pytest --create-db -n 4`: 122 passed across `test_identity_auth`, `test_supabase_identity`,
+  `test_phase2_authz_tenancy`, `test_auth_hardening` (23 new), `test_compose_stacks`,
+  `test_security_hardening`, `test_identity_profile_sync` and `test_conversions_research`.
+
+⚠ Operator: `make docker-up` rebuilds the images (migrations 0009/0010, the new entrypoint, the session
+check). Then sign out in the browser and confirm an old access token gets 401 within 30 s
+(`curl -H "Authorization: Bearer <old token>" localhost:8000/api/v1/auth/ping/`).

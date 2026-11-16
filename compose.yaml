@@ -40,6 +40,8 @@ x-app-env: &app-env
   SUPABASE_JWT_ISSUER: ${SUPABASE_PUBLIC_URL}/auth/v1
   SUPABASE_JWKS_URL: ${SUPABASE_PUBLIC_URL}/auth/v1/.well-known/jwks.json
   SUPABASE_JWT_AUDIENCE: authenticated
+  # Signed-out, banned or deleted users lose API access within 30 s, not at token expiry.
+  SUPABASE_SESSION_CHECK: "true"
   SUPABASE_SECRET_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?use make docker-up (local) or make compose-up-prod (server)}
   # Two Redis servers: an evicting cache and a non-evicting, persistent Celery broker.
   REDIS_URL: redis://:${REDIS_CACHE_PASSWORD:?use make docker-up (local) or make compose-up-prod (server)}@redis-cache:6379/0

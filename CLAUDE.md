@@ -33,7 +33,7 @@ The active plan is [docs/EXECUTION_BACKLOG.md](docs/EXECUTION_BACKLOG.md). Its e
 
   Read-only queries against local databases are fine.
 * **G7 Docker needs sudo,** which the agent does not have. Validate compose changes with
-  `docker compose ... config -q` and `tests/test_compose_stacks.py`. Mark live checks ⚠ for the user
+  `python3 scripts/compose_config_check.py` and `tests/test_compose_stacks.py`. Mark live checks ⚠ for the user
   (`make docker-up`, then `scripts/system_check.py`).
 * **G8 Both stacks keep working.**
   * Native (`.env`, `make native-up`) and Docker (`.env.docker`, `make docker-up`) share ports 8000 and
@@ -57,5 +57,5 @@ The active plan is [docs/EXECUTION_BACKLOG.md](docs/EXECUTION_BACKLOG.md). Its e
 * Migrations check: `.venv/bin/python manage.py makemigrations --check --dry-run`
 * Tests run against the native PostgreSQL (`TEST_DATABASE_URL`): `.venv/bin/pytest <files> -n 4`.
   Use `--create-db` for phase gates that add migrations.
-* Compose check: `docker compose -f compose.yaml --env-file .env.production.example config -q`
+* Compose check (no daemon or real secrets needed): `python3 scripts/compose_config_check.py`
 * Frontend: `cd ../jt-code-frontend && npm run typecheck && npm run lint && npm run test && npm run build`

@@ -12,7 +12,15 @@ from django.conf import settings
 from rest_framework.test import APIClient
 
 from apps.billing.models import CreditWallet
-from apps.identity.models import Organization, OrganizationInvite, Role, User, UserOrganization, UserRole
+from apps.identity.models import (
+    Organization,
+    OrganizationInvite,
+    Role,
+    User,
+    UserOrganization,
+    UserRole,
+    hash_invite_token,
+)
 
 
 def _member(org: Organization, label: str, role: str) -> User:
@@ -175,8 +183,9 @@ def test_chat_requests_of_other_members_are_invisible():
 @pytest.mark.django_db
 def test_invite_acceptance_requires_the_token_and_profile_email_is_read_only():
     org, _ = _org("m2")
+    raw_token = uuid.uuid4().hex
     invite = OrganizationInvite.objects.create(
-        organization=org, email="invitee@example.test", role="viewer", token=uuid.uuid4().hex
+        organization=org, email="invitee@example.test", role="viewer", token=hash_invite_token(raw_token)
     )
     invitee = User.objects.create_user(
         username="invitee", supabase_user_id="sb-invitee", email="invitee@example.test"
@@ -189,9 +198,7 @@ def test_invite_acceptance_requires_the_token_and_profile_email_is_read_only():
     )
     wrong = api.post(f"/api/v1/organizations/invites/{invite.id}/accept/", {"token": "nope"}, format="json")
     assert wrong.status_code == 403
-    ok = api.post(
-        f"/api/v1/organizations/invites/{invite.id}/accept/", {"token": invite.token}, format="json"
-    )
+    ok = api.post(f"/api/v1/organizations/invites/{invite.id}/accept/", {"token": raw_token}, format="json")
     assert ok.status_code == 200
 
     api.patch("/api/v1/settings/profile/", {"email": "victim@example.test"}, format="json")

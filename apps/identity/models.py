@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 
 from django.conf import settings
@@ -128,6 +129,11 @@ class UserPermission(models.Model):
         return f"{self.user} - {self.permission} ({self.organization or 'global'})"
 
 
+def hash_invite_token(raw_token: str) -> str:
+    """Invite tokens are bearer secrets: only their SHA-256 digest is stored."""
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
 class OrganizationInvite(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -138,6 +144,7 @@ class OrganizationInvite(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="invites")
     email = models.EmailField()
     role = models.CharField(max_length=64, choices=Role.RoleType.choices)
+    # SHA-256 digest of the invite secret (hash_invite_token); the raw token is shown once, at creation.
     token = models.CharField(max_length=255, unique=True)
     status = models.CharField(max_length=16, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
