@@ -376,7 +376,12 @@ services:
   api:
     <<: *app
     command: ["api"]
-    ports: ["127.0.0.1:8000:8000"] # reverse proxy on the host terminates TLS
+    # Horizontal scale on one host: API_REPLICAS containers (each WEB_CONCURRENCY uvicorn workers). The
+    # edge proxy discovers every replica through Docker DNS; give each a loopback port for the SSH tunnel
+    # and health checks with API_HOST_PORTS (e.g. 8000-8002 for 3 replicas).
+    deploy:
+      replicas: ${API_REPLICAS:-1}
+    ports: ["127.0.0.1:${API_HOST_PORTS:-8000}:8000"] # TLS terminates at the edge (or a host proxy)
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready/', timeout=5)"]
       interval: 15s
@@ -444,6 +449,58 @@ services:
       retries: 3
       start_period: 60s
     depends_on: *after-migrate
+
+  # Public edge (profile `edge`): TLS for APP_DOMAIN (SPA + /api) and SUPABASE_DOMAIN, load balancing
+  # over the API replicas, and the operator paths (/admin, /metrics, API docs) closed to the internet.
+  #   docker compose --env-file .env.production --profile edge up -d --build
+  # Without the profile, a reverse proxy on the host does this (docs/SELF_HOSTED_DEPLOYMENT.md).
+  web:
+    profiles: [edge]
+    build:
+      context: ${FRONTEND_DIR:-../jt-code-frontend}
+      args:
+        VITE_DATA_MODE: api
+        VITE_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+        VITE_SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+        VITE_API_BASE_URL: /api/v1
+        VITE_SENTRY_DSN: ${FRONTEND_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: production
+    image: jt-code-web:production
+    restart: unless-stopped
+    logging: *logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    environment:
+      JT_SUPABASE_ORIGIN: ${SUPABASE_PUBLIC_URL}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  edge:
+    profiles: [edge]
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      SUPABASE_DOMAIN: ${SUPABASE_DOMAIN:-supabase.localhost}
+    # The only ports published beyond loopback: the public entry point.
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./docker/edge/Caddyfile:/etc/caddy/Caddyfile:ro
+      - edge-data:/data
+      - edge-config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2020/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      api: {condition: service_healthy}
+      web: {condition: service_healthy}
+      supabase-gateway: {condition: service_healthy}
 
   # Monitoring and dashboards: localhost only. From your computer, scripts/prod_tunnel.sh
   # opens an SSH tunnel and the browser tabs (Grafana 3000, Prometheus 9090, Kafka 8080,
@@ -599,6 +656,8 @@ services:
       start_period: 30s
 
 volumes:
+  edge-data: {}
+  edge-config: {}
   supabase-db-data: {}
   supabase-db-config: {}
   supabase-storage-data: {}

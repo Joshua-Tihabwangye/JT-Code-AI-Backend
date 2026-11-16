@@ -80,7 +80,7 @@ Gate: BE-gate with `tests/test_identity_auth.py tests/test_supabase_identity.py 
 
 Gate: BE-gate with `tests/test_compose_stacks.py tests/test_gateway_hardening.py`; `compose_env.py check local` against `.env.docker`.
 
-## Phase 4: Edge proxy, deployable frontend, API load balancing (F1, F8, F12)
+## Phase 4: Edge proxy, deployable frontend, API load balancing (F1, F8, F12) ☑
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -252,3 +252,56 @@ Gate:
    prints nothing; the same request with `Origin: http://localhost:5173` prints it.
 4. A sign-up with password `abcdefgh` (no digit) is rejected.
 5. Sign-in, sign-up and reset still work in the browser.
+
+### 2026-11-16: Phase 4 ☑ (live checks ⚠)
+- P4-1 (FE `Dockerfile`):
+  - API-mode build args replace the stale Clerk argument;
+  - the build fails when `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` are missing;
+  - it serves from `nginx-unprivileged` on :8080;
+  - `.dockerignore` excludes every `.env*`, because Vite would otherwise bake `.env.local` into the
+    bundle.
+- P4-2 (FE `nginx.conf`, now an nginx template, plus `nginx-security-headers.inc`):
+  - CSP: scripts from self and Stripe.js only; no `unsafe-eval`; `object-src 'none'`; `connect-src`
+    self + `JT_SUPABASE_ORIGIN` + Stripe + Sentry; fonts from Google Fonts;
+  - `frame-ancestors 'none'` and `X-Frame-Options: DENY`, except `/embed/*` (embedding is a feature);
+  - `/assets/*` immutable for a year; `index.html` `no-cache`; no API proxy.
+- P4-3: `docker/edge/Caddyfile` with automatic HTTPS for `APP_DOMAIN` (SPA + `/api`) and
+  `SUPABASE_DOMAIN`.
+  - It closes `/admin`, `/metrics`, API docs/schema, `/rest/v1` and `/auth/v1/admin`.
+  - It sends HSTS and flushes SSE immediately.
+  - The `ACME_EMAIL` option was dropped: an empty value breaks parsing, and Let's Encrypt does not need it.
+- P4-4: `web` service built from `FRONTEND_DIR` with the server's Supabase URL and anon key.
+  `COMPOSE_PROFILES=edge` in `.env.production.example`, so `make compose-up-prod` starts `web` and
+  `edge`.
+- P4-5: `api` `deploy.replicas: ${API_REPLICAS:-1}` with loopback ports `API_HOST_PORTS`.
+  - Caddy discovers the replicas (`dynamic a`, `least_conn`, passive health: 502–504 → out for 30 s,
+    5 s retry).
+  - Prometheus discovers the API and worker replicas by Docker DNS (`dns_sd_configs`).
+- P4-6: `SELF_HOSTED_DEPLOYMENT.md` now covers the edge, DNS, firewall (including 443/udp), host-proxy
+  alternative, the scaling table, auth hardening and the post-deploy checks.
+- P4-7: FE `docs/ARCHITECTURE.md` rewritten (Supabase Storage, data modes, session check, image);
+  README Docker section corrected.
+- Test changes:
+  - `test_messaging_production_readiness`: `_scrape_targets` also reads `dns_sd_configs`;
+  - "exposes nothing publicly": the only allowed exception is `edge` on exactly 80/443/443-udp, and
+    the new `test_only_the_edge_publishes_ports_beyond_loopback` pins that exact set.
+
+Verification:
+- Caddy 2.10.2 (`caddy validate`/`adapt`): valid with default and real domains; `caddy fmt` clean.
+- `promtool check config`: ok (25 rules).
+- `compose_config_check.py`: ok. `COMPOSE_PROFILES` from the env file activates `edge`/`web`.
+- A clean copy filtered by the new `.dockerignore`, built with the image's environment: the bundle
+  has `VITE_DATA_MODE:"api"` and the given Supabase URL, and no `localhost:54321`.
+
+Gate:
+- BE: ruff ok; no migration changes; 125 passed (`test_edge_stack` [10 new], `test_compose_stacks`,
+  `test_messaging_production_readiness`, `test_gateway_hardening`, `test_phase17_infrastructure`,
+  `test_phase15_observability_security`).
+- FE: typecheck ok; lint 0 errors (62 pre-existing warnings); 188/188 tests pass.
+- Not verified here: `docker build` and a running edge (they need the daemon, i.e. sudo).
+
+⚠ Operator:
+1. On an existing server with its own host proxy, keep `COMPOSE_PROFILES` empty: `compose_env.py init`
+   appends new template keys, and the edge would collide on ports 80/443.
+2. On the server: `make compose-up-prod`. Then check that `https://APP_DOMAIN` loads, that sign-in and
+   chat streaming work, and that `/admin` is 404. Try `--scale api=3` with `API_HOST_PORTS=8000-8002`.

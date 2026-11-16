@@ -439,8 +439,12 @@ def test_without_single_host_mode_production_still_demands_tls_and_replication(m
 def test_production_compose_exposes_nothing_publicly_and_configures_each_role():
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text())
     services = compose["services"]
+    # The one exception is the TLS edge (profile `edge`), which must accept HTTP(S) from the internet.
+    edge_ports = {"80:80", "443:443", "443:443/udp"}
     for name, service in services.items():
         for port in service.get("ports", []):
+            if name == "edge" and str(port) in edge_ports:
+                continue
             assert str(port).startswith("127.0.0.1:"), f"{name} publishes {port} beyond localhost"
     assert "kafka" not in {name for name, s in services.items() if s.get("ports")}
     cache = " ".join(map(str, services["redis-cache"]["command"]))
@@ -479,8 +483,16 @@ def test_compose_stacks_let_prometheus_and_health_checks_reach_the_api():
 
 
 def _scrape_targets(config: str) -> set[str]:
+    """Static targets plus DNS-discovered ones (``name:port``, every replica of a compose service)."""
     scrape = yaml.safe_load((ROOT / "infra/prometheus" / config).read_text())["scrape_configs"]
-    return {t for job in scrape for group in job["static_configs"] for t in group["targets"]}
+    targets = {t for job in scrape for group in job.get("static_configs", []) for t in group["targets"]}
+    targets |= {
+        f"{name}:{group['port']}"
+        for job in scrape
+        for group in job.get("dns_sd_configs", [])
+        for name in group["names"]
+    }
+    return targets
 
 
 def test_prometheus_scrapes_every_metrics_source_in_both_stacks():
