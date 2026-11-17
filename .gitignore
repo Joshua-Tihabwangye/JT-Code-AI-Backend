@@ -89,3 +89,6 @@ node_modules/
 
 # n8n deployment secrets
 infra/n8n/n8n.env
+
+# Database dumps and storage archives (scripts/backup.sh): password hashes and user files
+backups/

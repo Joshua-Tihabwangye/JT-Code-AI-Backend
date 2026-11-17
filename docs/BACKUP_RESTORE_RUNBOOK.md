@@ -2,6 +2,11 @@
 
 Phase 3 data-foundation artifact for Supabase PostgreSQL.
 
+**Self-hosted single server (`compose.yaml`):** there is no managed PITR. Backups, the weekly restore
+check and the disaster restore are `scripts/backup.sh` (`make prod-backup`, `make prod-restore-check`),
+described in [SELF_HOSTED_DEPLOYMENT.md](SELF_HOSTED_DEPLOYMENT.md#backups-and-the-restore-drill).
+The PITR baseline below applies to a hosted Supabase project.
+
 ## Scope
 
 Canonical data lives in Supabase PostgreSQL: users, organizations, memberships,

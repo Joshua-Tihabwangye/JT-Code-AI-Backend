@@ -30,3 +30,4 @@ n8n
 *.docx
 *.pdf
 .zap
+backups/

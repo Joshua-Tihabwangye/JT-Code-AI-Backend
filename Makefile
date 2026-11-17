@@ -1,4 +1,4 @@
-.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images docker-env docker-check docker-up docker-down docker-sync-db-passwords docker-repair-redis docker-reset docker-ps docker-logs docker-logins docker-grafana-reset prod-env prod-check compose-up-prod compose-down-prod compose-ps-prod compose-logs-prod prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
+.PHONY: native-setup native-install native-install-observability native-configure native-bootstrap native-up native-down native-restart native-status native-logins native-db-info native-redisinsight native-logs native-migrate native-observability-up native-observability-down images docker-env docker-check docker-up docker-down docker-sync-db-passwords docker-repair-redis docker-reset docker-ps docker-logs docker-logins docker-grafana-reset prod-env prod-check compose-up-prod compose-down-prod compose-ps-prod compose-logs-prod prod-backup prod-restore-check prod-tunnel k8s-generate k8s-render k8s-validate tf-validate deploy-staging bootstrap-staging help install migrate run worker beat consumer kafka-topics verify-supabase test test-watch lint format check ci-local restore-drill typecheck clean shell dbshell createsuperuser collectstatic setup-dev start-dev
 
 # Default target
 help:
@@ -53,6 +53,8 @@ help:
 	@echo "  prod-env      Create/extend .env.production with generated secrets (keeps existing ones)"
 	@echo "  prod-check    Preflight .env.production (same checks the app runs at start-up)"
 	@echo "  compose-up-prod  Preflight, then start the production stack; opens dashboards"
+	@echo "  prod-backup   Dump the database and archive uploaded files to backups/ (BACKUP_* settings)"
+	@echo "  prod-restore-check  Restore the newest dump into a scratch database and compare row counts"
 	@echo "  compose-ps-prod / compose-logs-prod [SERVICE=api] / compose-down-prod"
 	@echo "  prod-tunnel SERVER=user@host  SSH tunnel to a remote server's dashboards; opens them"
 	@echo "  k8s-generate  Regenerate infra/k8s/base and components"
@@ -286,6 +288,12 @@ compose-ps-prod:
 
 compose-logs-prod:
 	@bash scripts/compose.sh production logs -f --tail=200 $(SERVICE)
+
+prod-backup:
+	@bash scripts/backup.sh production
+
+prod-restore-check:
+	@bash scripts/backup.sh --restore-check production
 
 prod-tunnel:
 	@bash scripts/prod_tunnel.sh $(SERVER)

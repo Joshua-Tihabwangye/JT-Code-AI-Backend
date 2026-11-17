@@ -127,7 +127,7 @@ Gate: BE-gate with `tests/test_phase2_authz_tenancy.py tests/test_request_cachin
 
 Gate: BE-gate (`tests/test_identity_auth.py tests/test_phase18_verification.py`), FE-gate + build.
 
-## Phase 8: Backups and the deploy runbook (F16)
+## Phase 8: Backups and the deploy runbook (F16) ☑ (live checks ⚠)
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -415,3 +415,44 @@ package installs are blocked there):
    the owner's shared data; revoke a second invite and check its link answers "not found".
 - Known limit: a new invitee who has no account signs up from the sign-in page, confirms the e-mail,
   and then opens the invite link again (sign-up does not carry `?next=`).
+
+### 2026-11-17: Phase 8 ☑ (live checks ⚠)
+- P8-1: `scripts/backup.sh`:
+  - `pg_dump -Fc` of the whole database inside `supabase-db` as `supabase_admin` (falls back to
+    `postgres`), verified with `pg_restore --list` before it is kept;
+  - a tar of the Storage volume through a read-only `alpine:3.22` helper (`--volumes-from`), taken
+    after the dump so the dump never references a missing file;
+  - SHA-256 per file, directory 700 and files 600, rotation by `BACKUP_KEEP_DAYS` (only `jt-code-*`
+    files), optional `rsync` to `BACKUP_RSYNC_TARGET`, `BACKUP_DRY_RUN=1`.
+  - `BACKUP_DB_EXEC` / `BACKUP_STORAGE_DIR` run it without Docker (tests, other hosts).
+- P8-2: `make prod-backup` and `make prod-restore-check`. The check verifies the checksum, restores
+  the newest dump into `jt_restore_check_<UTC>` (dropped on exit, also on failure), and compares
+  row counts with the live database: `django_migrations` must match, core identity tables must not
+  be empty; other differences are listed as "changed since the backup".
+- P8-3: `SELF_HOSTED_DEPLOYMENT.md`: day-0 checklist (DNS, firewall, domains, Auth URLs, SMTP,
+  Gemini, Stripe webhook `https://APP_DOMAIN/api/v1/webhooks/stripe/`, Sentry, first backup and cron)
+  and day-2 operations (updates with a pre-release backup, scaling, secret rotation per secret,
+  backups and the restore drill, disaster restore). `BACKUP_RESTORE_RUNBOOK.md` points to it.
+- `backups/` added to `.gitignore` and `.dockerignore` (dumps hold password hashes).
+
+Verification:
+- `bash -n` clean. shellcheck is not installed in this workspace (⚠ run `shellcheck -x scripts/backup.sh`).
+- New `tests/test_backup_script.py` (8 tests + 1 shellcheck test that skips without shellcheck).
+  pytest is not installed here, so the tests were executed through a minimal stand-in runner:
+  7 passed as root; the end-to-end test (it skips as root because `initdb` refuses root) passed as
+  the `postgres` user against a throwaway PostgreSQL 16 cluster: real dump, storage archive, rotation
+  (a 30-day-old dump removed, an unrelated file kept), restore check passing, a migration mismatch
+  failing, a damaged dump refused by its checksum, and no scratch database left behind.
+- Two bugs found and fixed by that run: the cleanup trap referred to a function-local variable (the
+  scratch database was not dropped), and a missing backup folder made the restore check exit
+  silently under `pipefail`.
+- `ruff check .` and `ruff format --check .` clean.
+
+⚠ Operator, on the server:
+1. `.venv/bin/pytest tests/test_backup_script.py tests/test_compose_stacks.py -n 4` (the end-to-end
+   test runs where `pg_config --bindir` has `initdb`, as a non-root user).
+2. `make prod-backup`, then `make prod-restore-check`; both must end without an error line. The first
+   run pulls `alpine:3.22`.
+3. Set `BACKUP_RSYNC_TARGET` and install the two cron lines from SELF_HOSTED_DEPLOYMENT.md; confirm the
+   copy arrives off-host.
+4. Once per quarter: the full disaster-restore drill on a spare server; record RTO/RPO.
