@@ -306,6 +306,34 @@
       "path": "/knowledge/sources/{param}/sync/"
     },
     {
+      "method": "GET",
+      "path": "/organizations/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/organizations/invites/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/organizations/invites/{param}/accept/"
+    },
+    {
+      "method": "GET",
+      "path": "/organizations/members/"
+    },
+    {
+      "method": "POST",
+      "path": "/organizations/members/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/organizations/members/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/organizations/members/{param}/"
+    },
+    {
       "method": "POST",
       "path": "/payment-methods/"
     },

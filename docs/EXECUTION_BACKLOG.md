@@ -114,7 +114,7 @@ Gate: BE-gate with `tests/test_compose_stacks.py tests/test_db_roles.py`.
 
 Gate: BE-gate with `tests/test_phase2_authz_tenancy.py tests/test_request_caching.py`.
 
-## Phase 7: Frontend ↔ backend completion
+## Phase 7: Frontend ↔ backend completion ☑ (pytest and npm gates ⚠)
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -122,6 +122,8 @@ Gate: BE-gate with `tests/test_phase2_authz_tenancy.py tests/test_request_cachin
 | P7-2 | **Accept-invite page** `/invite/:inviteId` (signs in first, then `POST …/accept/`) | FE route + page | FE test |
 | P7-3 | Members payload includes name and `isOwner` | `apps/identity/views.py` | Test |
 | P7-4 | Regenerate `tests/fixtures/frontend_api_contract.json` | BE | contract test green |
+| P7-5 | (added during Phase 7, G1) **Workspace switcher.** The SPA never sent `X-Organization-ID`, so an invited user who accepted kept working in their own workspace and could never reach the team. `GET /organizations/` lists the user's workspaces with role, owner and default flags; the SPA remembers the choice (`src/lib/workspace.ts`), sends the header on every API call, forgets a workspace the user lost (403) and retries once; the Team tab switches and the accept page switches to the joined workspace. | `apps/identity/views.py`, `urls.py`; FE `src/lib/workspace.ts`, `http.ts`, data layer | Tests: list shows only own memberships with roles; FE header sent, stale workspace retried once |
+| P7-6 | (added during Phase 7, G1) **Pending invites and revoke.** The FE repository (operator commit `6957dbe`) already called `DELETE /organizations/invites/{id}/` and read `invites` from the members list, which the backend did not serve. Members GET lists pending, unexpired invites (never the token); DELETE revokes (admins of that workspace only, status `revoked`); a second pending invite for the same e-mail is refused (409). | `apps/identity/views.py`, `models.py` (status value only, no migration) | Tests: revoked link → 404 on accept; non-admin 403; other workspace's admin 404 |
 
 Gate: BE-gate (`tests/test_identity_auth.py tests/test_phase18_verification.py`), FE-gate + build.
 
@@ -375,3 +377,41 @@ Gate (run in a cloud workspace without the project's Python 3.14 environment or 
 - ⚠ Not run here: `makemigrations --check` and
   `pytest tests/test_phase2_authz_tenancy.py tests/test_request_caching.py -n 4` (Django and psycopg are
   not installed and package installs are blocked). Run them locally; Phase 6 adds no migrations.
+
+### 2026-11-17: Phase 7 ☑ (pytest and npm gates ⚠)
+- P7-3: `/organizations/members/` returns `name` (full name, else first + last, else display name) and
+  `is_owner`; the owner is always reported as `admin` (matching `user_has_role`). Role PATCH and invite
+  accept return the same payload; accept adds `organization: {id, name}`.
+- P7-6: pending invites in the members payload, `DELETE /organizations/invites/{id}/` (status
+  `revoked`), duplicate pending invite → 409.
+- P7-5: `GET /organizations/` and the SPA workspace selection (header, stale-workspace recovery).
+- P7-1 (FE): Settings has Profile and Team tabs (`?tab=team`). Team: workspace switcher; for admins,
+  invite by e-mail and role (the link `/invite/:id?token=…` is shown once with a copy button), members
+  with role select and remove (owner and yourself locked), pending invites with revoke. Non-admins see
+  who to ask. Frontend-only mode keeps working (one local workspace; a note says invites need the API).
+- P7-2 (FE): `/invite/:inviteId` behind `RequireAuth` (signed-out visitors sign in and return via
+  `?next=`). Joining is an explicit click; on success the SPA switches to the joined workspace.
+- i18n: new `team.json` area in all 20 languages (57 keys, same placeholders). The mock team
+  repository's English `Error` strings (which the coverage test rejects) now use `i18n.t`.
+- P7-4: contract snapshot regenerated: 164 calls (was 157; the 7 new ones are the team endpoints).
+
+Verification (cloud workspace: no project Python 3.14 environment, no Django, no `node_modules`;
+package installs are blocked there):
+- BE: `ruff check .` and `ruff format --check .` clean. New `tests/test_team_management.py` (11 tests)
+  written but **not run**. `models.py` only adds a `TextChoices` value to a field without `choices`, so
+  no migration is expected.
+- FE: every changed file parses (TypeScript `transpileModule`); the coverage test's hard-coded-text
+  check (same code, run standalone) finds nothing; all 54 `team.*` keys used in code exist in English
+  and every language has the same keys and placeholders. New tests: `src/lib/workspace.test.ts`,
+  `src/lib/api/workspaceHeader.test.ts`, `src/lib/data/__tests__/team.test.ts`,
+  `src/pages/__tests__/AcceptInvitePage.test.tsx` (**not run**).
+
+⚠ Operator gate:
+1. BE: `.venv/bin/python manage.py makemigrations --check --dry-run` and
+   `.venv/bin/pytest tests/test_team_management.py tests/test_identity_auth.py tests/test_auth_hardening.py tests/test_security_hardening.py tests/test_request_caching.py tests/test_phase18_verification.py -n 4`.
+2. FE: `npm run typecheck && npm run lint && npm run test && npm run build`.
+3. Live: as the owner, Settings → Team → invite a second address as editor, copy the link, open it in
+   a private window signed in as that address, join; the joiner lands in the team workspace and sees
+   the owner's shared data; revoke a second invite and check its link answers "not found".
+- Known limit: a new invitee who has no account signs up from the sign-in page, confirms the e-mail,
+  and then opens the invite link again (sign-up does not carry `?next=`).
