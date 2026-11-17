@@ -176,7 +176,13 @@ def runtime_connection_settings(
 DATABASES: dict[str, Any] = {}
 
 AUTH_USER_MODEL = "identity.User"
-AUTH_PASSWORD_VALIDATORS: list[dict[str, Any]] = []
+# End users sign in through Supabase; these apply to Django admin accounts (createsuperuser).
+AUTH_PASSWORD_VALIDATORS: list[dict[str, Any]] = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
@@ -417,6 +423,15 @@ SUPABASE_WEBHOOK_SIGNING_SECRET = env("SUPABASE_WEBHOOK_SIGNING_SECRET")
 # Server-only key for the Supabase Auth Admin API (never expose to clients).
 SUPABASE_SECRET_KEY = env("SUPABASE_SECRET_KEY")
 SUPABASE_ALLOW_ANONYMOUS_USERS = env_bool("SUPABASE_ALLOW_ANONYMOUS_USERS", False)
+# Revocation for stateless access tokens: the token's session_id must still exist in auth.sessions
+# (same database) for an active user. Off by default (native/test); both compose stacks turn it on.
+SUPABASE_SESSION_CHECK = env_bool("SUPABASE_SESSION_CHECK", False)
+SUPABASE_SESSION_CHECK_TTL_SECONDS = int(env("SUPABASE_SESSION_CHECK_TTL_SECONDS", "30"))
+# Invalid bearer tokens per client IP per window before that IP is locked out for one window (429).
+AUTH_FAILURE_LIMIT = int(env("AUTH_FAILURE_LIMIT", "60"))
+AUTH_FAILURE_WINDOW_SECONDS = int(env("AUTH_FAILURE_WINDOW_SECONDS", "60"))
+# The Django admin (operators reach it over an SSH tunnel; the public edge blocks /admin).
+DJANGO_ADMIN_ENABLED = env_bool("DJANGO_ADMIN_ENABLED", True)
 
 # Asset bytes live in a private Supabase Storage bucket.  The service-role key
 # is already represented by SUPABASE_SECRET_KEY and must remain server-only.

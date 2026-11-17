@@ -503,11 +503,19 @@
     },
     {
       "method": "GET",
+      "path": "/visualize/datasets/{param}/prediction-options/"
+    },
+    {
+      "method": "GET",
       "path": "/visualize/datasets/{param}/preview/"
     },
     {
       "method": "GET",
       "path": "/visualize/datasets/{param}/quality/"
+    },
+    {
+      "method": "GET",
+      "path": "/visualize/datasets/{param}/questions/"
     },
     {
       "method": "GET",

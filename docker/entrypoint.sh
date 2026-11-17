@@ -21,12 +21,14 @@ prepare_metrics_dir
 
 case "$role" in
   api)
+    # X-Forwarded-For is trusted only from loopback and the private ranges Docker networks use (the
+    # host or edge proxy). With "*" uvicorn would take the left-most, client-written entry as the peer.
     # Start the pre-loaded analytics fork server with each API process (apps/analytics/zygote.py).
     export JT_PREWARM_ENGINE=1
     exec uvicorn config.asgi:application \
       --host 0.0.0.0 --port "${PORT:-8000}" \
       --workers "${WEB_CONCURRENCY:-2}" \
-      --proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-*}" \
+      --proxy-headers --forwarded-allow-ips "${FORWARDED_ALLOW_IPS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}" \
       --timeout-graceful-shutdown "${GRACEFUL_SHUTDOWN_SECONDS:-25}" \
       --no-server-header --no-access-log "$@"
     ;;
@@ -49,6 +51,10 @@ case "$role" in
     # Idempotent: applies migrations, verifies private asset storage, registers workflows,
     # provisions Kafka topics, then gates the deploy on Redis/Kafka and Supabase checks.
     python manage.py migrate --noinput
+    # The least-privilege runtime role the API and workers use (through PgBouncer); idempotent.
+    if [ -n "${APP_DB_PASSWORD:-}" ]; then
+      python manage.py provision_app_role
+    fi
     python manage.py configure_asset_storage
     python manage.py ensure_kafka_topics --grow
     case "${DJANGO_SETTINGS_MODULE:-}" in

@@ -69,6 +69,10 @@ Grafana's database. To choose your own password, change `GRAFANA_ADMIN_PASSWORD`
 
 ## Database in pgAdmin
 
+The app containers connect as the runtime role `jt_code_app` through PgBouncer. `make docker-up`
+generates `APP_DB_PASSWORD` in `.env.docker` on the first run after this change. pgAdmin and
+`scripts/local_manage.py docker` keep using the owner (`postgres`).
+
 The native pgAdmin 4 desktop app connects straight to the stack's PostgreSQL, which is published
 on loopback only. In pgAdmin: **Register → Server**, Name `JT-Code (Docker)`, then on the
 Connection tab: host `127.0.0.1`, port `54322`, maintenance database `postgres`, username

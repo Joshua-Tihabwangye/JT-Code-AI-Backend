@@ -177,6 +177,9 @@ _INT_ENV = (
     "METRICS_STATE_CACHE_SECONDS",
     "CELERY_METRICS_PORT",
     "TRUSTED_PROXY_HOPS",
+    "SUPABASE_SESSION_CHECK_TTL_SECONDS",
+    "AUTH_FAILURE_LIMIT",
+    "AUTH_FAILURE_WINDOW_SECONDS",
     "WEBHOOK_REPLAY_TOLERANCE_SECONDS",
     "N8N_REQUEST_TIMEOUT_SECONDS",
     "N8N_RETRY_BASE_SECONDS",
@@ -289,6 +292,23 @@ def _check_secret(problems: list[str], name: str) -> None:
 def _single_host() -> bool:
     """App, Redis and Kafka share one server's private Docker network (compose.yaml)."""
     return _val("SINGLE_HOST_DEPLOYMENT", "false").lower() in {"1", "true", "yes", "on"}
+
+
+def database_role_problems() -> list[str]:
+    """On a single host, the app runs as the least-privilege role, never as the database owner.
+
+    The owner (``postgres``) can read GoTrue's ``auth`` schema and bypass RLS; only the ``migrate`` container
+    (``DATABASE_ADMIN_CONNECTION=true``) may use it. See ``manage.py provision_app_role``.
+    """
+    if not _single_host() or _val("DATABASE_ADMIN_CONNECTION", "false").lower() in {"1", "true", "yes", "on"}:
+        return []
+    user = urlparse(_val("DATABASE_URL")).username or ""
+    if user in {"postgres", "supabase_admin"}:
+        return [
+            f"DATABASE_URL connects the application as the database owner ({user}); connect as jt_code_app "
+            "through PgBouncer (APP_DB_PASSWORD, compose.yaml) and keep the owner for the migrate container."
+        ]
+    return []
 
 
 def _check_tls_url(problems: list[str], name: str) -> None:
@@ -592,6 +612,8 @@ def validate_environment(profile: str) -> list[str]:
         problems.append(
             "DATABASE_URL must set sslmode to require, verify-ca, or verify-full in deployable environments."
         )
+
+    problems.extend(database_role_problems())
 
     if _val("DATABASE_POOLER_MODE", "direct").lower() not in {"direct", "session", "transaction"}:
         problems.append("DATABASE_POOLER_MODE must be direct, session, or transaction.")

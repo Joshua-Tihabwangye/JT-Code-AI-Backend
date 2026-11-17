@@ -70,6 +70,9 @@ def _current_subscription(organization: Any) -> Subscription | None:
     )
 
 
+CATALOG_CACHE_CONTROL = "private, max-age=300"
+
+
 class PlanViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = PlanSerializer
@@ -77,6 +80,13 @@ class PlanViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return Plan.objects.filter(status=Plan.Status.ACTIVE).prefetch_related("entitlements")
+
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        # The plan catalogue is the same for every tenant: let the browser reuse it (never a shared cache).
+        if request.method == "GET" and self.action in {"list", "retrieve"} and response.status_code == 200:
+            response["Cache-Control"] = CATALOG_CACHE_CONTROL
+        return response
 
     @extend_schema(
         request=SubscribeSerializer,

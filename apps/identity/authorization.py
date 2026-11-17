@@ -4,23 +4,55 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
+from django.core.exceptions import ValidationError
 from django.db.models import Q, QuerySet
 from rest_framework import permissions
 from rest_framework.exceptions import PermissionDenied
 
 from apps.identity.models import Organization, Role, UserPermission, UserRole
 
+_MISSING = object()
+
+
+def request_scoped_cache(user) -> dict | None:
+    """The per-request memo that ``SupabaseJWTAuthentication`` attaches to the user it builds.
+
+    That user object lives for exactly one request, so memoized membership and role answers can never
+    go stale across requests. Users created any other way (tests, Celery tasks, ``force_authenticate``)
+    have no memo and always query the database.
+    """
+    memo = getattr(user, "_jt_authz_cache", None)
+    return memo if isinstance(memo, dict) else None
+
+
+def _memoized(user, key: tuple, compute: Callable[[], Any]) -> Any:
+    memo = request_scoped_cache(user)
+    if memo is None:
+        return compute()
+    value = memo.get(key, _MISSING)
+    if value is _MISSING:
+        value = memo[key] = compute()
+    return value
+
 
 def organization_ids_for_user(user) -> list[str]:
     if not getattr(user, "is_authenticated", False):
         return []
-    return [str(org_id) for org_id in user.organizations.values_list("id", flat=True)]
+    return list(
+        _memoized(
+            user,
+            ("org_ids",),
+            lambda: [str(org_id) for org_id in user.organizations.values_list("id", flat=True)],
+        )
+    )
 
 
 def primary_organization_for_user(user) -> Organization | None:
     if not getattr(user, "is_authenticated", False):
         return None
-    return user.organizations.order_by("user_memberships__created_at").first()
+    return _memoized(
+        user, ("primary",), lambda: user.organizations.order_by("user_memberships__created_at").first()
+    )
 
 
 def organization_for_request(request, *, required: bool = False) -> Organization | None:
@@ -33,12 +65,11 @@ def organization_for_request(request, *, required: bool = False) -> Organization
     """
     organization_id = request.headers.get("X-Organization-ID")
     if organization_id:
-        try:
-            organization = Organization.objects.get(id=organization_id)
-        except Organization.DoesNotExist, ValueError:
-            raise PermissionDenied("The selected organization does not exist.") from None
-        require_organization_membership(request.user, organization.id)
-        return organization
+        selected = _memoized(request.user, ("selected", organization_id), _NoneOnError(organization_id))
+        if selected is None:
+            raise PermissionDenied("The selected organization does not exist.")
+        require_organization_membership(request.user, selected.id)
+        return selected
 
     organization = primary_organization_for_user(request.user)
     if required and organization is None:
@@ -46,10 +77,27 @@ def organization_for_request(request, *, required: bool = False) -> Organization
     return organization
 
 
+class _NoneOnError:
+    """Look up an organization by id; ``None`` when it does not exist or the id is malformed."""
+
+    def __init__(self, organization_id: str) -> None:
+        self.organization_id = organization_id
+
+    def __call__(self) -> Organization | None:
+        try:
+            return Organization.objects.get(id=self.organization_id)
+        except Organization.DoesNotExist, ValueError, ValidationError:
+            return None
+
+
 def require_organization_membership(user, organization_id) -> None:
     if not getattr(user, "is_authenticated", False):
         raise PermissionDenied("Authentication is required.")
-    if not user.organizations.filter(id=organization_id).exists():
+    if request_scoped_cache(user) is not None:
+        member = str(organization_id) in organization_ids_for_user(user)
+    else:
+        member = user.organizations.filter(id=organization_id).exists()
+    if not member:
         raise PermissionDenied("You do not have access to this organization.")
 
 
@@ -81,6 +129,11 @@ def tenant_scoped_queryset(
 def user_has_role(user, role_name: str, organization_id=None) -> bool:
     if not getattr(user, "is_authenticated", False):
         return False
+    key = ("role", role_name, None if organization_id is None else str(organization_id))
+    return bool(_memoized(user, key, lambda: _user_has_role(user, role_name, organization_id)))
+
+
+def _user_has_role(user, role_name: str, organization_id=None) -> bool:
     if (
         organization_id is not None
         and role_name == Role.RoleType.ADMIN

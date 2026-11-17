@@ -1,0 +1,81 @@
+# Public edge for the single-host production stack (compose profile `edge`).
+#
+#   https://{$APP_DOMAIN}       the SPA (web) and the API under /api (same origin: no CORS, no cookies needed)
+#   https://{$SUPABASE_DOMAIN}  Supabase Auth and Storage (the gateway's public listener)
+#
+# Caddy obtains and renews certificates itself (ports 80 and 443 must reach this host). With the
+# defaults (localhost, supabase.localhost) it uses its own local CA, so the profile can be tried on a laptop.
+# Caddy is the first proxy: it replaces any client-sent X-Forwarded-For with the real client address,
+# which uvicorn, Django (TRUSTED_PROXY_HOPS=1) and the Supabase gateway then trust.
+# No ACME contact e-mail is configured: Let's Encrypt does not require one, and Caddy renews certificates itself.
+{
+	admin off
+}
+
+(edge_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+}
+
+{$APP_DOMAIN:localhost} {
+	import edge_headers
+	encode zstd gzip
+
+	# Operator surfaces stay off the internet; reach them through an SSH tunnel to 127.0.0.1:8000.
+	@internal path /admin /admin/* /metrics /metrics/* /api/docs /api/docs/* /api/schema /api/schema/* /api/v1/docs /api/v1/docs/* /api/v1/schema /api/v1/schema/*
+	handle @internal {
+		respond "Not found" 404
+	}
+
+	handle /api/* {
+		request_body {
+			max_size 32MB
+		}
+		# Every API replica (docker compose --scale api=N, or API_REPLICAS) is discovered through
+		# Docker's DNS. A replica that fails or answers 502-504 is taken out for 30 s, and the request
+		# is retried on another one for up to 5 s.
+		reverse_proxy {
+			dynamic a {
+				name api
+				port 8000
+				refresh 5s
+			}
+			lb_policy least_conn
+			lb_try_duration 5s
+			lb_try_interval 250ms
+			fail_duration 30s
+			max_fails 1
+			unhealthy_status 502 503 504
+			# Chat streams (SSE): send every event as soon as it is written.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+}
+
+{$SUPABASE_DOMAIN:supabase.localhost} {
+	import edge_headers
+
+	# Also closed by the gateway's public listener; closed here too so one mistake is not enough.
+	@internal path /rest/v1 /rest/v1/* /auth/v1/admin /auth/v1/admin/*
+	handle @internal {
+		respond "Not found" 404
+	}
+
+	handle {
+		request_body {
+			max_size 32MB
+		}
+		reverse_proxy supabase-gateway:8000
+	}
+}
+
+# Container health check only (not published).
+http://127.0.0.1:2020 {
+	respond /healthz "ok" 200
+}

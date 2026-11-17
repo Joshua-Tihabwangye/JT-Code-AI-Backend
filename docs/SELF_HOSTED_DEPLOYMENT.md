@@ -27,8 +27,10 @@ replicas, a TLS database URL and JWKS-signed sessions again.
 - Linux with Docker Engine and the Compose plugin; 4 vCPU and 8 GB RAM recommended
   (PostgreSQL and the Supabase services ~2 GB, Kafka 1 GB, Redis 768 MB, the app the rest).
   Adjust `KAFKA_MEMORY` and `REDIS_*_MAXMEMORY` to the server.
-- Two DNS names pointing at the server: the API (`api.example.com`) and the Supabase gateway
-  (`supabase.example.com`, your `SUPABASE_PUBLIC_URL`).
+- Two DNS names pointing at the server: the app, which also serves the API under `/api`
+  (`APP_DOMAIN`, e.g. `app.example.com`), and the Supabase gateway (`SUPABASE_DOMAIN`, e.g.
+  `supabase.example.com`; `SUPABASE_PUBLIC_URL=https://SUPABASE_DOMAIN`).
+- The frontend repository checked out next to this one (`FRONTEND_DIR`, default `../jt-code-frontend`).
 - An SMTP provider for Auth emails (sign-up confirmation, password reset).
 
 ## First deployment
@@ -62,29 +64,110 @@ and the app containers do not start:
 docker compose --env-file .env.production logs migrate kafka-setup
 ```
 
-## HTTPS and firewall
+## HTTPS, the edge and the firewall
 
-The API (`127.0.0.1:8000`) and the Supabase gateway (`127.0.0.1:54321`) listen on localhost
-only. Put a reverse proxy on the host in front of both; with Caddy, certificates are automatic:
+Nothing in the stack listens on a public interface except the **edge** (compose profile `edge`). It
+is a Caddy container that obtains and renews TLS certificates and serves two names:
+
+| Name | Serves |
+| --- | --- |
+| `https://APP_DOMAIN` | the SPA (`web` container, built from `FRONTEND_DIR`), and the API under `/api` on the same origin, so no CORS is needed |
+| `https://SUPABASE_DOMAIN` | Supabase Auth and Storage (the gateway's public listener) |
+
+```bash
+# DNS: A/AAAA records for APP_DOMAIN and SUPABASE_DOMAIN -> this server
+# .env.production: APP_DOMAIN, SUPABASE_DOMAIN, SUPABASE_PUBLIC_URL=https://SUPABASE_DOMAIN,
+#                  FRONTEND_URL / SUPABASE_SITE_URL / CORS / CSRF = https://APP_DOMAIN,
+#                  DJANGO_ALLOWED_HOSTS includes APP_DOMAIN, TRUSTED_PROXY_HOPS=1
+make compose-up-prod   # COMPOSE_PROFILES=edge (the template's default) starts web + edge too
+```
+
+`COMPOSE_PROFILES=edge` in `.env.production` turns the profile on for every `docker compose
+--env-file .env.production ...` command. Clear it to run without the edge (see below).
+
+The edge does more than terminate TLS:
+
+* It closes the operator paths to the internet: `/admin`, `/metrics`, `/api/docs`, `/api/schema`,
+  `/rest/v1` and `/auth/v1/admin`. Reach the admin through the SSH tunnel to `127.0.0.1:8000`.
+* It replaces any client-sent `X-Forwarded-For` with the real client address. uvicorn, Django
+  (`TRUSTED_PROXY_HOPS=1`) and the Supabase gateway trust only private-range proxies, so per-IP rate
+  limits cannot be bypassed with a forged header.
+* It sends HSTS. The `web` container adds a strict CSP: scripts come only from the app and Stripe.js,
+  and only `/embed/*` may be framed by other sites.
+
+Firewall: allow SSH, 80 and 443 only.
+
+```bash
+sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw allow 443/udp && sudo ufw enable
+```
+
+Docker-published ports bypass `ufw`. That is why every other port in the compose file is bound to
+`127.0.0.1`. Keep it that way; never publish PostgreSQL (5432), Redis (6379) or Kafka (9092/9644).
+
+**Without the edge profile** (a proxy already installed on the host), point it at the loopback ports
+and serve the SPA yourself:
 
 ```
 # /etc/caddy/Caddyfile
-api.example.com {
-    reverse_proxy 127.0.0.1:8000
+app.example.com {
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8080   # or file_server of the frontend build
+    }
 }
 supabase.example.com {
     reverse_proxy 127.0.0.1:54321
 }
 ```
 
-Allow only SSH and HTTPS from the internet:
+## Load balancing and scaling on one host
+
+| Tier | How to scale | Notes |
+| --- | --- | --- |
+| API | `API_REPLICAS=3` and `API_HOST_PORTS=8000-8002` in `.env.production`, then `up -d` | Caddy discovers the replicas through Docker DNS (`least_conn`). A replica answering 502–504 is skipped for 30 s, and requests are retried on another one. Prometheus scrapes every replica. |
+| uvicorn workers per API container | `WEB_CONCURRENCY` (default 2) | Each worker is a process with its own database connections |
+| Celery | `docker compose --env-file .env.production up -d --scale worker=3` | Queues are shared; `worker-documents` handles document conversion |
+| Kafka consumer | consumer replicas ≤ topic partitions (`KAFKA_TOPIC_PARTITIONS`) | |
+| Database, Redis, Kafka broker | vertical (server size, `*_MAXMEMORY`, `KAFKA_MEMORY`) | One host means one copy of each |
+
+Every app process reaches PostgreSQL through **PgBouncer** in transaction mode (`pgbouncer`
+service), so replicas and workers share `PGBOUNCER_POOL_SIZE` (default 40) server connections
+instead of opening one per request. Raise it with the database's `max_connections` in mind.
+
+## Database roles
+
+| Role | Used by | Can |
+| --- | --- | --- |
+| `postgres` (owner, `SUPABASE_DB_PASSWORD`) | `migrate` only, directly; pgAdmin over the tunnel | DDL, role provisioning |
+| `jt_code_app` (`APP_DB_PASSWORD`, generated) | API, workers, beat, consumer, through PgBouncer | data in `public` (through RLS policies), its own `viz_data` tables, the yes/no session check `public.jt_code_session_active`; **no** access to `auth` (password hashes, refresh tokens), no DDL, no superuser, CREATEROLE or BYPASSRLS |
+
+`migrate` runs `manage.py provision_app_role` after the migrations on every deploy, so new tables get
+their grants and policies automatically. Production validation refuses to start an app container
+that connects as `postgres`.
+
+## Authentication hardening (Supabase Auth and gateway)
+
+The compose defaults are hardened and need no configuration:
+* the password policy matches the sign-up form (8+ characters, a letter and a digit);
+* refresh tokens rotate;
+* sessions expire after 7 days idle and 30 days at most;
+* GoTrue and the gateway apply per-IP rate limits;
+* CORS is allowed only for `SUPABASE_CORS_ORIGINS` (default `SUPABASE_SITE_URL`);
+* Django rejects a signed-out, banned or deleted user's access token within 30 s
+  (`SUPABASE_SESSION_CHECK`).
+
+The optional keys are listed at the end of `.env.production.example`.
+
+After every deploy that changes auth settings, check:
 
 ```bash
-sudo ufw allow OpenSSH && sudo ufw allow 80,443/tcp && sudo ufw enable
+curl -si https://SUPABASE_DOMAIN/rest/v1/ | head -1                      # 404
+curl -si -X OPTIONS -H 'Origin: https://evil.example' https://SUPABASE_DOMAIN/auth/v1/token \
+  | grep -i access-control-allow-origin                                  # nothing
+curl -si https://APP_DOMAIN/admin/ | head -1                             # 404
 ```
-
-Docker-published ports bypass `ufw`, which is why every port in the compose file is bound
-to `127.0.0.1`. Keep it that way; never publish PostgreSQL (5432), Redis (6379) or Kafka (9092/9644).
 
 ## Monitoring and dashboards
 

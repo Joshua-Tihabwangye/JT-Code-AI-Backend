@@ -50,6 +50,16 @@ services:
   supabase-auth:
     depends_on:
       mailpit: {condition: service_healthy}
+    environment:
+      # Same limits mechanism as production, looser numbers: locally every request comes from the
+      # Docker gateway's IP, and the integration/e2e suites sign up many users in a burst.
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: ${SUPABASE_RATE_LIMIT_EMAIL_SENT:-1000}
+      GOTRUE_RATE_LIMIT_VERIFY: ${SUPABASE_RATE_LIMIT_VERIFY:-1000}
+      GOTRUE_RATE_LIMIT_OTP: ${SUPABASE_RATE_LIMIT_OTP:-300}
+
+  supabase-gateway:
+    environment:
+      SUPABASE_GATEWAY_AUTH_RATE: ${SUPABASE_GATEWAY_AUTH_RATE:-600r/m}
 
   mailpit:
     # Catches the sign-up, magic-link and recovery e-mails GoTrue sends; read them in the browser.

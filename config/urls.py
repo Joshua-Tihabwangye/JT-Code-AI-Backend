@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -5,7 +6,6 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from apps.core.metrics import metrics_view
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("metrics", metrics_view, name="prometheus-metrics"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
@@ -30,3 +30,6 @@ urlpatterns = [
     path("api/v1/", include("apps.tools.urls")),
     path("api/v1/", include("apps.orchestration.urls")),
 ]
+
+if settings.DJANGO_ADMIN_ENABLED:
+    urlpatterns.insert(0, path("admin/", admin.site.urls))
