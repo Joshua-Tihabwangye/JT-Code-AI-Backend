@@ -206,6 +206,9 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
             ip=None if ip == "unknown" else ip,
             user_agent=django_request.META.get("HTTP_USER_AGENT", ""),
         )
+        # Membership and role answers are memoized on this request's user object only
+        # (apps.identity.authorization.request_scoped_cache); set after provisioning created any workspace.
+        user._jt_authz_cache = {}
         return user, claims
 
     def authenticate_header(self, request) -> str:

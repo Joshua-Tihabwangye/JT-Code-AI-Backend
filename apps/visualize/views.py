@@ -170,7 +170,10 @@ class CatalogView(APIView):
             "predict": "analysis_runs",
             "assistant": "chat_messages",
         }
-        return Response(payload)
+        response = Response(payload)
+        # Same catalogue for every tenant (chart types, palettes, samples, limits): browser-cacheable.
+        response["Cache-Control"] = "private, max-age=300"
+        return response
 
 
 # --- Datasets: import, samples, preview, insights, organize, export ----------------------------

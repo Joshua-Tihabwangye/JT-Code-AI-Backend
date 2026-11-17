@@ -109,7 +109,7 @@ Gate: BE-gate with `tests/test_compose_stacks.py tests/test_db_roles.py`.
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
 | P6-1 | Memoize `organization_for_request`, membership and role checks on the request object (no cross-request cache, so no invalidation risk) | `apps/identity/authorization.py` | Test: query count drops for a typical endpoint |
-| P6-2 | Public catalog responses (`/billing/plans/`, visualize catalog) send `Cache-Control: public, max-age=300` when unauthenticated | billing/visualize views | Test |
+| P6-2 | Revised during Phase 6 (G1): `/billing/plans/` and `/visualize/catalog/` require sign-in, so "public" caching does not apply. Both payloads are the same for every tenant, so they send `Cache-Control: private, max-age=300` (browser only, never a shared cache) instead of `no-store`. | billing/visualize views | Test |
 | P6-3 | Document the cache inventory and TTLs in `docs/OBSERVABILITY.md` or a new `docs/CACHING.md` | docs | Doc review |
 
 Gate: BE-gate with `tests/test_phase2_authz_tenancy.py tests/test_request_caching.py`.
