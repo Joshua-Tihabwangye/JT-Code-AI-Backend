@@ -68,6 +68,7 @@ def _fernet() -> str:
 # operator's to supply and is reported by ``check`` when a profile requires it.
 GENERATED = {
     "SUPABASE_DB_PASSWORD": _hex,
+    "APP_DB_PASSWORD": _hex,
     "SUPABASE_JWT_SECRET": _hex,
     "SUPABASE_WEBHOOK_SIGNING_SECRET": _hex,
     "REDIS_CACHE_PASSWORD": _hex,

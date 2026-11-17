@@ -51,6 +51,10 @@ case "$role" in
     # Idempotent: applies migrations, verifies private asset storage, registers workflows,
     # provisions Kafka topics, then gates the deploy on Redis/Kafka and Supabase checks.
     python manage.py migrate --noinput
+    # The least-privilege runtime role the API and workers use (through PgBouncer); idempotent.
+    if [ -n "${APP_DB_PASSWORD:-}" ]; then
+      python manage.py provision_app_role
+    fi
     python manage.py configure_asset_storage
     python manage.py ensure_kafka_topics --grow
     case "${DJANGO_SETTINGS_MODULE:-}" in

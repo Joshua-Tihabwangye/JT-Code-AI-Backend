@@ -30,9 +30,11 @@ x-app-env: &app-env
   # Several processes per container (uvicorn and Celery workers) share one metrics registry.
   PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
   # Self-hosted Supabase: the database by service name; Auth/Storage through the gateway.
-  DATABASE_URL: postgresql://postgres:${SUPABASE_DB_PASSWORD:?use make docker-up (local) or make compose-up-prod (server)}@supabase-db:5432/postgres
-  DATABASE_POOLER_MODE: direct
-  DATABASE_CONN_MAX_AGE: "60"
+  # The app connects as the least-privilege role (manage.py provision_app_role) through PgBouncer in
+  # transaction mode; only the migrate container uses the database owner, directly.
+  DATABASE_URL: postgresql://jt_code_app:${APP_DB_PASSWORD:?use make docker-up (local) or make compose-up-prod (server)}@pgbouncer:5432/postgres
+  DATABASE_POOLER_MODE: transaction
+  DATABASE_CONN_MAX_AGE: "0"
   SUPABASE_URL: ${SUPABASE_PUBLIC_URL:?use make docker-up (local) or make compose-up-prod (server)}
   # The gateway's internal listener (8001, never published): the only route to the Auth admin API.
   SUPABASE_INTERNAL_URL: http://supabase-gateway:8001
@@ -97,6 +99,32 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+
+  pgbouncer:
+    # Transaction pooling between every app process and PostgreSQL: under ASGI Django opens a connection
+    # per request, and API replicas x workers would otherwise exhaust max_connections. Session state in
+    # the code is transaction-scoped (SET LOCAL, set_config(..., true), xact advisory locks), and Django
+    # uses client-side parameter binding, so transaction mode is safe.
+    image: edoburu/pgbouncer:v1.25.2-p0
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      DATABASE_URL: postgresql://jt_code_app:${APP_DB_PASSWORD:?use make docker-up (local) or make compose-up-prod (server)}@supabase-db:5432/postgres
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      LISTEN_PORT: "5432"
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_POOL_SIZE:-40}
+      RESERVE_POOL_SIZE: "5"
+      MAX_PREPARED_STATEMENTS: "200"
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-t", "2"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      supabase-db: {condition: service_healthy}
 
   supabase-auth:
     image: supabase/gotrue:v2.196.0
@@ -366,6 +394,11 @@ services:
       <<: *app-env
       KAFKA_SASL_USERNAME: jt-admin
       KAFKA_SASL_PASSWORD: ${KAFKA_ADMIN_PASSWORD}
+      # Migrations (DDL, advisory locks) and role provisioning run as the owner, straight to PostgreSQL.
+      DATABASE_URL: postgresql://postgres:${SUPABASE_DB_PASSWORD:?use make docker-up (local) or make compose-up-prod (server)}@supabase-db:5432/postgres
+      DATABASE_POOLER_MODE: direct
+      DATABASE_CONN_MAX_AGE: "60"
+      DATABASE_ADMIN_CONNECTION: "true"
     depends_on:
       redis-cache: {condition: service_healthy}
       redis-broker: {condition: service_healthy}
@@ -389,6 +422,7 @@ services:
       retries: 5
     depends_on: &after-migrate
       migrate: {condition: service_completed_successfully}
+      pgbouncer: {condition: service_healthy}
 
   worker:
     <<: *app

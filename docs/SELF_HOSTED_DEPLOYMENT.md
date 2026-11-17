@@ -132,7 +132,20 @@ supabase.example.com {
 | Kafka consumer | consumer replicas ≤ topic partitions (`KAFKA_TOPIC_PARTITIONS`) | |
 | Database, Redis, Kafka broker | vertical (server size, `*_MAXMEMORY`, `KAFKA_MEMORY`) | One host means one copy of each |
 
-Check the database connection budget before raising the replica counts (Phase 5 adds PgBouncer).
+Every app process reaches PostgreSQL through **PgBouncer** in transaction mode (`pgbouncer`
+service), so replicas and workers share `PGBOUNCER_POOL_SIZE` (default 40) server connections
+instead of opening one per request. Raise it with the database's `max_connections` in mind.
+
+## Database roles
+
+| Role | Used by | Can |
+| --- | --- | --- |
+| `postgres` (owner, `SUPABASE_DB_PASSWORD`) | `migrate` only, directly; pgAdmin over the tunnel | DDL, role provisioning |
+| `jt_code_app` (`APP_DB_PASSWORD`, generated) | API, workers, beat, consumer, through PgBouncer | data in `public` (through RLS policies), its own `viz_data` tables, the yes/no session check `public.jt_code_session_active`; **no** access to `auth` (password hashes, refresh tokens), no DDL, no superuser, CREATEROLE or BYPASSRLS |
+
+`migrate` runs `manage.py provision_app_role` after the migrations on every deploy, so new tables get
+their grants and policies automatically. Production validation refuses to start an app container
+that connects as `postgres`.
 
 ## Authentication hardening (Supabase Auth and gateway)
 

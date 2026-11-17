@@ -6,7 +6,9 @@ token's ``session_id`` to still exist in ``auth.sessions`` for that user, unexpi
 neither banned nor deleted. GoTrue deletes the session row on sign-out (``scope=global`` removes all of
 them), so revocation takes effect within ``SUPABASE_SESSION_CHECK_TTL_SECONDS``.
 
-The database is the one Django already uses: self-hosted Supabase keeps ``auth`` next to ``public``.
+The database is the one Django already uses: self-hosted Supabase keeps ``auth`` next to ``public``. The
+lookup goes through ``public.jt_code_session_active`` (migration ``identity.0011``), so the least-privilege
+runtime role needs no access to the ``auth`` schema.
 Only positive results are cached; a revoked or unknown session is re-checked on every request.
 The check fails closed: a token without ``session_id`` or a database error rejects the request.
 """
@@ -23,16 +25,8 @@ from django.db import DatabaseError, connection
 logger = logging.getLogger(__name__)
 
 _CACHE_KEY = "jt-code:identity:session-ok:{session_id}:{user_id}"
-_SQL = """
-SELECT 1
-FROM auth.sessions s
-JOIN auth.users u ON u.id = s.user_id
-WHERE s.id = %s AND s.user_id = %s
-  AND (s.not_after IS NULL OR s.not_after > now())
-  AND u.deleted_at IS NULL
-  AND (u.banned_until IS NULL OR u.banned_until <= now())
-LIMIT 1
-"""
+# A SECURITY DEFINER function (identity.0011): the runtime role never reads the auth schema itself.
+_SQL = "SELECT public.jt_code_session_active(%s::uuid, %s::uuid)"
 
 
 class SessionRevoked(Exception):
@@ -50,7 +44,8 @@ def session_is_active(session_id: str, user_id: str) -> bool:
     """True when ``auth.sessions`` still holds this session for an active user."""
     with connection.cursor() as cursor:
         cursor.execute(_SQL, [session_id, user_id])
-        return cursor.fetchone() is not None
+        row = cursor.fetchone()
+        return bool(row and row[0])
 
 
 def ensure_session_active(claims: dict) -> None:
