@@ -104,7 +104,7 @@ Gate: BE-gate with `tests/test_compose_stacks.py tests/test_edge_stack.py`; FE-g
 
 Gate: BE-gate with `tests/test_compose_stacks.py tests/test_db_roles.py`.
 
-## Phase 6: Request path and caching (F15 follow-up)
+## Phase 6: Request path and caching (F15 follow-up) ☑ (pytest gate ⚠)
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -353,3 +353,25 @@ Gate:
 2. The app works (sign-in, chat, a dashboard).
 3. In pgAdmin as `postgres`: `select usename, count(*) from pg_stat_activity group by 1`. The app
    sessions are `jt_code_app`, and only a few server connections stay open.
+
+### 2026-11-17: Phase 6 ☑ (pytest gate ⚠)
+Implemented by the operator in `eef5640` ("Improved the backend"); reviewed and closed out here.
+- P6-1: `apps/identity/authorization.py` memoizes the organization ids, the primary organization, the
+  `X-Organization-ID` lookup and role checks in a dict that `SupabaseJWTAuthentication` attaches to the
+  user object it builds for one request (`request_scoped_cache`). Users built any other way (Celery,
+  tests, `force_authenticate`) are never memoized. A malformed or unknown organization id is still
+  denied.
+- P6-2 (revised, G1): `/billing/plans/` and `/visualize/catalog/` require sign-in, so they send
+  `Cache-Control: private, max-age=300`. `apps/core/edge.py` uses `setdefault` for `no-store`, so the
+  view's header is kept and every other authenticated response stays `no-store`.
+- P6-3: `docs/CACHING.md` lists every cache layer, key, lifetime and why it is safe.
+
+Review notes:
+- No view changes memberships and then re-checks tenancy in the same request (members PATCH/DELETE and
+  invite accept write after their last check), so the per-request memo cannot go stale.
+
+Gate (run in a cloud workspace without the project's Python 3.14 environment or Django):
+- `ruff check .`: all checks passed; `ruff format --check .`: 474 files already formatted.
+- ⚠ Not run here: `makemigrations --check` and
+  `pytest tests/test_phase2_authz_tenancy.py tests/test_request_caching.py -n 4` (Django and psycopg are
+  not installed and package installs are blocked). Run them locally; Phase 6 adds no migrations.
