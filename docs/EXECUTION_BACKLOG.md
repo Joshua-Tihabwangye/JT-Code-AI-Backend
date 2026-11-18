@@ -137,6 +137,22 @@ Gate: BE-gate (`tests/test_identity_auth.py tests/test_phase18_verification.py`)
 
 Gate: `bash -n` + shellcheck (when available) and BE-gate (`tests/test_compose_stacks.py`).
 
+## Phase 9: Review close-out of Phases 1–8 (added 2026-11-18, G1)
+
+Reason: a review of every completed phase against the audit. Phases 6–8 were committed from a workspace
+without the project's Python or `node_modules`, so their gates never ran; running them found the FE
+failures below. The review also found the defects in P9-1 and P9-2.
+
+| ID | Task | Files | Acceptance |
+| --- | --- | --- | --- |
+| P9-1 | **Secret comparisons accept any header text.** `hmac/secrets.compare_digest` raises `TypeError` on non-ASCII `str`, so a crafted header turns the Cloudflare origin lock (every request), the metrics token, the Supabase webhook bearer, signed requests and inbound webhooks into a 500 instead of a rejection. One helper `apps.core.signing.constant_time_equals` compares UTF-8 bytes; every call site uses it. | `apps/core/signing.py`, `edge.py`, `metrics.py`, `identity/webhooks.py`, `integrations/views.py`, `assets/views.py`, `identity/views.py` | Tests: non-ASCII secrets → 401/403, never 500; the right secret still passes |
+| P9-2 | **Invite accept and revoke lock the invite row** (`select_for_update` in one transaction), so an invite revoked or accepted concurrently cannot be accepted again | `apps/identity/views.py` | Tests: a revoked or accepted invite → 404 |
+| P9-3 | `test_gateway_hardening` honours `JT_FRONTEND_DIR` like `test_edge_stack` (the frontend may be checked out under another name; the cross-check skipped silently) | test | Runs with `JT_FRONTEND_DIR` |
+| P9-4 | FE gate fixes for Phase 7: type-only import in `workspaceHeader.test.ts` (lint error); `AcceptInvitePage.test.tsx` leaked a mock call between tests (fails in order) | FE tests | FE-gate green |
+| P9-5 | ⚠ Run the database-backed pytest gates of Phases 6–8 (they need `TEST_DATABASE_URL`) | — | Operator, see the progress log |
+
+Gate: BE-gate with `tests/test_core_secure_compare.py tests/test_team_management.py tests/test_gateway_hardening.py tests/test_edge_stack.py tests/test_compose_stacks.py tests/test_backup_script.py`; FE-gate + build.
+
 ---
 
 ## Progress log
@@ -456,3 +472,64 @@ Verification:
 3. Set `BACKUP_RSYNC_TARGET` and install the two cron lines from SELF_HOSTED_DEPLOYMENT.md; confirm the
    copy arrives off-host.
 4. Once per quarter: the full disaster-restore drill on a spare server; record RTO/RPO.
+
+### 2026-11-18: Phase 9 ☑ (database-backed pytest ⚠)
+Review of Phases 0–8 against the audit, in a workspace with the project's `.venv` (Python 3.14.4) and
+the frontend's `node_modules`. Local `Working_256` was fast-forwarded to the Phase 6–8 commits
+(`df381d8`, `fcfc7bd`, `91dc131`; no history rewritten), then reviewed.
+
+Review result, per phase:
+- 1: provisioning fills empty fields only; the webhook reads both payload shapes and never blanks or
+  reactivates; consents are recorded once. No change.
+- 2: required claims and audience, 8 KiB cap, failure lockout, session check through the
+  `SECURITY DEFINER` function (its default `anon`/`authenticated` grants are revoked by
+  `governance.0011`), uvicorn trusts only private proxies, hashed invite tokens. Defect: P9-1.
+- 3: the public gateway listener closes `/rest/v1` and `/auth/v1/admin`, always overwrites
+  `X-JT-Client-IP`, and has the CORS allowlist and per-IP `limit_req`. No change.
+- 4: Caddy closes `/admin`, `/metrics` and both docs/schema paths; the SPA image has a strict CSP and
+  excludes `.env*`. Note: `FRONTEND_DIR` defaults to `../jt-code-frontend`; on this machine the
+  checkout is `../JT-Code-AI-frontend`, so set `FRONTEND_DIR` in `.env.production`.
+- 5: the runtime role has no DDL and no `auth` access and its attributes are verified; PgBouncer is in
+  transaction mode and `migrate` connects directly. No change.
+- 6: the memo lives on the per-request user only; `setdefault` keeps `private, max-age=300`. No change.
+- 7: the team API requires an admin, protects the owner, accepts with the token digest plus the matching
+  e-mail, and never returns the token again. Defect: P9-2 (accept/revoke race). The FE gate had never run:
+  P9-4.
+- 8: the backup script verifies the dump before it is kept, writes checksums, uses `umask 077`, has a dry
+  run and drops the scratch database on exit. No change.
+
+Changes:
+- P9-1: `apps.core.signing.constant_time_equals` (UTF-8 bytes; empty or missing is unequal), used by the
+  Cloudflare origin lock, the metrics token, the Supabase webhook bearer, signed requests, inbound
+  webhooks, upload intents and invite accept. Run against the old code, the new tests fail with
+  `TypeError` (HTTP 500) at `edge.py:48`, `metrics.py:297` and `webhooks.py:42`.
+- P9-2: invite accept (`select_for_update(of=("self",))`) and revoke run in one transaction with the
+  row locked.
+- P9-3: `test_gateway_hardening` reads `JT_FRONTEND_DIR`.
+- P9-4 (FE): `type AxiosHeaders` import; `AcceptInvitePage.test.tsx` clears the shared workspace mock
+  before each test.
+
+Gate:
+- ruff check + format: ok (477 files). `makemigrations --check`: no changes.
+- `compose_config_check.py`: production, production+edge, local ok. `bash -n scripts/backup.sh` ok.
+- pytest without a database (`JT_FRONTEND_DIR=../JT-Code-AI-frontend`, `-n 4`): 58 passed, 2 skipped
+  (no `caddy`, no `shellcheck` binary): `test_core_secure_compare` [12 new], `test_gateway_hardening`,
+  `test_edge_stack`, `test_compose_stacks`, `test_backup_script` (its end-to-end run against a throwaway
+  cluster passed).
+- Contract snapshot regenerated from `../JT-Code-AI-frontend`: 164 calls, identical to the stored file.
+- FE: typecheck ok; lint 0 errors (62 pre-existing warnings); 200/200 tests; `npm run build` ok.
+- ⚠ Not run (P9-5): every database-backed test. No `TEST_DATABASE_URL` login is available in this
+  workspace (no credentials for the host PostgreSQL, no `.env`/`.env.docker`, and pgvector is not
+  installed on the host). That covers `test_request_caching`, `test_phase2_authz_tenancy`,
+  `test_team_management` [2 new], `test_identity_auth`, `test_auth_hardening`,
+  `test_security_hardening` and `test_phase18_verification`.
+
+⚠ Operator:
+1. Provide a test database: a PostgreSQL user with CREATEDB on a server that has pgvector, as
+   `TEST_DATABASE_URL` in `.env`. Then run
+   `.venv/bin/pytest --create-db -n 4 tests/test_request_caching.py tests/test_phase2_authz_tenancy.py tests/test_team_management.py tests/test_identity_auth.py tests/test_auth_hardening.py tests/test_security_hardening.py tests/test_phase18_verification.py tests/test_core_secure_compare.py`,
+   and the full suite once.
+2. The Docker stack running on this machine is a pre-Phase-2 image (uvicorn `--forwarded-allow-ips *`),
+   and this checkout has no `.env.docker`. `make docker-up` creates one with new secrets; if the old
+   database volume is kept, run `make docker-sync-db-passwords`. Then work through the live checks of
+   Phases 2–8.

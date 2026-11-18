@@ -1,6 +1,7 @@
 import secrets
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
@@ -10,6 +11,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.signing import constant_time_equals
 from apps.identity.authorization import (
     organization_for_request,
     primary_organization_for_user,
@@ -198,40 +200,48 @@ class OrganizationInviteAcceptView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request: Request, invite_id) -> Response:
-        invite = OrganizationInvite.objects.select_related("organization").filter(id=invite_id).first()
-        if invite is None or invite.status != OrganizationInvite.Status.PENDING:
-            return Response(
-                {"detail": "Invite not found or no longer valid."}, status=status.HTTP_404_NOT_FOUND
+        with transaction.atomic():
+            # Locked for the whole accept: a concurrent revoke or a second accept of the same invite
+            # waits here and then sees that the invite is no longer pending.
+            invite = (
+                OrganizationInvite.objects.select_for_update(of=("self",))
+                .select_related("organization")
+                .filter(id=invite_id)
+                .first()
             )
-        if invite.expires_at and invite.expires_at <= timezone.now():
-            invite.status = OrganizationInvite.Status.EXPIRED
+            if invite is None or invite.status != OrganizationInvite.Status.PENDING:
+                return Response(
+                    {"detail": "Invite not found or no longer valid."}, status=status.HTTP_404_NOT_FOUND
+                )
+            if invite.expires_at and invite.expires_at <= timezone.now():
+                invite.status = OrganizationInvite.Status.EXPIRED
+                invite.save(update_fields=["status"])
+                return Response({"detail": "Invite has expired."}, status=status.HTTP_410_GONE)
+            # The invite token (shared by the inviting admin) proves possession of the invite;
+            # the email (from the verified Supabase session) proves it is the intended person.
+            token = request.data.get("token") if isinstance(request.data, dict) else None
+            if not isinstance(token, str) or not constant_time_equals(hash_invite_token(token), invite.token):
+                raise PermissionDenied("A valid invite token is required.")
+            if not request.user.email or request.user.email.lower() != invite.email.lower():
+                raise PermissionDenied("This invite was issued to a different email address.")
+            membership, _ = UserOrganization.objects.select_related("organization").get_or_create(
+                user=request.user, organization=invite.organization
+            )
+            role, _ = Role.objects.get_or_create(name=invite.role)
+            UserRole.objects.filter(user=request.user, organization=invite.organization).exclude(
+                role=role
+            ).delete()
+            UserRole.objects.get_or_create(user=request.user, organization=invite.organization, role=role)
+            invite.status = OrganizationInvite.Status.ACCEPTED
             invite.save(update_fields=["status"])
-            return Response({"detail": "Invite has expired."}, status=status.HTTP_410_GONE)
-        # The invite token (shared by the inviting admin) proves possession of the invite;
-        # the email (from the verified Supabase session) proves it is the intended person.
-        token = request.data.get("token") if isinstance(request.data, dict) else None
-        if not isinstance(token, str) or not secrets.compare_digest(hash_invite_token(token), invite.token):
-            raise PermissionDenied("A valid invite token is required.")
-        if not request.user.email or request.user.email.lower() != invite.email.lower():
-            raise PermissionDenied("This invite was issued to a different email address.")
-        membership, _ = UserOrganization.objects.select_related("organization").get_or_create(
-            user=request.user, organization=invite.organization
-        )
-        role, _ = Role.objects.get_or_create(name=invite.role)
-        UserRole.objects.filter(user=request.user, organization=invite.organization).exclude(
-            role=role
-        ).delete()
-        UserRole.objects.get_or_create(user=request.user, organization=invite.organization, role=role)
-        invite.status = OrganizationInvite.Status.ACCEPTED
-        invite.save(update_fields=["status"])
-        # The organization lets the client switch to the workspace it just joined (X-Organization-ID).
-        organization = invite.organization
-        return Response(
-            {
-                **_member_payload(membership, role.name),
-                "organization": {"id": str(organization.id), "name": organization.name},
-            }
-        )
+            # The organization lets the client switch to the workspace it just joined (X-Organization-ID).
+            organization = invite.organization
+            return Response(
+                {
+                    **_member_payload(membership, role.name),
+                    "organization": {"id": str(organization.id), "name": organization.name},
+                }
+            )
 
 
 class OrganizationInviteDetailView(APIView):
@@ -241,13 +251,16 @@ class OrganizationInviteDetailView(APIView):
 
     def delete(self, request: Request, invite_id) -> Response:
         organization = _admin_organization(request)
-        invite = OrganizationInvite.objects.filter(
-            id=invite_id, organization=organization, status=OrganizationInvite.Status.PENDING
-        ).first()
-        if invite is None:
-            return Response({"detail": "Invite not found."}, status=status.HTTP_404_NOT_FOUND)
-        invite.status = OrganizationInvite.Status.REVOKED
-        invite.save(update_fields=["status"])
+        with transaction.atomic():
+            invite = (
+                OrganizationInvite.objects.select_for_update()
+                .filter(id=invite_id, organization=organization, status=OrganizationInvite.Status.PENDING)
+                .first()
+            )
+            if invite is None:
+                return Response({"detail": "Invite not found."}, status=status.HTTP_404_NOT_FOUND)
+            invite.status = OrganizationInvite.Status.REVOKED
+            invite.save(update_fields=["status"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

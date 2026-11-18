@@ -6,6 +6,7 @@ nginx is not installed on developer machines, so the gateway is checked statical
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 GATEWAY = ROOT / "docker/supabase/gateway"
+# The frontend checkout (same variable as tests/test_edge_stack.py); it may live under another name.
+FRONTEND = Path(os.environ.get("JT_FRONTEND_DIR", ROOT.parent / "jt-code-frontend"))
 TEMPLATE = (GATEWAY / "default.conf.template").read_text()
 
 
@@ -47,7 +50,7 @@ def test_gotrue_enforces_the_signup_form_password_policy():
 
 
 def test_frontend_password_rules_match_the_server_when_the_frontend_is_present():
-    schema = ROOT.parent / "jt-code-frontend/src/features/auth/signup/schema.ts"
+    schema = FRONTEND / "src/features/auth/signup/schema.ts"
     if not schema.exists():
         pytest.skip("frontend repository not checked out next to the backend")
     text = schema.read_text()

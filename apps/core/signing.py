@@ -62,6 +62,20 @@ def sign_request(
     }
 
 
+def constant_time_equals(supplied: str | bytes | None, expected: str | bytes | None) -> bool:
+    """Constant-time comparison of a client-supplied secret with the expected one.
+
+    ``hmac.compare_digest`` raises ``TypeError`` for ``str`` values with non-ASCII characters, and
+    header values are arbitrary latin-1 text, so a crafted header would become a server error instead
+    of a rejection. Both sides are compared as UTF-8 bytes; anything missing or empty is unequal.
+    """
+    if not supplied or not expected:
+        return False
+    given = supplied.encode("utf-8", "surrogateescape") if isinstance(supplied, str) else supplied
+    wanted = expected.encode("utf-8", "surrogateescape") if isinstance(expected, str) else expected
+    return hmac.compare_digest(given, wanted)
+
+
 def _signatures(header: str) -> list[str]:
     values = []
     for part in header.split(","):
@@ -97,7 +111,7 @@ def verify_request(
     if abs(current - int(timestamp)) > tolerance_seconds:
         raise SignatureError("stale", "Request timestamp is outside the allowed window.")
     expected = [compute_signature(key, timestamp, nonce, body) for key in keys]
-    if not any(hmac.compare_digest(given, wanted) for given in supplied for wanted in expected):
+    if not any(constant_time_equals(given, wanted) for given in supplied for wanted in expected):
         raise SignatureError("invalid", "Request signature is invalid.")
     if not cache.add(f"signed-nonce:{namespace}:{nonce}", "1", timeout=tolerance_seconds * 2):
         raise SignatureError("replayed", "Request was already received.")

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import re
-import secrets
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -37,6 +36,8 @@ from prometheus_client import (
 )
 from prometheus_client.core import GaugeMetricFamily, Metric
 from prometheus_client.registry import Collector
+
+from apps.core.signing import constant_time_equals
 
 _LATENCY_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60)
 _LONG_BUCKETS = (0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600)
@@ -294,7 +295,7 @@ def metrics_view(request: HttpRequest) -> HttpResponse:
     token = getattr(settings, "METRICS_AUTH_TOKEN", "")
     if token:
         scheme, _, supplied = request.headers.get("Authorization", "").partition(" ")
-        if scheme.lower() != "bearer" or not secrets.compare_digest(supplied.strip(), token):
+        if scheme.lower() != "bearer" or not constant_time_equals(supplied.strip(), token):
             SECURITY_EVENTS.labels("metrics_unauthorized").inc()
             return HttpResponse("Unauthorized\n", status=401, content_type="text/plain")
     elif not settings.DEBUG:

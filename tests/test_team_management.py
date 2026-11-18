@@ -232,3 +232,31 @@ def test_workspace_list_never_shows_other_users_workspaces(owner, team):
     stranger = User.objects.create(username="stranger", supabase_user_id="sb-stranger", email="s@example.com")
     assert _client(stranger).get(reverse("organization-list")).json() == {"organizations": []}
     assert APIClient().get(reverse("organization-list")).status_code in {401, 403}
+
+
+# P9-2 the invite row is locked while it is accepted ------------------------------------------------
+
+
+def test_an_accepted_invite_cannot_be_accepted_again(owner, team):
+    created = _client(owner, team).post(
+        reverse("organization-members"), {"email": "guest@example.com", "role": "viewer"}
+    )
+    url = reverse("organization-invite-accept", args=[created.json()["id"]])
+    guest = User.objects.create(username="guest", supabase_user_id="sb-guest", email="guest@example.com")
+    body = {"token": created.json()["token"]}
+
+    assert _client(guest).post(url, body, format="json").status_code == 200
+    # A replay of the same link (or a request that waited on the row lock) finds it no longer pending.
+    assert _client(guest).post(url, body, format="json").status_code == 404
+    assert UserRole.objects.filter(user=guest, organization=team).count() == 1
+
+
+def test_a_non_ascii_invite_token_is_refused_not_a_server_error(owner, team):
+    created = _client(owner, team).post(
+        reverse("organization-members"), {"email": "guest@example.com", "role": "viewer"}
+    )
+    guest = User.objects.create(username="guest", supabase_user_id="sb-guest", email="guest@example.com")
+    response = _client(guest).post(
+        reverse("organization-invite-accept", args=[created.json()["id"]]), {"token": "tökén"}, format="json"
+    )
+    assert response.status_code == 403
