@@ -24,11 +24,12 @@ CORP, and ``Cache-Control: no-store`` on authenticated responses.
 from __future__ import annotations
 
 import ipaddress
-import secrets
 from collections.abc import Callable
 
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, JsonResponse
+
+from apps.core.signing import constant_time_equals
 
 ORIGIN_AUTH_HEADER = "X-JT-Origin-Auth"
 _EXEMPT_ORIGIN_PATHS = ("/api/v1/health/",)
@@ -45,7 +46,7 @@ def _valid_ip(value: str) -> str | None:
 def via_cloudflare(request: HttpRequest) -> bool:
     secret = getattr(settings, "CLOUDFLARE_ORIGIN_SECRET", "")
     supplied = request.headers.get(ORIGIN_AUTH_HEADER, "")
-    return bool(secret and supplied and secrets.compare_digest(supplied, secret))
+    return constant_time_equals(supplied, secret)
 
 
 def client_ip(request: HttpRequest) -> str:

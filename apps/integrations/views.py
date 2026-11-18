@@ -18,6 +18,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.core.signing import constant_time_equals
 from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
 from apps.identity.authorization import (
@@ -236,7 +237,7 @@ def verify_inbound_webhook_signature(request: Request, secret: str) -> Response 
             {"detail": "Webhook timestamp outside tolerance"}, status=status.HTTP_401_UNAUTHORIZED
         )
     expected = inbound_webhook_signature(secret, timestamp, request.body)
-    if not hmac.compare_digest(signature, expected):
+    if not constant_time_equals(signature, expected):
         return Response({"detail": "Invalid signature"}, status=status.HTTP_401_UNAUTHORIZED)
     return None
 

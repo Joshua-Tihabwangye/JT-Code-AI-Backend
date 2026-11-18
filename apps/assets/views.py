@@ -51,6 +51,7 @@ from apps.assets.supabase_storage import (
     user_upload_folder,
     validate_upload_type,
 )
+from apps.core.signing import constant_time_equals
 from apps.core.throttling import BurstThrottle
 from apps.events.outbox import add_outbox_event
 from apps.identity.authorization import (
@@ -241,7 +242,7 @@ class CompleteUploadView(APIView):
         ).first()
         if intent is None:
             return Response({"detail": "Upload intent not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not secrets.compare_digest(intent.token, serializer.validated_data["uploadToken"]):
+        if not constant_time_equals(serializer.validated_data["uploadToken"], intent.token):
             return Response({"detail": "Upload intent token is invalid."}, status=status.HTTP_403_FORBIDDEN)
         if intent.status == UploadIntent.Status.COMPLETED:
             asset = Asset.objects.filter(storage_object_id=intent.storage_object_key).first()

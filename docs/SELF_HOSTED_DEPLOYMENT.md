@@ -64,6 +64,25 @@ and the app containers do not start:
 docker compose --env-file .env.production logs migrate kafka-setup
 ```
 
+## Day-0 checklist (before the first real user)
+
+Work through it top to bottom; each line names the key in `.env.production` or the command.
+
+| # | Step | Where | Done when |
+| --- | --- | --- | --- |
+| 1 | DNS: A (and AAAA) records for `APP_DOMAIN` and `SUPABASE_DOMAIN` point at the server | DNS provider | `dig +short APP_DOMAIN` returns the server |
+| 2 | Firewall: SSH, 80/tcp, 443/tcp, 443/udp only | `ufw` (see below) | `sudo ufw status` |
+| 3 | `make prod-env`, then the domains: `APP_DOMAIN`, `SUPABASE_DOMAIN`, `SUPABASE_PUBLIC_URL=https://SUPABASE_DOMAIN`, `FRONTEND_URL`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS` = `https://APP_DOMAIN`, `DJANGO_ALLOWED_HOSTS` includes `APP_DOMAIN`, `TRUSTED_PROXY_HOPS=1` | `.env.production` | `make prod-check` passes |
+| 4 | Auth URLs: `SUPABASE_SITE_URL=https://APP_DOMAIN`, `SUPABASE_REDIRECT_URLS=https://APP_DOMAIN/**`, `SUPABASE_MAILER_AUTOCONFIRM=false` | `.env.production` | Confirmation and reset e-mails link to `APP_DOMAIN` |
+| 5 | SMTP for Auth e-mails: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME` | `.env.production` | A test sign-up receives its confirmation e-mail |
+| 6 | AI provider: `GEMINI_API_KEY` (and `OPENAI_API_KEY` if used) | `.env.production` | A chat message gets a model reply |
+| 7 | Stripe live keys: `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`; in the Stripe dashboard add the webhook `https://APP_DOMAIN/api/v1/webhooks/stripe/` and copy its signing secret to `STRIPE_WEBHOOK_SECRET` | `.env.production`, Stripe | Stripe's "Send test webhook" gets HTTP 200 |
+| 8 | Error tracking: `SENTRY_DSN`, `SENTRY_ENVIRONMENT=production`, `FRONTEND_SENTRY_DSN` | `.env.production` | An event shows in Sentry |
+| 9 | Frontend checked out next to the backend (`FRONTEND_DIR`) on the release you deploy | server | `ls $FRONTEND_DIR/package.json` |
+| 10 | `make compose-up-prod`; `make compose-ps-prod` shows every service healthy and `migrate` exited 0 | server | `https://APP_DOMAIN` loads; `https://APP_DOMAIN/admin` is 404 |
+| 11 | First backup and restore check (see [Backups](#backups-and-the-restore-drill)); install the cron lines | server | `make prod-restore-check` passes; `crontab -l` lists both lines |
+| 12 | `.env.production` copied to a password manager | operator | Stored outside the server |
+
 ## HTTPS, the edge and the firewall
 
 Nothing in the stack listens on a public interface except the **edge** (compose profile `edge`). It
@@ -210,42 +229,92 @@ docker compose --env-file .env.production exec consumer python -c \
   "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9808/metrics').read().decode())" | grep jt_kafka
 ```
 
-## Updates
+## Day-2 operations
+
+### Updates
 
 ```bash
-git pull
-docker compose --env-file .env.production up -d --build
+make prod-backup                       # a restore point before every release
+git pull && (cd "$FRONTEND_DIR" && git pull)
+make compose-up-prod                   # preflight, build, migrate, then the new containers
+make compose-ps-prod
 ```
 
-`migrate` runs again on every `up` (migrations, topics, verification) before the new
-containers start.
+`migrate` runs again on every `up` (migrations, topics, runtime role, verification) before the new
+containers start. If it exits non-zero, the app containers do not start: read
+`make compose-logs-prod SERVICE=migrate`, fix the cause, or roll back with `git checkout <previous tag>`
+and `make compose-up-prod` (restore the pre-release backup only if a migration already changed data).
 
-## Backups and recovery
+### Scaling
 
-- **Database (required):** the database now lives in the `supabase-db-data` volume, and
-  nothing else backs it up. Take a nightly logical dump and copy it **off the server**:
+See [Load balancing and scaling on one host](#load-balancing-and-scaling-on-one-host). Change
+`API_REPLICAS` / `API_HOST_PORTS` or `--scale worker=N`, then `make compose-up-prod`.
 
-  ```bash
-  # crontab -e (on the server), 02:30 every night:
-  30 2 * * * cd /path/to/jt-code-backend && docker compose --env-file .env.production exec -T supabase-db \
-    pg_dump -U postgres -Fc postgres > backups/jt-code-$(date +\%F).dump
-  ```
+### Rotating secrets
 
-  Restore into a fresh database with `pg_restore -U postgres -d postgres --clean <file>`
-  (`docker compose --env-file .env.production exec -T supabase-db ...` with the dump on stdin).
-  Test a restore regularly; an untested backup is not a backup.
-- **Uploaded files (required):** the `supabase-storage-data` volume holds every asset. Back it
-  up the same way as the Kafka volume below (stop `supabase-storage` briefly, then `tar`).
-- **Redis broker and Kafka volumes** (`redis-broker-data`, `kafka-data`): optional. Queued
-  jobs and chat requests are re-dispatched from PostgreSQL by beat sweeps, and unpublished
-  events stay in the outbox. To snapshot them anyway, stop the service briefly:
+`make prod-env` never rotates an existing value, because the database volume keeps the passwords it
+was initialised with. Rotate deliberately, one secret at a time, after a backup:
 
-  ```bash
-  docker compose --env-file .env.production stop kafka
-  docker run --rm -v jt-code-backend_kafka-data:/data -v "$PWD":/backup alpine \
-    tar czf /backup/kafka-data-$(date +%F).tgz -C /data .
-  docker compose --env-file .env.production start kafka
-  ```
+| Secret | How |
+| --- | --- |
+| Stripe, SMTP, Gemini, Sentry, n8n keys | Change the value in `.env.production`, then `make compose-up-prod` |
+| Kafka passwords | Same; `kafka-setup` updates the SCRAM user on start-up |
+| `SUPABASE_DB_PASSWORD` | Change it, run `ALTER ROLE` for each Supabase role inside `supabase-db` (the same statements `scripts/sync_db_passwords.sh` runs for the local stack), then `make compose-up-prod` |
+| `APP_DB_PASSWORD` | Change it and `make compose-up-prod`: `migrate` re-applies it to `jt_code_app` (`provision_app_role`) |
+| `SUPABASE_JWT_SECRET` | Signs everyone out and changes the anon/service keys: regenerate them (`scripts/generate_supabase_keys.py`), rebuild `web` (the anon key is baked into the SPA) and `make compose-up-prod` |
 
-- **Secrets:** keep a copy of `.env.production` in a password manager. Rotating a Kafka
-  password: change it in `.env.production` and run `make compose-up-prod` (`kafka-setup` updates the user).
+### Backups and the restore drill
+
+`scripts/backup.sh` (`make prod-backup`) writes to `backups/` (mode 700; ignored by git):
+
+* `jt-code-db-<UTC>.dump`: `pg_dump -Fc` of the whole database (Django, `auth`, `storage`,
+  `viz_data`), taken inside `supabase-db` as `supabase_admin` and checked with `pg_restore --list`
+  before it is kept. It contains password hashes and every tenant's data: treat it as a secret.
+* `jt-code-storage-<UTC>.tar.gz`: the `supabase-storage-data` volume, read through a temporary
+  read-only `alpine` container (the storage service keeps running). The database is dumped first,
+  so every file the dump refers to is already on disk.
+* a `.sha256` next to each file.
+
+Settings: `BACKUP_DIR` (default `backups/`), `BACKUP_KEEP_DAYS` (default 14), and
+`BACKUP_RSYNC_TARGET=user@host:/path` for the copy **off the server** (one host means one disk;
+a backup on the same disk is not a backup). `BACKUP_DRY_RUN=1` prints the commands only.
+
+`make prod-restore-check` restores the newest dump into a scratch database next to the live one
+(`jt_restore_check_<UTC>`, dropped afterwards, even on failure) and compares row counts: Django's
+migration history must match the live database exactly and `identity_user`,
+`identity_organization` and `auth.users` must not be empty. It needs free disk space for one more
+copy of the database.
+
+```bash
+# crontab -e (on the server): backup at 02:30, restore check on Sundays at 04:00
+30 2 * * * cd /path/to/jt-code-backend && BACKUP_RSYNC_TARGET=backup@vault:/srv/jt-code make prod-backup >> backups/backup.log 2>&1
+0 4 * * 0 cd /path/to/jt-code-backend && make prod-restore-check >> backups/restore-check.log 2>&1
+```
+
+Check `backups/backup.log` and the off-host copy weekly. Run the full drill below every quarter and
+record the time it took (RTO) against the age of the backup used (RPO); targets are in
+[SLOs.md](SLOs.md) and [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md).
+
+### Restoring after a disaster
+
+Restoring over the live database **replaces all data written since the backup**. Use the newest
+backup that passes `make prod-restore-check`, and keep a copy of the broken state first.
+
+```bash
+make prod-backup                                        # keep the broken state, just in case
+docker compose --env-file .env.production stop api worker worker-documents beat consumer web edge
+# Database: recreate it from the dump (inside supabase-db, as supabase_admin over the local socket)
+docker compose --env-file .env.production exec -T -u postgres supabase-db \
+  pg_restore -U supabase_admin -d postgres --clean --if-exists < backups/jt-code-db-<UTC>.dump
+# Files: replace the storage volume's contents
+docker compose --env-file .env.production stop supabase-storage
+docker run --rm --volumes-from "$(docker compose --env-file .env.production ps -aq supabase-storage)" \
+  -v "$PWD/backups":/backup:ro alpine:3.22 \
+  sh -c 'rm -rf /var/lib/storage/* && tar -C /var/lib/storage -xzf /backup/jt-code-storage-<UTC>.tar.gz'
+make compose-up-prod                                    # migrate re-checks roles, topics and grants
+```
+
+Then sign in, open a chat, a dashboard and an uploaded file. Redis and Kafka need no restore: jobs
+and chat requests are re-dispatched from PostgreSQL by beat sweeps, and unpublished events stay in
+the outbox. A Redis broker or Kafka volume can still be snapshotted by stopping the service and
+`tar`-ing the volume the same way.

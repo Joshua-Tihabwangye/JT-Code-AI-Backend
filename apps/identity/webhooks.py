@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import json
 
 from django.conf import settings
@@ -10,6 +9,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
+from apps.core.signing import constant_time_equals
 from apps.identity.models import User
 from apps.identity.provisioning import fill_empty_profile
 
@@ -39,7 +39,7 @@ def _authenticated(request: HttpRequest) -> bool:
             return False
         return True
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
-    return scheme.lower() == "bearer" and bool(token) and hmac.compare_digest(token, secret)
+    return scheme.lower() == "bearer" and constant_time_equals(token, secret)
 
 
 def _suspended(record: dict) -> bool:

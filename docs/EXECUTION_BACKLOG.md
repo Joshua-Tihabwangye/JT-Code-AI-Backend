@@ -104,7 +104,7 @@ Gate: BE-gate with `tests/test_compose_stacks.py tests/test_edge_stack.py`; FE-g
 
 Gate: BE-gate with `tests/test_compose_stacks.py tests/test_db_roles.py`.
 
-## Phase 6: Request path and caching (F15 follow-up)
+## Phase 6: Request path and caching (F15 follow-up) ☑ (pytest gate ⚠)
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -114,7 +114,7 @@ Gate: BE-gate with `tests/test_compose_stacks.py tests/test_db_roles.py`.
 
 Gate: BE-gate with `tests/test_phase2_authz_tenancy.py tests/test_request_caching.py`.
 
-## Phase 7: Frontend ↔ backend completion
+## Phase 7: Frontend ↔ backend completion ☑ (pytest and npm gates ⚠)
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -122,10 +122,12 @@ Gate: BE-gate with `tests/test_phase2_authz_tenancy.py tests/test_request_cachin
 | P7-2 | **Accept-invite page** `/invite/:inviteId` (signs in first, then `POST …/accept/`) | FE route + page | FE test |
 | P7-3 | Members payload includes name and `isOwner` | `apps/identity/views.py` | Test |
 | P7-4 | Regenerate `tests/fixtures/frontend_api_contract.json` | BE | contract test green |
+| P7-5 | (added during Phase 7, G1) **Workspace switcher.** The SPA never sent `X-Organization-ID`, so an invited user who accepted kept working in their own workspace and could never reach the team. `GET /organizations/` lists the user's workspaces with role, owner and default flags; the SPA remembers the choice (`src/lib/workspace.ts`), sends the header on every API call, forgets a workspace the user lost (403) and retries once; the Team tab switches and the accept page switches to the joined workspace. | `apps/identity/views.py`, `urls.py`; FE `src/lib/workspace.ts`, `http.ts`, data layer | Tests: list shows only own memberships with roles; FE header sent, stale workspace retried once |
+| P7-6 | (added during Phase 7, G1) **Pending invites and revoke.** The FE repository (operator commit `6957dbe`) already called `DELETE /organizations/invites/{id}/` and read `invites` from the members list, which the backend did not serve. Members GET lists pending, unexpired invites (never the token); DELETE revokes (admins of that workspace only, status `revoked`); a second pending invite for the same e-mail is refused (409). | `apps/identity/views.py`, `models.py` (status value only, no migration) | Tests: revoked link → 404 on accept; non-admin 403; other workspace's admin 404 |
 
 Gate: BE-gate (`tests/test_identity_auth.py tests/test_phase18_verification.py`), FE-gate + build.
 
-## Phase 8: Backups and the deploy runbook (F16)
+## Phase 8: Backups and the deploy runbook (F16) ☑ (live checks ⚠)
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
@@ -134,6 +136,22 @@ Gate: BE-gate (`tests/test_identity_auth.py tests/test_phase18_verification.py`)
 | P8-3 | `docs/SELF_HOSTED_DEPLOYMENT.md`: day-0 checklist (DNS, firewall, `.env.production` keys, GoTrue URLs, Stripe webhook URL, SMTP), day-2 (updates, scaling, rotation, restore drill) | docs | Doc review |
 
 Gate: `bash -n` + shellcheck (when available) and BE-gate (`tests/test_compose_stacks.py`).
+
+## Phase 9: Review close-out of Phases 1–8 (added 2026-11-18, G1)
+
+Reason: a review of every completed phase against the audit. Phases 6–8 were committed from a workspace
+without the project's Python or `node_modules`, so their gates never ran; running them found the FE
+failures below. The review also found the defects in P9-1 and P9-2.
+
+| ID | Task | Files | Acceptance |
+| --- | --- | --- | --- |
+| P9-1 | **Secret comparisons accept any header text.** `hmac/secrets.compare_digest` raises `TypeError` on non-ASCII `str`, so a crafted header turns the Cloudflare origin lock (every request), the metrics token, the Supabase webhook bearer, signed requests and inbound webhooks into a 500 instead of a rejection. One helper `apps.core.signing.constant_time_equals` compares UTF-8 bytes; every call site uses it. | `apps/core/signing.py`, `edge.py`, `metrics.py`, `identity/webhooks.py`, `integrations/views.py`, `assets/views.py`, `identity/views.py` | Tests: non-ASCII secrets → 401/403, never 500; the right secret still passes |
+| P9-2 | **Invite accept and revoke lock the invite row** (`select_for_update` in one transaction), so an invite revoked or accepted concurrently cannot be accepted again | `apps/identity/views.py` | Tests: a revoked or accepted invite → 404 |
+| P9-3 | `test_gateway_hardening` honours `JT_FRONTEND_DIR` like `test_edge_stack` (the frontend may be checked out under another name; the cross-check skipped silently) | test | Runs with `JT_FRONTEND_DIR` |
+| P9-4 | FE gate fixes for Phase 7: type-only import in `workspaceHeader.test.ts` (lint error); `AcceptInvitePage.test.tsx` leaked a mock call between tests (fails in order) | FE tests | FE-gate green |
+| P9-5 | ⚠ Run the database-backed pytest gates of Phases 6–8 (they need `TEST_DATABASE_URL`) | — | Operator, see the progress log |
+
+Gate: BE-gate with `tests/test_core_secure_compare.py tests/test_team_management.py tests/test_gateway_hardening.py tests/test_edge_stack.py tests/test_compose_stacks.py tests/test_backup_script.py`; FE-gate + build.
 
 ---
 
@@ -353,3 +371,165 @@ Gate:
 2. The app works (sign-in, chat, a dashboard).
 3. In pgAdmin as `postgres`: `select usename, count(*) from pg_stat_activity group by 1`. The app
    sessions are `jt_code_app`, and only a few server connections stay open.
+
+### 2026-11-17: Phase 6 ☑ (pytest gate ⚠)
+Implemented by the operator in `eef5640` ("Improved the backend"); reviewed and closed out here.
+- P6-1: `apps/identity/authorization.py` memoizes the organization ids, the primary organization, the
+  `X-Organization-ID` lookup and role checks in a dict that `SupabaseJWTAuthentication` attaches to the
+  user object it builds for one request (`request_scoped_cache`). Users built any other way (Celery,
+  tests, `force_authenticate`) are never memoized. A malformed or unknown organization id is still
+  denied.
+- P6-2 (revised, G1): `/billing/plans/` and `/visualize/catalog/` require sign-in, so they send
+  `Cache-Control: private, max-age=300`. `apps/core/edge.py` uses `setdefault` for `no-store`, so the
+  view's header is kept and every other authenticated response stays `no-store`.
+- P6-3: `docs/CACHING.md` lists every cache layer, key, lifetime and why it is safe.
+
+Review notes:
+- No view changes memberships and then re-checks tenancy in the same request (members PATCH/DELETE and
+  invite accept write after their last check), so the per-request memo cannot go stale.
+
+Gate (run in a cloud workspace without the project's Python 3.14 environment or Django):
+- `ruff check .`: all checks passed; `ruff format --check .`: 474 files already formatted.
+- ⚠ Not run here: `makemigrations --check` and
+  `pytest tests/test_phase2_authz_tenancy.py tests/test_request_caching.py -n 4` (Django and psycopg are
+  not installed and package installs are blocked). Run them locally; Phase 6 adds no migrations.
+
+### 2026-11-17: Phase 7 ☑ (pytest and npm gates ⚠)
+- P7-3: `/organizations/members/` returns `name` (full name, else first + last, else display name) and
+  `is_owner`; the owner is always reported as `admin` (matching `user_has_role`). Role PATCH and invite
+  accept return the same payload; accept adds `organization: {id, name}`.
+- P7-6: pending invites in the members payload, `DELETE /organizations/invites/{id}/` (status
+  `revoked`), duplicate pending invite → 409.
+- P7-5: `GET /organizations/` and the SPA workspace selection (header, stale-workspace recovery).
+- P7-1 (FE): Settings has Profile and Team tabs (`?tab=team`). Team: workspace switcher; for admins,
+  invite by e-mail and role (the link `/invite/:id?token=…` is shown once with a copy button), members
+  with role select and remove (owner and yourself locked), pending invites with revoke. Non-admins see
+  who to ask. Frontend-only mode keeps working (one local workspace; a note says invites need the API).
+- P7-2 (FE): `/invite/:inviteId` behind `RequireAuth` (signed-out visitors sign in and return via
+  `?next=`). Joining is an explicit click; on success the SPA switches to the joined workspace.
+- i18n: new `team.json` area in all 20 languages (57 keys, same placeholders). The mock team
+  repository's English `Error` strings (which the coverage test rejects) now use `i18n.t`.
+- P7-4: contract snapshot regenerated: 164 calls (was 157; the 7 new ones are the team endpoints).
+
+Verification (cloud workspace: no project Python 3.14 environment, no Django, no `node_modules`;
+package installs are blocked there):
+- BE: `ruff check .` and `ruff format --check .` clean. New `tests/test_team_management.py` (11 tests)
+  written but **not run**. `models.py` only adds a `TextChoices` value to a field without `choices`, so
+  no migration is expected.
+- FE: every changed file parses (TypeScript `transpileModule`); the coverage test's hard-coded-text
+  check (same code, run standalone) finds nothing; all 54 `team.*` keys used in code exist in English
+  and every language has the same keys and placeholders. New tests: `src/lib/workspace.test.ts`,
+  `src/lib/api/workspaceHeader.test.ts`, `src/lib/data/__tests__/team.test.ts`,
+  `src/pages/__tests__/AcceptInvitePage.test.tsx` (**not run**).
+
+⚠ Operator gate:
+1. BE: `.venv/bin/python manage.py makemigrations --check --dry-run` and
+   `.venv/bin/pytest tests/test_team_management.py tests/test_identity_auth.py tests/test_auth_hardening.py tests/test_security_hardening.py tests/test_request_caching.py tests/test_phase18_verification.py -n 4`.
+2. FE: `npm run typecheck && npm run lint && npm run test && npm run build`.
+3. Live: as the owner, Settings → Team → invite a second address as editor, copy the link, open it in
+   a private window signed in as that address, join; the joiner lands in the team workspace and sees
+   the owner's shared data; revoke a second invite and check its link answers "not found".
+- Known limit: a new invitee who has no account signs up from the sign-in page, confirms the e-mail,
+  and then opens the invite link again (sign-up does not carry `?next=`).
+
+### 2026-11-17: Phase 8 ☑ (live checks ⚠)
+- P8-1: `scripts/backup.sh`:
+  - `pg_dump -Fc` of the whole database inside `supabase-db` as `supabase_admin` (falls back to
+    `postgres`), verified with `pg_restore --list` before it is kept;
+  - a tar of the Storage volume through a read-only `alpine:3.22` helper (`--volumes-from`), taken
+    after the dump so the dump never references a missing file;
+  - SHA-256 per file, directory 700 and files 600, rotation by `BACKUP_KEEP_DAYS` (only `jt-code-*`
+    files), optional `rsync` to `BACKUP_RSYNC_TARGET`, `BACKUP_DRY_RUN=1`.
+  - `BACKUP_DB_EXEC` / `BACKUP_STORAGE_DIR` run it without Docker (tests, other hosts).
+- P8-2: `make prod-backup` and `make prod-restore-check`. The check verifies the checksum, restores
+  the newest dump into `jt_restore_check_<UTC>` (dropped on exit, also on failure), and compares
+  row counts with the live database: `django_migrations` must match, core identity tables must not
+  be empty; other differences are listed as "changed since the backup".
+- P8-3: `SELF_HOSTED_DEPLOYMENT.md`: day-0 checklist (DNS, firewall, domains, Auth URLs, SMTP,
+  Gemini, Stripe webhook `https://APP_DOMAIN/api/v1/webhooks/stripe/`, Sentry, first backup and cron)
+  and day-2 operations (updates with a pre-release backup, scaling, secret rotation per secret,
+  backups and the restore drill, disaster restore). `BACKUP_RESTORE_RUNBOOK.md` points to it.
+- `backups/` added to `.gitignore` and `.dockerignore` (dumps hold password hashes).
+
+Verification:
+- `bash -n` clean. shellcheck is not installed in this workspace (⚠ run `shellcheck -x scripts/backup.sh`).
+- New `tests/test_backup_script.py` (8 tests + 1 shellcheck test that skips without shellcheck).
+  pytest is not installed here, so the tests were executed through a minimal stand-in runner:
+  7 passed as root; the end-to-end test (it skips as root because `initdb` refuses root) passed as
+  the `postgres` user against a throwaway PostgreSQL 16 cluster: real dump, storage archive, rotation
+  (a 30-day-old dump removed, an unrelated file kept), restore check passing, a migration mismatch
+  failing, a damaged dump refused by its checksum, and no scratch database left behind.
+- Two bugs found and fixed by that run: the cleanup trap referred to a function-local variable (the
+  scratch database was not dropped), and a missing backup folder made the restore check exit
+  silently under `pipefail`.
+- `ruff check .` and `ruff format --check .` clean.
+
+⚠ Operator, on the server:
+1. `.venv/bin/pytest tests/test_backup_script.py tests/test_compose_stacks.py -n 4` (the end-to-end
+   test runs where `pg_config --bindir` has `initdb`, as a non-root user).
+2. `make prod-backup`, then `make prod-restore-check`; both must end without an error line. The first
+   run pulls `alpine:3.22`.
+3. Set `BACKUP_RSYNC_TARGET` and install the two cron lines from SELF_HOSTED_DEPLOYMENT.md; confirm the
+   copy arrives off-host.
+4. Once per quarter: the full disaster-restore drill on a spare server; record RTO/RPO.
+
+### 2026-11-18: Phase 9 ☑ (database-backed pytest ⚠)
+Review of Phases 0–8 against the audit, in a workspace with the project's `.venv` (Python 3.14.4) and
+the frontend's `node_modules`. Local `Working_256` was fast-forwarded to the Phase 6–8 commits
+(`df381d8`, `fcfc7bd`, `91dc131`; no history rewritten), then reviewed.
+
+Review result, per phase:
+- 1: provisioning fills empty fields only; the webhook reads both payload shapes and never blanks or
+  reactivates; consents are recorded once. No change.
+- 2: required claims and audience, 8 KiB cap, failure lockout, session check through the
+  `SECURITY DEFINER` function (its default `anon`/`authenticated` grants are revoked by
+  `governance.0011`), uvicorn trusts only private proxies, hashed invite tokens. Defect: P9-1.
+- 3: the public gateway listener closes `/rest/v1` and `/auth/v1/admin`, always overwrites
+  `X-JT-Client-IP`, and has the CORS allowlist and per-IP `limit_req`. No change.
+- 4: Caddy closes `/admin`, `/metrics` and both docs/schema paths; the SPA image has a strict CSP and
+  excludes `.env*`. Note: `FRONTEND_DIR` defaults to `../jt-code-frontend`; on this machine the
+  checkout is `../JT-Code-AI-frontend`, so set `FRONTEND_DIR` in `.env.production`.
+- 5: the runtime role has no DDL and no `auth` access and its attributes are verified; PgBouncer is in
+  transaction mode and `migrate` connects directly. No change.
+- 6: the memo lives on the per-request user only; `setdefault` keeps `private, max-age=300`. No change.
+- 7: the team API requires an admin, protects the owner, accepts with the token digest plus the matching
+  e-mail, and never returns the token again. Defect: P9-2 (accept/revoke race). The FE gate had never run:
+  P9-4.
+- 8: the backup script verifies the dump before it is kept, writes checksums, uses `umask 077`, has a dry
+  run and drops the scratch database on exit. No change.
+
+Changes:
+- P9-1: `apps.core.signing.constant_time_equals` (UTF-8 bytes; empty or missing is unequal), used by the
+  Cloudflare origin lock, the metrics token, the Supabase webhook bearer, signed requests, inbound
+  webhooks, upload intents and invite accept. Run against the old code, the new tests fail with
+  `TypeError` (HTTP 500) at `edge.py:48`, `metrics.py:297` and `webhooks.py:42`.
+- P9-2: invite accept (`select_for_update(of=("self",))`) and revoke run in one transaction with the
+  row locked.
+- P9-3: `test_gateway_hardening` reads `JT_FRONTEND_DIR`.
+- P9-4 (FE): `type AxiosHeaders` import; `AcceptInvitePage.test.tsx` clears the shared workspace mock
+  before each test.
+
+Gate:
+- ruff check + format: ok (477 files). `makemigrations --check`: no changes.
+- `compose_config_check.py`: production, production+edge, local ok. `bash -n scripts/backup.sh` ok.
+- pytest without a database (`JT_FRONTEND_DIR=../JT-Code-AI-frontend`, `-n 4`): 58 passed, 2 skipped
+  (no `caddy`, no `shellcheck` binary): `test_core_secure_compare` [12 new], `test_gateway_hardening`,
+  `test_edge_stack`, `test_compose_stacks`, `test_backup_script` (its end-to-end run against a throwaway
+  cluster passed).
+- Contract snapshot regenerated from `../JT-Code-AI-frontend`: 164 calls, identical to the stored file.
+- FE: typecheck ok; lint 0 errors (62 pre-existing warnings); 200/200 tests; `npm run build` ok.
+- ⚠ Not run (P9-5): every database-backed test. No `TEST_DATABASE_URL` login is available in this
+  workspace (no credentials for the host PostgreSQL, no `.env`/`.env.docker`, and pgvector is not
+  installed on the host). That covers `test_request_caching`, `test_phase2_authz_tenancy`,
+  `test_team_management` [2 new], `test_identity_auth`, `test_auth_hardening`,
+  `test_security_hardening` and `test_phase18_verification`.
+
+⚠ Operator:
+1. Provide a test database: a PostgreSQL user with CREATEDB on a server that has pgvector, as
+   `TEST_DATABASE_URL` in `.env`. Then run
+   `.venv/bin/pytest --create-db -n 4 tests/test_request_caching.py tests/test_phase2_authz_tenancy.py tests/test_team_management.py tests/test_identity_auth.py tests/test_auth_hardening.py tests/test_security_hardening.py tests/test_phase18_verification.py tests/test_core_secure_compare.py`,
+   and the full suite once.
+2. The Docker stack running on this machine is a pre-Phase-2 image (uvicorn `--forwarded-allow-ips *`),
+   and this checkout has no `.env.docker`. `make docker-up` creates one with new secrets; if the old
+   database volume is kept, run `make docker-sync-db-passwords`. Then work through the live checks of
+   Phases 2–8.
