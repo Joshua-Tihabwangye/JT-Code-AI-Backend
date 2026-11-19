@@ -153,6 +153,26 @@ failures below. The review also found the defects in P9-1 and P9-2.
 
 Gate: BE-gate with `tests/test_core_secure_compare.py tests/test_team_management.py tests/test_gateway_hardening.py tests/test_edge_stack.py tests/test_compose_stacks.py tests/test_backup_script.py`; FE-gate + build.
 
+## Phase 10: Responsive frontend: phones and tablets (added 2026-11-19, G1, FE only) ☑
+
+Reason: the operator reports the UI works on large displays but not on tablets and phones. A browser audit
+(every route at 360, 390, 768, 1024 and 1440 px, mock mode and against the local Docker backend with a real
+dataset and dashboard) found the causes below. The audit becomes a repeatable test (P10-1).
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P10-1 | **Responsive audit** `tests/e2e/responsive.e2e.mjs` (`npm run test:responsive`): every route at five widths; fails on content past the screen edge or a page that scrolls sideways; screenshots. Mock mode, or `RESPONSIVE_MODE=api` with an existing login (sign-up only with `RESPONSIVE_SIGNUP=1`, because local Auth may mail through real SMTP) | new script, `package.json` | Runs green in both modes |
+| P10-2 | **Shell:** one 768 px breakpoint only. Tablets (769–1100 px) get the icon-only sidebar by default (the toggle still expands it). Overlays (shared `Modal`, visualize drawer and its backdrop) stack above the mobile top bar (z 70), which hid their headers | `AppShell.tsx`, `global.css`, `Modal.tsx`, `visualize.css` | Assistant header visible at 390 px; 1024 px shows the rail |
+| P10-3 | **Visualize header:** the six sections wrap into a two-row pill on phones. ≤ 768 px: one row that scrolls sideways; Ask AI shrinks to the header row; the header stops being sticky (two rows would cover the page); the Python libraries strip is one scrolling line | `VisualizeLayout.tsx`, `visualize.css` | Header ≤ 2 rows at 360 px |
+| P10-4 | **Ribbons (Data, Explore, …):** tabs scroll instead of wrapping; the pinned “Next” group covers most of a phone-width ribbon, so it scrolls with the rest ≤ 640 px | `visualize.css` | No control hidden behind the Next group at 390 px |
+| P10-5 | **Dashboard viewer, share and embed:** below 900 px of canvas the authored 24-column grid is scaled down until text overlaps (slicers over KPIs, unreadable axes at 768/1024). New *flow* layout for 640–900 px: reading order (the page's phone order), 6-column CSS grid, KPIs/slicers three per row, charts two per row, wide visuals full width, natural pixel heights. Phones keep the stack, ≥ 900 px the authored grid | `DashboardPage.tsx`, `SharedDashboardPage.tsx`, `customize.ts`, `visualize.css` | Test for the flow spans; no overlap at 768/1024 |
+| P10-6 | **Dashboard editor:** the 320 px pane leaves the canvas a sliver on tablets and phones. Below 1100 px the pane opens over the canvas and starts closed; the toolbar scrolls in one row on phones. Calculation rows showed empty boxes at every width (`.dash-fields button {width:100%}` also stretched the icon buttons) | `DashboardEditor.tsx`, `visualize.css` | Canvas uses the full width at 768; calc names visible |
+| P10-7 | Remaining overflow found by the audit: gallery category chip at 1024, KPI “vs prev. month” at 768/1024; chat composer keeps room for the message on phones | `visualize.css`, `global.css` | Audit green |
+| P10-8 | (added during Phase 10, G1) Grids that set columns only from a breakpoint up (`grid md:grid-cols-2`) let their single phone column grow to its widest content: Billing's invoice table made the page 612 px wide at 360. A base `grid-cols-1` (`minmax(0, 1fr)`) on all 25 such grids | 12 files | Audit green at 360 |
+| P10-9 | (added during Phase 10, G1) Editor on narrow screens opens at 100 % zoom (Fit shrank the 1280 px page until chart text overlapped); its toolbar menus open as phone-width sheets (the scrolling toolbar would clip them; Insert is 430 px wide) | `DashboardEditor.tsx`, `visualize.css` | Readable canvas at 768 |
+
+Gate: FE-gate + build; `npm run test:responsive` (mock) and `RESPONSIVE_MODE=api` against the Docker stack.
+
 ---
 
 ## Progress log
@@ -533,3 +553,52 @@ Gate:
    and this checkout has no `.env.docker`. `make docker-up` creates one with new secrets; if the old
    database volume is kept, run `make docker-sync-db-passwords`. Then work through the live checks of
    Phases 2–8.
+
+### 2026-11-19: Phase 10 ☑ (FE only)
+How the problems were found: `tests/e2e/responsive.e2e.mjs` drives Chrome through every route at 360,
+390, 768, 1024 and 1440 px, in mock mode and against the local Docker stack (signed in, the Retail sales
+sample loaded, a dashboard built). It measures content past the screen edge and saves screenshots, which
+were reviewed by eye as well: overlap and cramping do not show up as overflow.
+
+Causes and fixes:
+- Shell: one breakpoint at 768 px, so a 1024 px tablet kept the 260 px sidebar. Tablets (769–1100 px) now
+  start with the icon rail (expandable for the visit; the saved desktop setting is untouched); the phone
+  drawer always shows labels (`src/lib/useMediaQuery.ts`, `AppShell.tsx`).
+- Overlays under the mobile top bar (z 70): the shared `Modal` (z 50) and the visualize drawer (z 60) hid
+  their headers and close buttons on phones; now 85–90.
+- Visualize header: the six sections wrapped into a two-row pill. ≤ 768 px: one sideways-scrolling row,
+  Ask AI in the header row (icon only ≤ 420 px), the header no longer sticky, the Python libraries one
+  scrolling line. Found on the way: the chips' `.sr-only` text (`position: absolute`) escaped the new
+  scroll strips and widened the whole page to 507–1157 px; the strips are now `position: relative`. The
+  audit now names positioned elements that escape a scroller.
+- Ribbons: tabs scroll; ≤ 640 px the pinned “Next” group scrolls with the rest instead of covering it.
+- Dashboards (viewer, share, embed): new tablet *flow* layout for canvases 640–900 px
+  (`customize.ts` `dashboardLayoutMode`/`flowVisuals`, 2 new tests): the page's phone order on a 6-column
+  grid, KPIs and slicers three per row, charts two per row, wide visuals full width, natural pixel heights.
+  At 768 and 1024 px the slicers no longer sit on the KPIs and axis labels are readable. Phones keep the
+  stack; ≥ 900 px the authored grid (1280 px laptops unchanged).
+- Editor: below 1100 px the pane opens over the canvas and starts closed, the canvas opens at 100 %, the
+  toolbar is one scrolling row on phones with its menus as sheets. Calculation rows showed empty boxes at
+  every width (`.dash-fields button {width: 100%}` also stretched the icon buttons): fixed.
+- Billing and 24 other grids (P10-8); chat composer: the model picker is an icon ≤ 420 px; the landing glow
+  is capped at the container width; KPI comparison text ellipsizes.
+
+Gate:
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged; none added); 202/202 tests (2 new);
+  `npm run build` ok.
+- `npm run test:responsive` (mock): **98/98** after the fixes (before: billing at 360/390 and the chat glow
+  failed); the 10 dashboard checks need the API and are listed as skipped.
+- `RESPONSIVE_MODE=api npm run test:responsive` against the Docker stack: **108/108** route/viewport checks
+  fit the screen; the editor re-run at 390/768 after the zoom change: 2/2.
+- No API call changed, so the contract snapshot is unchanged.
+
+Notes and ⚠ operator:
+- The audit's api mode signs in with `RESPONSIVE_EMAIL`/`RESPONSIVE_PASSWORD`. Signing up
+  (`RESPONSIVE_SIGNUP=1`) is only for stacks whose Auth mails through Mailpit: the local `.env.docker`
+  sends Auth mail through real Gmail SMTP, and one sign-up during this phase produced a confirmation mail
+  to a non-existent `@jt-code.local` address (it will bounce). That test login,
+  `responsive-mwno1ava@jt-code.local`, was confirmed directly in `auth.users` and owns a few test
+  dashboards in the local Docker database; delete it in Settings or keep it for the audit.
+- Not covered by the audit: real devices (Safari on iOS, Android Chrome); touch gestures on the editor
+  canvas. Try a dashboard and the editor on a real phone and tablet.
+
