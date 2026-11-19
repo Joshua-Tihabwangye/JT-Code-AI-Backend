@@ -173,6 +173,18 @@ dataset and dashboard) found the causes below. The audit becomes a repeatable te
 
 Gate: FE-gate + build; `npm run test:responsive` (mock) and `RESPONSIVE_MODE=api` against the Docker stack.
 
+## Phase 11: Refreshing a page on the hosted site (Vercel) ☑ (added 2026-11-19, G1, FE only)
+
+Reason: the operator reports that refreshing a page on the Vercel-hosted frontend crashes or answers 404.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P11-1 | **Deep links:** every app path is answered with `index.html` (rewrite, already present) and is proven by a test that serves the build with Vercel's rules (existing file first, then the rewrite, else 404) and reloads every route | `vercel.json`, `tests/e2e/refresh.e2e.mjs` | 21 routes: 200 and rendered after a reload |
+| P11-2 | **Stale build after a deploy:** a tab (or a cached `index.html`) from the previous build asks for page files with old hashed names; the import fails and the crash screen appears. `vite:preloadError` now reloads once (at most once per 30 s, so a broken deploy shows the error instead of looping) | `src/lib/chunkReload.ts` (+ test), `main.tsx` | Test fails without the fix, passes with it |
+| P11-3 | **Caching on Vercel:** `index.html` and every app path `no-cache` (always revalidated, so a refresh gets the current build); `/assets/*` immutable for a year. A missing `/assets` file stays a real 404 (never `index.html`, which the browser would try to run as JavaScript) | `vercel.json` | Checked by the test |
+
+Gate: FE-gate + build; `npm run test:refresh`.
+
 ---
 
 ## Progress log
@@ -601,4 +613,30 @@ Notes and ⚠ operator:
   dashboards in the local Docker database; delete it in Settings or keep it for the audit.
 - Not covered by the audit: real devices (Safari on iOS, Android Chrome); touch gestures on the editor
   canvas. Try a dashboard and the editor on a real phone and tablet.
+
+### 2026-11-19: Phase 11 ☑ (FE only; ⚠ deploy)
+- P11-1: `vercel.json` already rewrote `/((?!api/|assets/).*)` to `/index.html` on every branch, including
+  `origin/main`. `tests/e2e/refresh.e2e.mjs` (`npm run test:refresh`) serves a copy of `dist/` with exactly
+  these rules and headers and opens, then reloads, 21 routes (public pages, every app page, visualize pages,
+  a dashboard, share and invite links): all 200 and rendered, none on the crash screen.
+- P11-2: the crash on refresh comes from stale page files after a deploy. With the fix removed, the test's
+  stale-deploy step fails (no reload: the page crashes); with it, the app reloads exactly once, and a really
+  missing file shows the error instead of reloading again.
+- P11-3: `Cache-Control: no-cache` for the app shell, `immutable` for hashed assets.
+
+Gate:
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 204/204 tests (2 new); `npm run build` ok.
+- `npm run test:refresh`: 24/24 (missing asset → 404, 21 route reloads, 2 stale-deploy checks).
+
+⚠ Operator:
+1. Vercel builds the branch it is connected to (normally `main`). Phases 10 and 11 are on the local
+   `Working_256` only: push it and merge into `main` (a PR, as before) to deploy them.
+2. In Vercel → Project → Settings → General, check that Root Directory is the repository root (where
+   `vercel.json` is), Framework Preset is Vite and Output Directory is `dist`. If `vercel.json` is not read,
+   no rewrite applies and every refresh outside `/` is a 404.
+3. After the deploy, open `https://<your domain>/app/visualize/data`, refresh, and check the response in
+   the browser's network tab: 200 for the page, `cache-control: no-cache` on it.
+4. The frontend calls the API at `VITE_API_BASE_URL`. Vercel hosts no API, so on Vercel that variable must
+   be the full backend URL (e.g. `https://api.example.com/api/v1`), not `/api/v1`. A relative `/api`
+   path is answered by Vercel with its own 404, which looks like a broken page after a refresh.
 
