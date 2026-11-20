@@ -185,6 +185,18 @@ Reason: the operator reports that refreshing a page on the Vercel-hosted fronten
 
 Gate: FE-gate + build; `npm run test:refresh`.
 
+
+## Phase 12: Chat background fades behind a conversation ☑ (added 2026-11-20, G1, FE only)
+
+Reason: the operator asks that the animated waves behind the chat fade once a question is asked, so the
+question and the reply read clearly.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P12-1 | `ChatBackground dimmed`: with a conversation on screen (`hasThread`) the waves fade to 14 % opacity over 0.8 s, then the animation stops on that faint frame (no motion behind the text, no CPU); New chat brings them back. A theme change redraws the still frame in the new colours; reduced motion skips the transition | `ChatBackground.tsx` (+ test), `ChatPage.tsx`, `global.css` | Browser check: landing 1.0 → conversation 0.14 and paused → New chat 1.0 and animating |
+
+Gate: FE-gate.
+
 ---
 
 ## Progress log
@@ -639,4 +651,17 @@ Gate:
 4. The frontend calls the API at `VITE_API_BASE_URL`. Vercel hosts no API, so on Vercel that variable must
    be the full backend URL (e.g. `https://api.example.com/api/v1`), not `/api/v1`. A relative `/api`
    path is answered by Vercel with its own 404, which looks like a broken page after a refresh.
+
+### 2026-11-20: Phase 12 ☑ (FE only)
+- P12-1: `ChatPage` passes `dimmed={hasThread}` to `ChatBackground`. The canvas fades to `opacity: .14`
+  (`transition: opacity .8s`), and after the fade the draw loop stops; New chat (no thread) restarts it.
+- Also verified on 2026-11-20 before this phase: Phase 11 (`6a967f7`) was committed after an interrupted
+  session. Re-run here: `chunkReload` tests 2/2, build ok, `npm run test:refresh` all passed, and with the
+  reload handler switched off the two stale-deploy checks fail (the test catches the crash).
+
+Verification:
+- Browser (mock mode, dark theme, guest chat as in the operator's screenshot): landing opacity 1 and not
+  dimmed; after sending a message opacity 0.14, dimmed, and two canvas snapshots 1.5 s apart are identical
+  (animation paused); after New chat opacity 1 and the canvas changes again (animating).
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 206/206 tests (2 new).
 
