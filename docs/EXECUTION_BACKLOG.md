@@ -216,6 +216,25 @@ Gate: FE-gate + build.
 
 ---
 
+## Phase 14: Phone drawer reaches its last item; sideways scrollers show they scroll ☑ (added 2026-11-20, G1, FE only)
+
+Reason: the operator tested on an iPhone (Safari) and reports that the open navigation drawer shows only its
+top items: Theme is cut off and the account row (sign in / create account) and the rest cannot be reached,
+not even by scrolling. Cause: on phones the drawer is a full-height panel (`height: 100dvh`) whose footer is
+pushed to the bottom (`margin-top: auto`). Safari's floating toolbar is drawn over the bottom of the
+viewport, so the footer lies under it; the content still fits the panel, so there is nothing to scroll.
+The operator also asks that the rows in Visualize that scroll sideways make that visible: on phones their
+scrollbars are hidden (`scrollbar-width: none`) and nothing replaces them.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P14-1 | **Drawer (≤ 768 px):** the footer follows the navigation instead of being pinned to the bottom; bottom padding clears the safe area; the drawer scrolls on its own (`overscroll-behavior: contain`). Collapse is hidden in the drawer (the drawer always shows labels, so it did nothing) | `AppShell.tsx`, `global.css` | Audit: the drawer's last control ends ≥ 96 px above the bottom at 360/390/768 |
+| P14-2 | **Scroll hints:** `useScrollHint` marks a sideways scroller with `data-more-left` / `data-more-right` while content is hidden on that side (scroll, resize, content changes; RTL aware); CSS fades that edge. The first time a row overflows in a visit it peeks (slides a little and back) unless reduced motion is set. Applied to the section nav, Python libraries, ribbon tabs and body, editor toolbar and page tabs. The editor toolbar drops the fade while a menu sheet is open (the mask would fade the sheet) | `src/lib/useScrollHint.ts` (+ test), `VisualizeLayout.tsx`, `PythonLibraries.tsx`, `Ribbon.tsx`, `DashboardEditor.tsx`, `visualize.css` | Unit test; audit: every overflowing scroller carries a hint |
+
+Gate: FE-gate + build; `npm run test:responsive` (mock).
+
+---
+
 ## Progress log
 
 ### 2026-11-16: Phase 0 ☑
@@ -706,3 +725,31 @@ per second.
 Gate:
 - FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 209/209 tests (3 new); `npm run build` ok.
 
+### 2026-11-20: Phase 14 ☑ (FE only; ⚠ iPhone check)
+- P14-1: on phones (≤ 768 px) the drawer's footer follows the navigation (`margin-top: 1rem` instead of
+  `auto`), the drawer pads the bottom safe area and keeps its scrolling to itself. Collapse is hidden there
+  (`.sidebar-collapse-toggle`); it changed nothing in a drawer that always shows labels. Tablet and desktop
+  are unchanged.
+- P14-2: `src/lib/useScrollHint.ts` sets `data-more-left` / `data-more-right` on a sideways scroller
+  (scroll, resize, `ResizeObserver`, `MutationObserver`; right-to-left aware). `visualize.css` fades that
+  edge over 2.75 rem with a mask. With a key (section nav, ribbon tabs, ribbon body, editor toolbar) the row
+  slides 32 px and back once per visit the first time it overflows; reduced motion turns this off. Python
+  libraries and the editor's page tabs get the fade only. The editor toolbar drops the mask while a menu
+  sheet is open (`:has(.dash-menu)`), since the sheet is painted inside the toolbar.
+- Audit (`tests/e2e/responsive.e2e.mjs`) gained two checks: an overflowing Visualize scroller without a hint
+  fails; the open drawer fails if its last control ends within 96 px of the bottom and the drawer cannot
+  scroll.
+
+Verification (Chrome, mock mode): `npm run test:responsive` 98/98 (dashboard view and editor skipped in mock
+mode, as before). The drawer check was run against the previous `global.css` and failed at 360, 390 and 768
+px (last control at 724/828/1008 px, past the 96 px toolbar zone). With the fix it passes. Screenshots: the
+drawer at 390 px ends with the account row right after Billing, and the Visualize section row fades out on
+its right edge.
+
+Not verified:
+- ⚠ Real iPhone Safari (the operator's device). Chrome cannot draw Safari's floating toolbar. Check: open
+  the drawer, see Theme and the account row under Billing.
+- ⚠ Dashboard viewer and editor rows in api mode (`RESPONSIVE_MODE=api`, needs the Docker stack).
+
+Gate:
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 213/213 tests (4 new); `npm run build` ok.
