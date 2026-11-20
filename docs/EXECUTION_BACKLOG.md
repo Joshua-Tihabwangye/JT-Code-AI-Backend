@@ -199,6 +199,23 @@ Gate: FE-gate.
 
 ---
 
+## Phase 13: Chat background: animated network wave ☑ (added 2026-11-20, G1, FE only)
+
+Reason: the operator supplied a reference image (a glowing network of nodes and lines flowing diagonally,
+lower left to upper right, with faint circuit traces) and asks for the chat background to be animated in
+that style, with an organised motion. It is drawn on the canvas (not the picture itself): every node and
+line can move, it stays sharp at any size, follows light and dark, and adds no download.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P13-1 | Geometry in a pure module: a seeded lattice of nodes (columns along the band, rows across it) around a spine that rises left → right; mesh edges (row neighbours and diagonals) and strands; per-node offsets fixed by a seed, motion only from one travelling swell, so the structure stays orderly | `src/features/chat/chatNetwork.ts` (+ test) | Deterministic; band rises; nodes inside the canvas band |
+| P13-2 | Drawing: strands, mesh lines fading with length, glowing nodes (pre-rendered glow sprite), pulses travelling along the strands at even intervals, faint static circuit traces, top/bottom vignette; dark and light palettes | `ChatBackground.tsx` | Browser screenshots in both themes |
+| P13-3 | Keep Phase 12 (fade and pause behind a conversation), reduced motion (one still frame), resize and theme changes | `ChatBackground.tsx` | Existing tests + browser check |
+
+Gate: FE-gate + build.
+
+---
+
 ## Progress log
 
 ### 2026-11-16: Phase 0 ☑
@@ -664,4 +681,28 @@ Verification:
   dimmed; after sending a message opacity 0.14, dimmed, and two canvas snapshots 1.5 s apart are identical
   (animation paused); after New chat opacity 1 and the canvas changes again (animating).
 - FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 206/206 tests (2 new).
+
+### 2026-11-20: Phase 13 ☑ (FE only)
+- P13-1: `src/features/chat/chatNetwork.ts`: a seeded lattice (11 row positions: 7 inside the band, 4 sparse
+  outer rows; columns every 48–90 px), mesh edges, strands, 12 static circuit traces. The band's spine rises
+  from 64 % of the height on the left to 34 % on the right and sways slowly; the only per-node motion is one
+  swell travelling left → right through the columns. Tests (3): the same seed gives the same network; it
+  covers the width and links only existing nodes; it rises left → right at several moments and no node
+  moves more than a fifth of the spacing in half a second.
+- P13-2: `ChatBackground.tsx` draws strands (each with two faint fibres), mesh lines batched in six
+  brightness levels, the circuit traces, glowing nodes (one pre-rendered glow sprite; the shimmer travels
+  along the band in sequence) and six pulses running left → right along the strands at even intervals.
+  Time follows the real clock (same speed at 60 and 120 Hz; at most 50 ms per frame after a pause).
+  Additive blending was tried for the dark theme and dropped: without a GPU it drew 21 frames per second
+  against 45 with normal blending, for little visible difference.
+- P13-3: Phase 12 unchanged (fade to 0.14 and pause behind a conversation, New chat resumes), reduced
+  motion draws one still frame, resize rebuilds the network, a theme change redraws a paused frame.
+
+Verification (Chrome, mock mode): dark and light at 1440×800 and a 390×844 phone. The network moves, with
+no page errors. After a message: opacity 0.14, and two frames 1.2 s apart are identical (paused). After New
+chat it animates again. Headless Chrome without a GPU ran at 45 (dark), 47 (light) and 60 (phone) frames
+per second.
+
+Gate:
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 209/209 tests (3 new); `npm run build` ok.
 
