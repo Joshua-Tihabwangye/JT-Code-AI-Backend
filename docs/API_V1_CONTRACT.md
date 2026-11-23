@@ -7,7 +7,16 @@ place for breaking API changes.
 ## Common conventions
 
 - Authenticate with a Supabase bearer JWT. Tenant selection is server-authorized; clients
-  may send `X-Organization-ID` only to select an organization they already belong to.
+  may send `X-Organization-ID` only to select an organization they already belong to. Any other value
+  is refused with 403 on every endpoint.
+- Server-to-server clients may instead send an organization API key as `X-API-Key` (created in
+  Settings → Developer, shown once). Each key:
+  * acts as the member who created it, in the key's organization only (another `X-Organization-ID` gets 403);
+  * needs scope `write` for anything other than `GET`/`HEAD`/`OPTIONS`;
+  * is refused (403) on `/api-keys/`, `/accounts/`, `/settings/`, `/organizations/` and `/tool-credentials/`;
+  * has its own hourly limit (429 when used up, at most `API_KEY_MAX_RATE_LIMIT`).
+
+  A revoked or expired key, or a key whose creator has left the organization, stops working at once.
 - `X-Request-ID` is accepted and returned. `X-Trace-ID` is also returned for tracing.
 - Cursor lists return `next`, `previous`, and `results`. Use the opaque `cursor` value in
   the next request; do not construct or persist an interpretation of it. `pageSize` is

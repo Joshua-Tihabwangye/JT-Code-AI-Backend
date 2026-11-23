@@ -263,7 +263,7 @@ customer needs first.
 
 | ID | Task | Acceptance |
 | --- | --- | --- |
-| P16-1 | **Settings → Developer: API keys** (create with scopes, shown once, list, revoke) | Repository + screen + unit tests; contract snapshot; live integration test |
+| P16-1 ☑ | **API keys, end to end.** Found 2026-11-23: keys were issued but **nothing accepted them** (`key_hash` was never read; the only authenticator was the JWT one). Also, a `PATCH` could set a revoked key back to `active`, and on `POST` the serializer returned the stored digest as `full_key`. Backend: `X-API-Key` authentication (active, unexpired, member, pinned to the key's workspace, `read`/`write` scopes, never key/account/member management, a per-key hourly limit, IP failure lockout); updates change the name only; scope, limit and expiry validation; members see their own keys, admins all. Frontend: **Settings → Developer: API keys** (create with scopes and expiry, shown once with copy, list, revoke) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-2 | **Settings → Developer: outbound webhooks** (endpoints, secret rotation, deliveries, redeliver) | Same |
 | P16-3 | **Help → Support cases** (open, list, reply, close) | Same |
 | P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
@@ -869,3 +869,50 @@ Gate:
 3. On the server: `make compose-up-prod`, then the three live scripts, the backup restore drill and a
    load test.
 4. Test logins created by the checks remain in the local Docker database (`*@jt-code.local`).
+
+### 2026-11-23: Phase 16, P16-1 ☑ (API keys)
+Found while scoping the screen: organization API keys were issued but nothing accepted them (`key_hash`
+was written once and never read; the only authenticator was the JWT one). A key screen alone would have
+handed customers keys that do not work. Two more defects in the same code:
+- a `PATCH` could set a revoked key back to `active` (status was writable);
+- on `POST` the serializer returned the stored digest as `full_key` (a placeholder).
+
+Backend:
+- `apps/integrations/authentication.py`: `X-API-Key` authentication, registered after the JWT one. It
+  accepts active, unexpired keys of an active member, pinned to the key's workspace (another
+  `X-Organization-ID` gets 403). `read`/`write` scopes (no `write`: safe methods only). It never serves
+  `/api-keys/`, `/accounts/`, `/settings/`, `/organizations/` or `/tool-credentials/`. Each key has an
+  hourly limit, capped by the new setting `API_KEY_MAX_RATE_LIMIT` (default 10000). Unknown keys count
+  towards the per-IP failure lockout. `last_used_at` is written at most once a minute.
+- `key_hash` is unique and indexed (migration `integrations.0003`).
+- Serializers: responses never carry the key or its digest; the full key comes once, in the create
+  response. Only `name` can change afterwards. Scopes must be `read`/`write` (omitted: `read`); the
+  limit is capped; the expiry must be in the future.
+- Viewset: members see and revoke their own keys, admins all; revoke is idempotent and returns the key.
+- OpenAPI describes `X-API-Key` (`OrganizationAPIKey`); `docs/API_V1_CONTRACT.md` documents the rules.
+
+Frontend:
+- Settings → Developer (`?tab=developer`): create a key (name, expiry 30/90/365 days or never, an
+  explicit "allow changes" box), shown once with copy and a `curl` example, the list (status, scopes,
+  created, last used, expiry, owner), revoke with confirmation. `ApiKeyRepository` in API and mock modes.
+  English texts plus 19 machine-filled languages; "Developer" corrected by hand in fr/es/zh (the
+  machine chose the property and photo senses).
+
+Tests (each rule fails without its code: without the authenticator, 8 of the API key tests fail):
+- BE `tests/test_api_keys.py` (16): shown once, digest only; read key reads and cannot write; write key
+  writes into its own workspace only; pinned workspace; no key/account/member management; revoked,
+  expired, unknown and orphaned keys; no reactivation, only the name changes; invalid scopes, limit and
+  expiry; default read scope; member versus admin visibility; per-key hourly limit.
+- FE: `developer.test.ts` (2), `apiKeys.test.ts` (3: mock and API mapping), `DeveloperTab.test.tsx` (3).
+- Live: `security_probe.py` has 8 API key probes; 37/37 on the rebuilt stack. Browser:
+  `E2E_ONLY='API key' npm run test:e2e`: a key created in Settings reads the API from outside the browser,
+  is refused for writes, and gets 401 right after revoke. GoTrue mailed to Mailpit for that run only and
+  was restored.
+
+Gate: BE full suite **1031 passed, 2 skipped, 0 failed**; ruff ok (484 files); `makemigrations --check` no
+changes; contract 167 calls green. FE typecheck
+ok, lint 0 errors (62 warnings, unchanged), 221/221 tests, build ok.
+
+Note: `test_picture_of_a_table_is_read_by_ocr_into_rows_and_columns` failed once in a full run and passes
+alone and in two other full runs: the OCR engine is memory-hungry next to 3 test workers on this 7 GB
+machine.

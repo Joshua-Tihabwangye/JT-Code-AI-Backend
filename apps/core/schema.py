@@ -36,6 +36,23 @@ class SupabaseJWTAuthenticationScheme(OpenApiAuthenticationExtension):  # type: 
         }
 
 
+class APIKeyAuthenticationScheme(OpenApiAuthenticationExtension):  # type: ignore[no-untyped-call]
+    """Organization API keys for server-to-server calls (``apps.integrations.authentication``)."""
+
+    target_class = "apps.integrations.authentication.APIKeyAuthentication"
+    name = "OrganizationAPIKey"
+    priority = 1
+
+    def get_security_definition(self, auto_schema: AutoSchema) -> dict[str, str]:
+        return {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "description": "Organization API key (Settings → Developer). Scopes: read, write. "
+            "Never accepted for keys, account, settings or member management.",
+        }
+
+
 class DetailResponseSerializer(_Serializer):
     detail = serializers.CharField()
 

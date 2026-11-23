@@ -180,10 +180,11 @@ class WebhookDeliverySerializer(serializers.ModelSerializer):
 
 
 class APIKeySerializer(serializers.ModelSerializer):
+    """A key as listed: never the key itself or its digest. Only ``name`` can change afterwards."""
+
     user_email = serializers.EmailField(source="user.email", read_only=True)
     organization_name = serializers.CharField(source="organization.name", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
-    full_key = serializers.SerializerMethodField()
 
     class Meta:
         model = APIKey
@@ -201,34 +202,41 @@ class APIKeySerializer(serializers.ModelSerializer):
             "rate_limit",
             "last_used_at",
             "expires_at",
-            "metadata",
-            "full_key",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = [
-            "organization",
-            "user",
-            "id",
-            "prefix",
-            "key_hash",
-            "last_used_at",
-            "created_at",
-            "updated_at",
-        ]
-
-    def get_full_key(self, obj) -> str | None:
-        # Only return full key on creation
-        request = self.context.get("request")
-        if request and request.method == "POST":
-            return obj.key_hash  # This would be the actual key in a real implementation
-        return None
+        # Status changes only through revoke; scopes, limit and expiry need a new key.
+        read_only_fields = [f for f in fields if f != "name"]
 
 
 class APIKeyCreateSerializer(serializers.ModelSerializer):
+    # Omitted: read-only (the least privilege). An explicit empty list is an error.
+    scopes = serializers.ListField(
+        child=serializers.ChoiceField(choices=["read", "write"]), allow_empty=False, default=lambda: ["read"]
+    )
+    rate_limit = serializers.IntegerField(min_value=1, required=False)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+
     class Meta:
         model = APIKey
         fields = ["name", "scopes", "rate_limit", "expires_at"]
+
+    def validate_scopes(self, value: list[str]) -> list[str]:
+        return sorted(set(value))
+
+    def validate_rate_limit(self, value: int) -> int:
+        from django.conf import settings
+
+        if value > settings.API_KEY_MAX_RATE_LIMIT:
+            raise serializers.ValidationError(f"At most {settings.API_KEY_MAX_RATE_LIMIT} requests per hour.")
+        return value
+
+    def validate_expires_at(self, value):
+        from django.utils import timezone
+
+        if value is not None and value <= timezone.now():
+            raise serializers.ValidationError("The expiry must be in the future.")
+        return value
 
 
 class KafkaConsumerSerializer(serializers.ModelSerializer):

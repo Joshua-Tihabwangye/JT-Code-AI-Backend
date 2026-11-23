@@ -431,6 +431,8 @@ SUPABASE_SESSION_CHECK_TTL_SECONDS = int(env("SUPABASE_SESSION_CHECK_TTL_SECONDS
 # Invalid bearer tokens per client IP per window before that IP is locked out for one window (429).
 AUTH_FAILURE_LIMIT = int(env("AUTH_FAILURE_LIMIT", "60"))
 AUTH_FAILURE_WINDOW_SECONDS = int(env("AUTH_FAILURE_WINDOW_SECONDS", "60"))
+# Organization API keys (X-API-Key): the most requests per hour one key may make, whatever its own limit.
+API_KEY_MAX_RATE_LIMIT = int(env("API_KEY_MAX_RATE_LIMIT", "10000"))
 # The Django admin (operators reach it over an SSH tunnel; the public edge blocks /admin).
 DJANGO_ADMIN_ENABLED = env_bool("DJANGO_ADMIN_ENABLED", True)
 
@@ -731,7 +733,10 @@ WEBHOOK_SIGNING_SECRET = env("WEBHOOK_SIGNING_SECRET")
 KAFKA_CONSUMER_GROUP_PREFIX = env("KAFKA_CONSUMER_GROUP_PREFIX", "jt-code")
 
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": ["apps.identity.authentication.SupabaseJWTAuthentication"],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.identity.authentication.SupabaseJWTAuthentication",
+        "apps.integrations.authentication.APIKeyAuthentication",
+    ],
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_SCHEMA_CLASS": "apps.core.schema.JTCodeAutoSchema",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",

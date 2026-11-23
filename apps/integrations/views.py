@@ -24,7 +24,9 @@ from apps.events.outbox import enqueue_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
     organization_for_request,
+    user_has_role,
 )
+from apps.identity.models import Role
 from apps.integrations.models import (
     APIKey,
     Connector,
@@ -291,49 +293,51 @@ class IncomingWebhookView(APIView):
 
 
 class APIKeyViewSet(viewsets.ModelViewSet):
+    """Organization API keys (``X-API-Key``, see ``apps.integrations.authentication``).
+
+    Admins see and revoke every key of the organization; other members only their own. The key is
+    returned once, in the create response; only its SHA-256 digest is stored.
+    """
+
     permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
     serializer_class = APIKeySerializer
     lookup_field = "id"
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        return _tenant_queryset(APIKey.objects.all(), self.request).select_related("organization", "user")
+        queryset = _tenant_queryset(APIKey.objects.all(), self.request).select_related("organization", "user")
+        organization = organization_for_request(self.request, required=True)
+        if not user_has_role(self.request.user, Role.RoleType.ADMIN, organization.id):
+            queryset = queryset.filter(user=self.request.user)
+        return queryset
 
     def get_serializer_class(self):
         if self.action == "create":
             return APIKeyCreateSerializer
         return APIKeySerializer
 
-    def perform_create(self, serializer):
-        org = organization_for_request(self.request, required=True)
-
-        # Generate API key
-        prefix = "jtk_live" if not settings.DEBUG else "jtk_test"
-        key = secrets.token_urlsafe(32)
-        full_key = f"{prefix}_{key}"
-        key_hash = hashlib.sha256(full_key.encode()).hexdigest()
-
-        serializer.save(
-            organization=org,
-            user=self.request.user,
-            prefix=prefix,
-            key_hash=key_hash,
-        )
-
-        # Return full key only on creation
-        self.created_key = full_key
-
     def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        if hasattr(self, "created_key"):
-            response.data["key"] = self.created_key
-        return response
+        from apps.integrations.authentication import key_digest
+
+        serializer = APIKeyCreateSerializer(data=request.data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        organization = organization_for_request(request, required=True)
+        prefix = "jtk_test" if settings.DEBUG else "jtk_live"
+        full_key = f"{prefix}_{secrets.token_urlsafe(32)}"
+        api_key = serializer.save(
+            organization=organization, user=request.user, prefix=prefix, key_hash=key_digest(full_key)
+        )
+        data = APIKeySerializer(api_key, context=self.get_serializer_context()).data
+        # The only time the key is ever returned.
+        return Response({**data, "key": full_key}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def revoke(self, request: Request, id=None):
         api_key = self.get_object()
-        api_key.status = APIKey.Status.REVOKED
-        api_key.save(update_fields=["status", "updated_at"])
-        return Response({"detail": "API key revoked"})
+        if api_key.status == APIKey.Status.ACTIVE:
+            api_key.status = APIKey.Status.REVOKED
+            api_key.save(update_fields=["status", "updated_at"])
+        return Response(APIKeySerializer(api_key, context=self.get_serializer_context()).data)
 
 
 class KafkaConsumerViewSet(viewsets.ModelViewSet):

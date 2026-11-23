@@ -10,6 +10,8 @@ penetration-surface table, run from outside the way an attacker would.
 * **Browser surface:** CORS from a foreign origin is not allowed on the API or Supabase Auth; API
   responses carry CSP, ``nosniff``, frame protection, a referrer policy and ``no-store``; no server
   banner.
+* **API keys:** a read key reads but cannot write, manage keys or reach the account, is pinned to its
+  workspace and stops working when revoked.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -207,6 +209,33 @@ def main() -> int:
         ("no server banner", "uvicorn" not in lower.get("server", "").lower()),
     ):
         probe(f"API header: {label}", ok)
+
+    # --- Organization API keys (X-API-Key)
+    print("api keys")
+    status, _, created = http(
+        "POST", f"{API}/api-keys/", {"name": f"probe-{run}", "scopes": ["read"]}, auth_a
+    )
+    probe(
+        "a member creates a read key (shown once)",
+        status == 201 and str(created.get("key", "")).startswith("jtk_"),
+    )
+    key = {"X-API-Key": created.get("key", "")}
+    status = http("GET", f"{API}/conversations/", headers=key)[0]
+    probe("the read key reads its workspace", status == 200, str(status))
+    status = http("POST", f"{API}/conversations/", {"title": "via key"}, key)[0]
+    probe("the read key cannot write", status == 403, str(status))
+    status = http("POST", f"{API}/api-keys/", {"name": "persist", "scopes": ["read", "write"]}, key)[0]
+    probe("a key cannot create keys", status == 403, str(status))
+    status = http("GET", f"{API}/accounts/me/", headers=key)[0]
+    probe("a key cannot reach the account", status == 403, str(status))
+    status = http("GET", f"{API}/conversations/", headers={**key, "X-Organization-ID": str(uuid.uuid4())})[0]
+    probe("a key is pinned to its workspace", status == 403, str(status))
+    listed = http("GET", f"{API}/api-keys/", headers=auth_b)[2]
+    rows = listed.get("results", listed) if isinstance(listed, dict) else listed
+    probe("another workspace does not see the key", created.get("id") not in str(rows))
+    http("POST", f"{API}/api-keys/{created.get('id')}/revoke/", headers=auth_a)
+    status = http("GET", f"{API}/conversations/", headers=key)[0]
+    probe("a revoked key stops working at once", status == 401, str(status))
 
     # --- Gateway
     print("gateway")
