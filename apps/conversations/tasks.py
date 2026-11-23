@@ -28,6 +28,19 @@ PERMANENT_GATEWAY_ERRORS = {
     "INVALID_INPUT",
 }
 
+# Shown to the person chatting (``errorMessage``). These failures are about the deployment, not the
+# request, so their exception text (key names, adapter names, SQL) stays in Sentry and the model run.
+_USER_MESSAGES = {
+    "AI_PROVIDER_NOT_CONFIGURED": "The AI service is not available right now. Please try again later.",
+    "AI_PROVIDER_UNSUPPORTED": "The AI service is not available right now. Please try again later.",
+    "MODEL_PROVIDER_INACTIVE": "The selected model is not available right now. Choose another model.",
+    "CHAT_EXECUTION_FAILED": "Something went wrong while answering. Please try again.",
+}
+
+
+def user_error_message(code: str, exc: Exception) -> str:
+    return _USER_MESSAGES.get(code, str(exc))
+
 
 def retry_delay_seconds(retry_count: int) -> int:
     """Bound exponential retries so one unhealthy provider cannot flood a queue."""
@@ -122,7 +135,7 @@ def _retry_or_fail(task, request_id: str, exc: Exception, *, code: str) -> dict:
         chat_request.retry_count += 1
         chat_request.last_retry_at = timezone.now()
         chat_request.error_code = code
-        chat_request.error_message = str(exc)[:2000]
+        chat_request.error_message = user_error_message(code, exc)[:2000]
         chat_request.model_run_id = _latest_model_run_id(request_id)
         if chat_request.retry_count > chat_request.max_retries:
             chat_request.status = ChatRequest.Status.FAILED
@@ -243,7 +256,7 @@ def process_chat_request(self, request_id: str) -> dict:
         sentry_sdk.capture_exception(exc)
         code = exc.code if isinstance(exc, AIGatewayError) else "CHAT_EXECUTION_FAILED"
         if code in PERMANENT_GATEWAY_ERRORS:
-            return _fail_request(request_id, code=code, message=str(exc))
+            return _fail_request(request_id, code=code, message=user_error_message(code, exc))
         return _retry_or_fail(self, request_id, exc, code=code)
 
 

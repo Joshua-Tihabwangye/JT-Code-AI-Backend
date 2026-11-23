@@ -129,10 +129,16 @@ class SupabaseJWTAuthentication(authentication.BaseAuthentication):
                 wait=settings.AUTH_FAILURE_WINDOW_SECONDS, detail="Too many invalid sign-in tokens."
             )
         try:
-            return self._authenticate_token(request, header[1], ip)
+            authenticated = self._authenticate_token(request, header[1], ip)
         except exceptions.AuthenticationFailed:
             _record_failure(ip)
             raise
+        # Every endpoint, not only those that resolve a tenant, refuses a workspace the caller is not a
+        # member of (403, the messages the frontend recognises to forget a stale workspace).
+        from apps.identity.authorization import validate_selected_organization
+
+        validate_selected_organization(request, authenticated[0])
+        return authenticated
 
     def _authenticate_token(self, request, raw_token: bytes, ip: str):
         if len(raw_token) > MAX_TOKEN_BYTES:

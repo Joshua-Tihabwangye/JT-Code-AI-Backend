@@ -24,6 +24,7 @@ CORP, and ``Cache-Control: no-store`` on authenticated responses.
 from __future__ import annotations
 
 import ipaddress
+import re
 from collections.abc import Callable
 
 from django.conf import settings
@@ -84,6 +85,42 @@ class EdgeProtectionMiddleware:
             SECURITY_EVENTS.labels("origin_bypass").inc()
             return JsonResponse({"detail": "Direct origin access is not allowed."}, status=403)
         client_ip(request)
+        return self.get_response(request)
+
+
+# A JSON string escape for NUL (``\u0000`` after an odd number of backslashes); ``\\u0000`` is text.
+_JSON_NUL_ESCAPE = re.compile(rb"(?<!\\)(?:\\\\)*\\u0000")
+
+
+class NulCharacterGuardMiddleware:
+    """Answer 400 for NUL characters in the path, query string or a JSON body.
+
+    PostgreSQL cannot store NUL in text or ``jsonb``, so such a value reaching a filter or a JSON field
+    raised a 500. Placed after ``SecurityHeadersMiddleware``, so the 400 carries the usual headers.
+    """
+
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        query = request.META.get("QUERY_STRING", "")
+        bad = "\x00" in request.path or "\x00" in query or "%00" in query.lower()
+        if (
+            not bad
+            and request.content_type == "application/json"
+            and request.method in {"POST", "PUT", "PATCH"}
+        ):
+            body = request.body  # cached by Django; DRF and signature checks read the same bytes
+            bad = b"\x00" in body or _JSON_NUL_ESCAPE.search(body) is not None
+        if bad:
+            return JsonResponse(
+                {
+                    "code": "invalid",
+                    "message": "NUL characters are not allowed.",
+                    "detail": "NUL characters are not allowed.",
+                },
+                status=400,
+            )
         return self.get_response(request)
 
 

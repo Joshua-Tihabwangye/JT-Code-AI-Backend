@@ -13,7 +13,7 @@ from typing import Any
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -124,17 +124,23 @@ def record_signup_consents(
     for consent_type in wanted:
         if consent_type in existing:
             continue
-        ConsentRecord.objects.create(
-            user=user,
-            organization=organization,
-            consent_type=consent_type,
-            status=ConsentRecord.Status.GRANTED,
-            version=version,
-            granted_at=now,
-            ip_address=ip,
-            user_agent=user_agent[:500],
-            metadata={"source": "signup"},
-        )
+        try:
+            # A new user's first page load sends several requests at once; each provisions. The unique
+            # (user, type, version) constraint decides, and the savepoint keeps the caller's transaction.
+            with transaction.atomic():
+                ConsentRecord.objects.create(
+                    user=user,
+                    organization=organization,
+                    consent_type=consent_type,
+                    status=ConsentRecord.Status.GRANTED,
+                    version=version,
+                    granted_at=now,
+                    ip_address=ip,
+                    user_agent=user_agent[:500],
+                    metadata={"source": "signup"},
+                )
+        except IntegrityError:
+            continue  # recorded by a concurrent request
         created += 1
     return created
 

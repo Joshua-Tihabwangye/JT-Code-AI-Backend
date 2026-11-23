@@ -636,3 +636,16 @@ def test_production_requires_a_real_model_provider(monkeypatch):
     assert any("AI_PROVIDER=echo" in problem for problem in problems)
     assert any("GEMINI_API_KEY or LLAMA_API_KEY" in problem for problem in problems)
     assert any("LLAMA_API_BASE must use HTTPS" in problem for problem in problems)
+
+
+def test_no_configured_provider_reports_the_primary_models_missing_key(providers, router, settings):
+    # Production with no keys yet: every candidate is unconfigured. The error must name the primary
+    # model's key (what the operator has to add), not the last fallback tried.
+    settings.GEMINI_API_KEY = ""
+    settings.LLAMA_API_KEY = ""
+
+    with pytest.raises(AIProviderNotConfigured, match="GEMINI_API_KEY"):
+        ask()
+
+    run = ModelRun.objects.latest("created_at")
+    assert [item["error_code"] for item in run.metadata["attempts"]] == ["AI_PROVIDER_NOT_CONFIGURED"] * 2

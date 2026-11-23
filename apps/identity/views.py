@@ -63,6 +63,20 @@ def _display_name(user) -> str:
     return user.full_name or full or user.display_name or ""
 
 
+_ROLE_RANK = {Role.RoleType.VIEWER: 0, Role.RoleType.EDITOR: 1, Role.RoleType.ADMIN: 2}
+
+
+def _highest_roles(user_roles, key) -> dict[str, str]:
+    """One role per key: the highest. A membership keeps its default ``viewer`` row next to a granted role."""
+    roles: dict[str, str] = {}
+    for user_role in user_roles:
+        name = user_role.role.name
+        current = roles.get(key(user_role))
+        if current is None or _ROLE_RANK.get(name, -1) > _ROLE_RANK.get(current, -1):
+            roles[key(user_role)] = name
+    return roles
+
+
 def _member_payload(membership: UserOrganization, role_name: str) -> dict[str, str | bool]:
     organization = membership.organization
     is_owner = str(organization.owner_id) == str(membership.user_id)
@@ -92,10 +106,10 @@ class OrganizationMembersView(APIView):
 
     def get(self, request: Request) -> Response:
         organization = _admin_organization(request)
-        roles = {
-            str(role.user_id): role.role.name
-            for role in UserRole.objects.filter(organization=organization).select_related("role")
-        }
+        roles = _highest_roles(
+            UserRole.objects.filter(organization=organization).select_related("role"),
+            lambda role: str(role.user_id),
+        )
         memberships = (
             UserOrganization.objects.filter(organization=organization)
             .select_related("user", "organization")
@@ -274,10 +288,10 @@ class OrganizationListView(APIView):
         memberships = (
             UserOrganization.objects.filter(user=user).select_related("organization").order_by("created_at")
         )
-        roles = {
-            str(role.organization_id): role.role.name
-            for role in UserRole.objects.filter(user=user, organization__isnull=False).select_related("role")
-        }
+        roles = _highest_roles(
+            UserRole.objects.filter(user=user, organization__isnull=False).select_related("role"),
+            lambda role: str(role.organization_id),
+        )
         primary = primary_organization_for_user(user)
         return Response(
             {

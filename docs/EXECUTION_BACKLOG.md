@@ -233,6 +233,48 @@ scrollbars are hidden (`scrollbar-width: none`) and nothing replaces them.
 
 Gate: FE-gate + build; `npm run test:responsive` (mock).
 
+## Phase 15: Production-readiness verification with operator access ☑ (added 2026-11-22, G1, BE + FE; server steps ⚠)
+
+Reason: the operator asks for proof that every frontend part reaches the right backend API, that every
+endpoint works against the database, an end-to-end and security test pass, and a readiness verdict (their
+bar: 95 %). Phases 1–14 left most live and database-backed checks ⚠ (no sudo, no test database). The
+operator has now granted sudo on this machine, so those checks can run here. This phase verifies first and
+fixes what the verification finds; new screens for API-only features are scoped in Phase 16 from P15-4's list.
+
+| ID | Task | Acceptance |
+| --- | --- | --- |
+| P15-1 | **Test database and the full backend suite** (closes P9-5): a local-only superuser role `jt_code_tester` on the host PostgreSQL 18 (pgvector installed; `CREATE EXTENSION vector` needs a superuser), its URL kept outside the repo, `TEST_DATABASE_URL` passed per run | Full `pytest tests` result recorded; every failure fixed or reported |
+| P15-2 | **System check without real mail:** the local `.env.docker` sends Auth mail through real SMTP, so the Mailpit confirmation step can never pass and each run mails a fake address. When the confirmation mail does not reach Mailpit, create the check user confirmed through the GoTrue Admin API (service key from `.env.docker`, read in-process, never printed), so no mail is sent | `scripts/system_check.py` all checks pass on the live stack |
+| P15-3 | **Live endpoint sweep:** call every operation in the OpenAPI schema as a signed-in user on the Docker stack (safe methods with real ids; writes with minimal bodies); no 5xx | Script in `scripts/`, its report in the progress log; every 5xx fixed |
+| P15-4 | **Two-way FE ↔ BE map:** every frontend call resolves to a backend operation (contract test), and every backend operation is listed as used by the frontend, or as server-to-server (webhooks, callbacks, health, metrics), or as API-only without a screen | List recorded; API-only features carried into Phase 16 |
+| P15-5 | **Live security probes:** forged/expired/`alg: none` tokens, cross-tenant reads and writes on the main resources, CORS from a foreign origin, closed gateway paths, rate limits, security headers, upload type checks | Script, results in the progress log; every failure fixed with a test (G9) |
+| P15-6 | **Dependency and static scans:** `pip-audit`, `npm audit --omit=dev`, `bandit` | High and critical issues fixed or justified |
+| P15-7 | **Frontend end to end against the live stack:** `npm run test:integration` and `npm run test:e2e` in api mode | Results recorded |
+| P15-8 | **Readiness report** `docs/PRODUCTION_READINESS_2026-11.md`: the score by area with its evidence, the keys the operator must add, the remaining ⚠ steps | File exists |
+
+Gate: BE-gate (full suite) + FE-gate + build; `scripts/system_check.py` on the live stack.
+
+## Phase 16: Screens for API-only features; dependency majors (added 2026-11-23, G1, BE + FE)
+
+Reason: P15-4 found 268 of 432 operations without a frontend caller. About 80 are server-to-server or
+operator-only by design. The others are user features with no screen, and the operator asks for every
+backend feature to have its frontend part. P15-6 left three major upgrades. Order: what an enterprise
+customer needs first.
+
+| ID | Task | Acceptance |
+| --- | --- | --- |
+| P16-1 | **Settings → Developer: API keys** (create with scopes, shown once, list, revoke) | Repository + screen + unit tests; contract snapshot; live integration test |
+| P16-2 | **Settings → Developer: outbound webhooks** (endpoints, secret rotation, deliveries, redeliver) | Same |
+| P16-3 | **Help → Support cases** (open, list, reply, close) | Same |
+| P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
+| P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
+| P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
+| P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
+| P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
+
+Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
+the Docker stack.
+
 ---
 
 ## Progress log
@@ -753,3 +795,77 @@ Not verified:
 
 Gate:
 - FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 213/213 tests (4 new); `npm run build` ok.
+
+### 2026-11-23: Phase 15 ☑ (server steps ⚠)
+The operator granted sudo on this machine. Verification first; every defect it found was fixed with a test
+that fails without the fix (G9). The full evidence and the score are in
+[PRODUCTION_READINESS_2026-11.md](PRODUCTION_READINESS_2026-11.md).
+
+Environment:
+- Test database: role `jt_code_tester` (local-only superuser: `CREATE EXTENSION vector` needs one) on the
+  host PostgreSQL 18. Its URL is in `~/.config/jt-code-tests/testdb.env` (mode 600, outside the repo).
+  P9-5 closed.
+- Live stack: the Docker stack, rebuilt from this branch twice (`docker compose … build api`, `up -d`;
+  `make docker-up` was not used because it appends keys to `.env.docker`, G5). The machine was powered off
+  three times during the phase; long runs were repeated after each boot.
+
+Tasks:
+- P15-1: full backend suite. The first run found 3 failures: two in team management (fixed below) and
+  the DAST sweep's n8n callbacks. That test now configures the callback secrets, so it proves unsigned
+  callbacks get 4xx. Unconfigured they fail closed with 503, so the result depended on the developer's
+  `.env`.
+- P15-2: `scripts/system_check.py` creates its user confirmed in the local `auth` schema when Auth mails
+  through real SMTP (no mail to fake addresses). The chat check reports a failed request's code instead of
+  timing out. The Grafana login is taken from `GRAFANA_ADMIN_USER`.
+- P15-3: `scripts/endpoint_sweep.py` covers all 432 operations, about 990 calls (anonymous,
+  reads with real ids, empty and schema-generated writes, cross-tenant probes, deletes), with 0 failures.
+- P15-4: 164/164 frontend calls resolve. Of 268 backend operations without a caller, the user features
+  go to Phase 16.
+- P15-5: `scripts/security_probe.py`: 29/29.
+- P15-6: pip-audit is clean after the upgrades (DRF 3.18.2: two unauthenticated DoS advisories; Pillow 13:
+  42 advisories; pytest 9.0.3). `npm audit fix` covered axios, fast-uri and follow-redirects. zod 3 is
+  justified, and vitest/puppeteer go to P16-8. Bandit: 1 medium, justified (the sandbox `exec`).
+- P15-7: `npm run test:integration` 20/20 with echo AI providers (17/20 without an AI key: the AI
+  features). `npm run test:e2e` 28/28 steps. For these runs only, GoTrue mailed to Mailpit and api/worker
+  used echo providers (shell variables and an override file outside the repo); both were restored
+  afterwards and checked.
+- P15-8: readiness report: about 87 %, below the 95 % bar. What remains: Phase 16 and the operator steps.
+
+Defects fixed:
+- Team: an editor was listed as a viewer, because the members list and the workspace list took an
+  arbitrary role row and a membership keeps its default viewer row. They now report the highest role.
+- `POST /completion/`: every call answered 500 (credit hold `SELECT … FOR UPDATE` outside a transaction).
+  Fixed with one transaction; autocommit tests.
+- AI gateway: with no provider configured, the last fallback's error (the echo model) hid the primary's
+  missing key. The chat now shows users a plain message; the cause stays in Sentry and the model run.
+- `/embeddings/` 503 now carries `code: PROVIDER_NOT_CONFIGURED`.
+- Prometheus: the API target was down since Phase 4 (replicas are scraped by IP, which Django refused as
+  Host). The entrypoint exports `POD_IP`, which the settings allow, as Kubernetes already did.
+- Security: a forged or unknown `X-Organization-ID` is refused on every endpoint (403). NUL in a path,
+  query or JSON body is refused (400; it reached PostgreSQL: 500).
+- Sign-up consent: parallel first requests raced (500 on first sign-in); the unique constraint now
+  decides.
+- `create_local_account` / `join_local_organization` failed on the Docker stack since Phase 3 (the Admin
+  API is internal-only). In DEBUG they fall back to the stack's `auth` schema.
+- FE: two loading messages nested a `<div>` (Spinner) in a `<p>` (a React DOM warning).
+- FE e2e (stale since Phases 10 and 13 and the Nov 15 UI changes): sidebar clicks scoped to
+  `nav.nav-links` (the phone top bar's hidden brand link matched first); Explore opens "All options"
+  first. Two assertions now follow the current design instead of old exact values: the gallery categories
+  wrap but stay visible, and conditional formatting repaints with theme colours. The forecast panel
+  check follows its new title, the viewer step waits for the card value, and the colleague is created
+  through the stack-aware command.
+
+Gate:
+- BE: ruff check + format ok (482 files). `makemigrations --check`: no changes.
+  `compose_config_check.py`: production, production+edge, local ok. **Full suite: 1015 passed,
+  2 skipped, 0 failed** (`pytest tests -n 3 --create-db`). Contract: 164 calls, `-k contract` green.
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 213/213 tests; `npm run build` ok.
+- Live: `system_check.py` 30/32 (2 need `GEMINI_API_KEY`); `endpoint_sweep.py` 0 failures;
+  `security_probe.py` 29/29; `test:integration` 20/20; `test:e2e` 28/28.
+
+⚠ Operator:
+1. Add the keys in section 5 of the readiness report (Gemini, Stripe, SMTP, Sentry; n8n optional).
+2. Grafana: your login `jt-code-admin` now has the `.env.docker` password (see the report).
+3. On the server: `make compose-up-prod`, then the three live scripts, the backup restore drill and a
+   load test.
+4. Test logins created by the checks remain in the local Docker database (`*@jt-code.local`).

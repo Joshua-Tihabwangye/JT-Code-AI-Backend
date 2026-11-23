@@ -81,6 +81,7 @@ MIDDLEWARE = [
     "apps.core.edge.ReadOnlyModeMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "apps.core.edge.SecurityHeadersMiddleware",
+    "apps.core.edge.NulCharacterGuardMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

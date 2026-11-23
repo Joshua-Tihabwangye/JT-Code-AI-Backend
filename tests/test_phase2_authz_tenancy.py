@@ -451,3 +451,30 @@ def test_evaluation_slugs_are_unique_per_organization(api_model, user):
     )
 
     assert first_evaluation.slug == second_evaluation.slug == "shared-evaluation"
+
+
+@pytest.mark.django_db
+def test_every_endpoint_refuses_a_foreign_or_unknown_workspace_header(api_client, user, organization):
+    # /conversations/ scopes reads by owner and never resolves the tenant, so before the central check a
+    # forged X-Organization-ID was silently ignored there instead of refused.
+    other_owner = User.objects.create(
+        username="other-owner", supabase_user_id="other-owner", email="o@example.com"
+    )
+    foreign = Organization.objects.create(name="Foreign", slug="foreign-tenant", owner=other_owner)
+    other_owner.organizations.add(foreign)
+    Conversation.objects.create(owner=other_owner, organization=foreign, title="Not yours")
+    api_client.credentials(HTTP_AUTHORIZATION="Bearer " + _token(sub=user.supabase_user_id, email=user.email))
+    url = reverse("conversation-list")
+
+    for header, message in (
+        (str(foreign.id), "do not have access to this organization"),
+        (str(uuid.uuid4()), "selected organization does not exist"),
+        ("not-a-uuid", "selected organization does not exist"),
+    ):
+        response = api_client.get(url, HTTP_X_ORGANIZATION_ID=header)
+        assert response.status_code == 403, (header, response.content)
+        # The frontend forgets a stale workspace when it sees these messages (src/lib/workspace.ts).
+        assert message in json.dumps(response.json()), response.content
+
+    assert api_client.get(url, HTTP_X_ORGANIZATION_ID=str(organization.id)).status_code == 200
+    assert api_client.get(url).status_code == 200

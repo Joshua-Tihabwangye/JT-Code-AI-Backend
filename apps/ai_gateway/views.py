@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from django.db import transaction
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status, viewsets
@@ -266,41 +267,44 @@ class CompletionView(APIView):
         except ModelSelectionError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
 
-        job = Job.objects.create(
-            owner=request.user,
-            organization=organization_for_request(request, required=True),
-            task_type=task_type,
-            trace_id=getattr(request, "trace_id", "") or f"job-{uuid.uuid4().hex}",
-            input_payload={
-                "messages": messages,
-                "model": model.name,
-                "model_id": str(model.id) if model_id else None,
-                "policy_slug": policy_slug,
-                "model_alias": model_alias,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "tools": tools,
-                "stream": stream,
-            },
-        )
+        # One transaction: a refused credit hold or concurrency limit rolls the job back
+        # (reserve_job_credits locks the organization row with SELECT ... FOR UPDATE).
+        with transaction.atomic():
+            job = Job.objects.create(
+                owner=request.user,
+                organization=organization_for_request(request, required=True),
+                task_type=task_type,
+                trace_id=getattr(request, "trace_id", "") or f"job-{uuid.uuid4().hex}",
+                input_payload={
+                    "messages": messages,
+                    "model": model.name,
+                    "model_id": str(model.id) if model_id else None,
+                    "policy_slug": policy_slug,
+                    "model_alias": model_alias,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "tools": tools,
+                    "stream": stream,
+                },
+            )
 
-        from apps.jobs.services import reserve_job_credits
+            from apps.jobs.services import reserve_job_credits
 
-        reserve_job_credits(job, request.user)
+            reserve_job_credits(job, request.user)
 
-        enqueue_outbox_event(
-            topic="ai_gateway.job.created",
-            event_key=str(job.request_id),
-            payload={
-                "job_id": str(job.id),
-                "request_id": str(job.request_id),
-                "task_type": job.task_type,
-                "model": model.name,
-                "policy": policy.slug if policy else None,
-            },
-            headers={"trace_id": job.trace_id},
-        )
-        enqueue_job(job)
+            enqueue_outbox_event(
+                topic="ai_gateway.job.created",
+                event_key=str(job.request_id),
+                payload={
+                    "job_id": str(job.id),
+                    "request_id": str(job.request_id),
+                    "task_type": job.task_type,
+                    "model": model.name,
+                    "policy": policy.slug if policy else None,
+                },
+                headers={"trace_id": job.trace_id},
+            )
+            enqueue_job(job)
 
         return Response(
             {
@@ -367,7 +371,10 @@ class EmbeddingView(APIView):
                 )
             model_name, version = embedding_model_name(), embedding_version()
         except EmbeddingNotConfigured as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return Response(
+                {"detail": str(exc), "code": "PROVIDER_NOT_CONFIGURED"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         except EmbeddingError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(
