@@ -5,7 +5,7 @@ description = "Django backend for JT-Code"
 requires-python = ">=3.14,<3.15"
 dependencies = [
   "Django>=5.2,<5.3",
-  "djangorestframework>=3.17.2,<3.18",
+  "djangorestframework>=3.18.2,<3.19",
   "django-cors-headers>=4.7,<5",
   "drf-spectacular>=0.28,<0.29",
   "dj-database-url>=2.3,<3",
@@ -30,7 +30,7 @@ dependencies = [
   "markdown>=3.6,<4",
   "weasyprint>=70,<71",
   "pydyf>=0.11,<1",
-  "Pillow>=12.3,<13",
+  "Pillow>=13.0,<14",
   "python-multipart>=0.0.9,<1",
   "httpx>=0.27,<1",
   "PyYAML>=6.0,<7",
@@ -63,7 +63,7 @@ exclude = ["tests*", "converted_files*", "generated_images*", "rendered_document
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3,<9",
+  "pytest>=9.0.3,<10",
   "pytest-django>=4.11,<5",
   "pytest-cov>=6,<7",
   "pytest-xdist>=3.6,<4",

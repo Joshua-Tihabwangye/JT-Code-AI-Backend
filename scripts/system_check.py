@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -49,6 +50,10 @@ def read_env(path: Path) -> dict[str, str]:
 
 
 ENV = read_env(ROOT / ".env.docker")
+# compose.local.yaml sends Auth mail to Mailpit unless .env.docker names a real SMTP server.
+# Grafana's admin login can be renamed in its UI; the env file keeps only the password.
+GRAFANA_USER = os.environ.get("GRAFANA_ADMIN_USER") or ENV.get("GRAFANA_ADMIN_USER") or "admin"
+MAIL_TO_MAILPIT = ENV.get("SMTP_HOST", "mailpit").strip().lower() in {"", "mailpit"}
 
 
 def http(
@@ -127,6 +132,45 @@ def db(code: str) -> Any:
     return json.loads(lines[-1])
 
 
+_CREATE_USER = """
+import json, uuid
+from django.db import connection, transaction
+email, password, first_name, last_name = json.loads(%r)
+uid = str(uuid.uuid4())
+app_meta = json.dumps({"provider": "email", "providers": ["email"]})
+user_meta = json.dumps({"first_name": first_name, "last_name": last_name})
+identity = json.dumps({"sub": uid, "email": email, "email_verified": True})
+with transaction.atomic(), connection.cursor() as c:
+    c.execute(
+        "insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,"
+        " raw_app_meta_data, raw_user_meta_data, created_at, updated_at, confirmation_token, recovery_token,"
+        " email_change_token_new, email_change) values ('00000000-0000-0000-0000-000000000000', %%s,"
+        " 'authenticated', 'authenticated', %%s, extensions.crypt(%%s, extensions.gen_salt('bf')), now(),"
+        " %%s, %%s, now(), now(), '', '', '', '')",
+        [uid, email, password, app_meta, user_meta],
+    )
+    c.execute(
+        "insert into auth.identities (provider_id, user_id, identity_data, provider, created_at, updated_at)"
+        " values (%%s, %%s, %%s, 'email', now(), now())",
+        [uid, uid, identity],
+    )
+print(json.dumps({"id": uid}))
+"""
+
+
+def create_confirmed_user(
+    email: str, password: str, first_name: str = "System", last_name: str = "Check"
+) -> str:
+    """Insert a confirmed e-mail user into the local Docker database (no mail); returns its Supabase id.
+
+    This is how Supabase seed scripts create users. Used when Auth mails through real SMTP, where a
+    sign-up would mail a non-existent address. GoTrue then signs the user in as usual.
+    """
+    created = db(_CREATE_USER % json.dumps([email, password, first_name, last_name])).get("id")
+    expect(bool(created), "user not created")
+    return str(created)
+
+
 def main() -> int:
     run = uuid.uuid4().hex[:8]
     email, password = f"system-{run}@jt-code.local", f"System-{run}-Passw0rd!"
@@ -196,7 +240,14 @@ def main() -> int:
         expect(status == 200, f"sign-up {status}: {body}")
         return "confirmation required" if not body.get("access_token") else "auto-confirmed"
 
-    check("auth", "sign up (Supabase GoTrue)", sign_up)
+    def create_confirmed() -> str:
+        create_confirmed_user(email, password)
+        return "confirmed user created in auth.users (no mail sent)"
+
+    if MAIL_TO_MAILPIT:
+        check("auth", "sign up (Supabase GoTrue)", sign_up)
+    else:
+        check("auth", "create confirmed user (Auth mails through real SMTP)", create_confirmed)
 
     def confirm() -> str:
         def link() -> str:
@@ -221,7 +272,8 @@ def main() -> int:
         expect(status in (200, 302, 303), f"verify link answered {status}")
         return "mail received in Mailpit, link verified"
 
-    check("auth", "email confirmation (Mailpit)", confirm)
+    if MAIL_TO_MAILPIT:
+        check("auth", "email confirmation (Mailpit)", confirm)
 
     def sign_in() -> str:
         status, _, body = http(
@@ -302,12 +354,26 @@ def main() -> int:
             body = http("GET", f"{API}/conversations/{created['conversation']}/messages/", headers=auth)[2]
             return body if isinstance(body, list) else body.get("results", [])
 
-        found = wait_for(
-            messages,
-            lambda items: any(m.get("role") == "assistant" and m.get("content") for m in items),
+        request_id = request.get("id") or request.get("requestId")
+
+        def progress() -> tuple[str, list[dict[str, Any]]]:
+            state = http("GET", f"{API}/chat/requests/{request_id}/", headers=auth)[2] if request_id else {}
+            return (state.get("status", "") if isinstance(state, dict) else "", state), messages()
+
+        (status_, state_), found = wait_for(
+            progress,
+            lambda value: (
+                value[0][0] in {"failed", "cancelled"}
+                or any(m.get("role") == "assistant" and m.get("content") for m in value[1])
+            ),
             90,
             "the assistant reply",
         )
+        state_ = state_ if isinstance(state_, dict) else {}
+        code = state_.get("errorCode") or state_.get("error_code") or ""
+        reason = state_.get("errorMessage") or state_.get("error_message")
+        hint = "; add the AI provider key (see the readiness report)" if "NOT_CONFIGURED" in code else ""
+        expect(status_ not in {"failed", "cancelled"}, f"chat request {status_} ({code}: {reason}){hint}")
         return f"{len(found)} messages; reply written by a Celery worker"
 
     check("feature", "chat reply through Celery", chat)
@@ -452,7 +518,7 @@ print(json.dumps(out))
 
     grafana_auth = {
         "Authorization": "Basic "
-        + base64.b64encode(f"admin:{ENV.get('GRAFANA_ADMIN_PASSWORD', '')}".encode()).decode()
+        + base64.b64encode(f"{GRAFANA_USER}:{ENV.get('GRAFANA_ADMIN_PASSWORD', '')}".encode()).decode()
     }
     check(
         "grafana",

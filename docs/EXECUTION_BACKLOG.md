@@ -185,6 +185,96 @@ Reason: the operator reports that refreshing a page on the Vercel-hosted fronten
 
 Gate: FE-gate + build; `npm run test:refresh`.
 
+
+## Phase 12: Chat background fades behind a conversation ☑ (added 2026-11-20, G1, FE only)
+
+Reason: the operator asks that the animated waves behind the chat fade once a question is asked, so the
+question and the reply read clearly.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P12-1 | `ChatBackground dimmed`: with a conversation on screen (`hasThread`) the waves fade to 14 % opacity over 0.8 s, then the animation stops on that faint frame (no motion behind the text, no CPU); New chat brings them back. A theme change redraws the still frame in the new colours; reduced motion skips the transition | `ChatBackground.tsx` (+ test), `ChatPage.tsx`, `global.css` | Browser check: landing 1.0 → conversation 0.14 and paused → New chat 1.0 and animating |
+
+Gate: FE-gate.
+
+---
+
+## Phase 13: Chat background: animated network wave ☑ (added 2026-11-20, G1, FE only)
+
+Reason: the operator supplied a reference image (a glowing network of nodes and lines flowing diagonally,
+lower left to upper right, with faint circuit traces) and asks for the chat background to be animated in
+that style, with an organised motion. It is drawn on the canvas (not the picture itself): every node and
+line can move, it stays sharp at any size, follows light and dark, and adds no download.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P13-1 | Geometry in a pure module: a seeded lattice of nodes (columns along the band, rows across it) around a spine that rises left → right; mesh edges (row neighbours and diagonals) and strands; per-node offsets fixed by a seed, motion only from one travelling swell, so the structure stays orderly | `src/features/chat/chatNetwork.ts` (+ test) | Deterministic; band rises; nodes inside the canvas band |
+| P13-2 | Drawing: strands, mesh lines fading with length, glowing nodes (pre-rendered glow sprite), pulses travelling along the strands at even intervals, faint static circuit traces, top/bottom vignette; dark and light palettes | `ChatBackground.tsx` | Browser screenshots in both themes |
+| P13-3 | Keep Phase 12 (fade and pause behind a conversation), reduced motion (one still frame), resize and theme changes | `ChatBackground.tsx` | Existing tests + browser check |
+
+Gate: FE-gate + build.
+
+---
+
+## Phase 14: Phone drawer reaches its last item; sideways scrollers show they scroll ☑ (added 2026-11-20, G1, FE only)
+
+Reason: the operator tested on an iPhone (Safari) and reports that the open navigation drawer shows only its
+top items: Theme is cut off and the account row (sign in / create account) and the rest cannot be reached,
+not even by scrolling. Cause: on phones the drawer is a full-height panel (`height: 100dvh`) whose footer is
+pushed to the bottom (`margin-top: auto`). Safari's floating toolbar is drawn over the bottom of the
+viewport, so the footer lies under it; the content still fits the panel, so there is nothing to scroll.
+The operator also asks that the rows in Visualize that scroll sideways make that visible: on phones their
+scrollbars are hidden (`scrollbar-width: none`) and nothing replaces them.
+
+| ID | Task | Files (FE) | Acceptance |
+| --- | --- | --- | --- |
+| P14-1 | **Drawer (≤ 768 px):** the footer follows the navigation instead of being pinned to the bottom; bottom padding clears the safe area; the drawer scrolls on its own (`overscroll-behavior: contain`). Collapse is hidden in the drawer (the drawer always shows labels, so it did nothing) | `AppShell.tsx`, `global.css` | Audit: the drawer's last control ends ≥ 96 px above the bottom at 360/390/768 |
+| P14-2 | **Scroll hints:** `useScrollHint` marks a sideways scroller with `data-more-left` / `data-more-right` while content is hidden on that side (scroll, resize, content changes; RTL aware); CSS fades that edge. The first time a row overflows in a visit it peeks (slides a little and back) unless reduced motion is set. Applied to the section nav, Python libraries, ribbon tabs and body, editor toolbar and page tabs. The editor toolbar drops the fade while a menu sheet is open (the mask would fade the sheet) | `src/lib/useScrollHint.ts` (+ test), `VisualizeLayout.tsx`, `PythonLibraries.tsx`, `Ribbon.tsx`, `DashboardEditor.tsx`, `visualize.css` | Unit test; audit: every overflowing scroller carries a hint |
+
+Gate: FE-gate + build; `npm run test:responsive` (mock).
+
+## Phase 15: Production-readiness verification with operator access ☑ (added 2026-11-22, G1, BE + FE; server steps ⚠)
+
+Reason: the operator asks for proof that every frontend part reaches the right backend API, that every
+endpoint works against the database, an end-to-end and security test pass, and a readiness verdict (their
+bar: 95 %). Phases 1–14 left most live and database-backed checks ⚠ (no sudo, no test database). The
+operator has now granted sudo on this machine, so those checks can run here. This phase verifies first and
+fixes what the verification finds; new screens for API-only features are scoped in Phase 16 from P15-4's list.
+
+| ID | Task | Acceptance |
+| --- | --- | --- |
+| P15-1 | **Test database and the full backend suite** (closes P9-5): a local-only superuser role `jt_code_tester` on the host PostgreSQL 18 (pgvector installed; `CREATE EXTENSION vector` needs a superuser), its URL kept outside the repo, `TEST_DATABASE_URL` passed per run | Full `pytest tests` result recorded; every failure fixed or reported |
+| P15-2 | **System check without real mail:** the local `.env.docker` sends Auth mail through real SMTP, so the Mailpit confirmation step can never pass and each run mails a fake address. When the confirmation mail does not reach Mailpit, create the check user confirmed through the GoTrue Admin API (service key from `.env.docker`, read in-process, never printed), so no mail is sent | `scripts/system_check.py` all checks pass on the live stack |
+| P15-3 | **Live endpoint sweep:** call every operation in the OpenAPI schema as a signed-in user on the Docker stack (safe methods with real ids; writes with minimal bodies); no 5xx | Script in `scripts/`, its report in the progress log; every 5xx fixed |
+| P15-4 | **Two-way FE ↔ BE map:** every frontend call resolves to a backend operation (contract test), and every backend operation is listed as used by the frontend, or as server-to-server (webhooks, callbacks, health, metrics), or as API-only without a screen | List recorded; API-only features carried into Phase 16 |
+| P15-5 | **Live security probes:** forged/expired/`alg: none` tokens, cross-tenant reads and writes on the main resources, CORS from a foreign origin, closed gateway paths, rate limits, security headers, upload type checks | Script, results in the progress log; every failure fixed with a test (G9) |
+| P15-6 | **Dependency and static scans:** `pip-audit`, `npm audit --omit=dev`, `bandit` | High and critical issues fixed or justified |
+| P15-7 | **Frontend end to end against the live stack:** `npm run test:integration` and `npm run test:e2e` in api mode | Results recorded |
+| P15-8 | **Readiness report** `docs/PRODUCTION_READINESS_2026-11.md`: the score by area with its evidence, the keys the operator must add, the remaining ⚠ steps | File exists |
+
+Gate: BE-gate (full suite) + FE-gate + build; `scripts/system_check.py` on the live stack.
+
+## Phase 16: Screens for API-only features; dependency majors (added 2026-11-23, G1, BE + FE)
+
+Reason: P15-4 found 268 of 432 operations without a frontend caller. About 80 are server-to-server or
+operator-only by design. The others are user features with no screen, and the operator asks for every
+backend feature to have its frontend part. P15-6 left three major upgrades. Order: what an enterprise
+customer needs first.
+
+| ID | Task | Acceptance |
+| --- | --- | --- |
+| P16-1 ☑ | **API keys, end to end.** Found 2026-11-23: keys were issued but **nothing accepted them** (`key_hash` was never read; the only authenticator was the JWT one). Also, a `PATCH` could set a revoked key back to `active`, and on `POST` the serializer returned the stored digest as `full_key`. Backend: `X-API-Key` authentication (active, unexpired, member, pinned to the key's workspace, `read`/`write` scopes, never key/account/member management, a per-key hourly limit, IP failure lockout); updates change the name only; scope, limit and expiry validation; members see their own keys, admins all. Frontend: **Settings → Developer: API keys** (create with scopes and expiry, shown once with copy, list, revoke) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
+| P16-2 | **Settings → Developer: outbound webhooks** (endpoints, secret rotation, deliveries, redeliver) | Same |
+| P16-3 | **Help → Support cases** (open, list, reply, close) | Same |
+| P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
+| P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
+| P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
+| P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
+| P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
+
+Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
+the Docker stack.
+
 ---
 
 ## Progress log
@@ -640,3 +730,189 @@ Gate:
    be the full backend URL (e.g. `https://api.example.com/api/v1`), not `/api/v1`. A relative `/api`
    path is answered by Vercel with its own 404, which looks like a broken page after a refresh.
 
+### 2026-11-20: Phase 12 ☑ (FE only)
+- P12-1: `ChatPage` passes `dimmed={hasThread}` to `ChatBackground`. The canvas fades to `opacity: .14`
+  (`transition: opacity .8s`), and after the fade the draw loop stops; New chat (no thread) restarts it.
+- Also verified on 2026-11-20 before this phase: Phase 11 (`6a967f7`) was committed after an interrupted
+  session. Re-run here: `chunkReload` tests 2/2, build ok, `npm run test:refresh` all passed, and with the
+  reload handler switched off the two stale-deploy checks fail (the test catches the crash).
+
+Verification:
+- Browser (mock mode, dark theme, guest chat as in the operator's screenshot): landing opacity 1 and not
+  dimmed; after sending a message opacity 0.14, dimmed, and two canvas snapshots 1.5 s apart are identical
+  (animation paused); after New chat opacity 1 and the canvas changes again (animating).
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 206/206 tests (2 new).
+
+### 2026-11-20: Phase 13 ☑ (FE only)
+- P13-1: `src/features/chat/chatNetwork.ts`: a seeded lattice (11 row positions: 7 inside the band, 4 sparse
+  outer rows; columns every 48–90 px), mesh edges, strands, 12 static circuit traces. The band's spine rises
+  from 64 % of the height on the left to 34 % on the right and sways slowly; the only per-node motion is one
+  swell travelling left → right through the columns. Tests (3): the same seed gives the same network; it
+  covers the width and links only existing nodes; it rises left → right at several moments and no node
+  moves more than a fifth of the spacing in half a second.
+- P13-2: `ChatBackground.tsx` draws strands (each with two faint fibres), mesh lines batched in six
+  brightness levels, the circuit traces, glowing nodes (one pre-rendered glow sprite; the shimmer travels
+  along the band in sequence) and six pulses running left → right along the strands at even intervals.
+  Time follows the real clock (same speed at 60 and 120 Hz; at most 50 ms per frame after a pause).
+  Additive blending was tried for the dark theme and dropped: without a GPU it drew 21 frames per second
+  against 45 with normal blending, for little visible difference.
+- P13-3: Phase 12 unchanged (fade to 0.14 and pause behind a conversation, New chat resumes), reduced
+  motion draws one still frame, resize rebuilds the network, a theme change redraws a paused frame.
+
+Verification (Chrome, mock mode): dark and light at 1440×800 and a 390×844 phone. The network moves, with
+no page errors. After a message: opacity 0.14, and two frames 1.2 s apart are identical (paused). After New
+chat it animates again. Headless Chrome without a GPU ran at 45 (dark), 47 (light) and 60 (phone) frames
+per second.
+
+Gate:
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 209/209 tests (3 new); `npm run build` ok.
+
+### 2026-11-20: Phase 14 ☑ (FE only; ⚠ iPhone check)
+- P14-1: on phones (≤ 768 px) the drawer's footer follows the navigation (`margin-top: 1rem` instead of
+  `auto`), the drawer pads the bottom safe area and keeps its scrolling to itself. Collapse is hidden there
+  (`.sidebar-collapse-toggle`); it changed nothing in a drawer that always shows labels. Tablet and desktop
+  are unchanged.
+- P14-2: `src/lib/useScrollHint.ts` sets `data-more-left` / `data-more-right` on a sideways scroller
+  (scroll, resize, `ResizeObserver`, `MutationObserver`; right-to-left aware). `visualize.css` fades that
+  edge over 2.75 rem with a mask. With a key (section nav, ribbon tabs, ribbon body, editor toolbar) the row
+  slides 32 px and back once per visit the first time it overflows; reduced motion turns this off. Python
+  libraries and the editor's page tabs get the fade only. The editor toolbar drops the mask while a menu
+  sheet is open (`:has(.dash-menu)`), since the sheet is painted inside the toolbar.
+- Audit (`tests/e2e/responsive.e2e.mjs`) gained two checks: an overflowing Visualize scroller without a hint
+  fails; the open drawer fails if its last control ends within 96 px of the bottom and the drawer cannot
+  scroll.
+
+Verification (Chrome, mock mode): `npm run test:responsive` 98/98 (dashboard view and editor skipped in mock
+mode, as before). The drawer check was run against the previous `global.css` and failed at 360, 390 and 768
+px (last control at 724/828/1008 px, past the 96 px toolbar zone). With the fix it passes. Screenshots: the
+drawer at 390 px ends with the account row right after Billing, and the Visualize section row fades out on
+its right edge.
+
+Not verified:
+- ⚠ Real iPhone Safari (the operator's device). Chrome cannot draw Safari's floating toolbar. Check: open
+  the drawer, see Theme and the account row under Billing.
+- ⚠ Dashboard viewer and editor rows in api mode (`RESPONSIVE_MODE=api`, needs the Docker stack).
+
+Gate:
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 213/213 tests (4 new); `npm run build` ok.
+
+### 2026-11-23: Phase 15 ☑ (server steps ⚠)
+The operator granted sudo on this machine. Verification first; every defect it found was fixed with a test
+that fails without the fix (G9). The full evidence and the score are in
+[PRODUCTION_READINESS_2026-11.md](PRODUCTION_READINESS_2026-11.md).
+
+Environment:
+- Test database: role `jt_code_tester` (local-only superuser: `CREATE EXTENSION vector` needs one) on the
+  host PostgreSQL 18. Its URL is in `~/.config/jt-code-tests/testdb.env` (mode 600, outside the repo).
+  P9-5 closed.
+- Live stack: the Docker stack, rebuilt from this branch twice (`docker compose … build api`, `up -d`;
+  `make docker-up` was not used because it appends keys to `.env.docker`, G5). The machine was powered off
+  three times during the phase; long runs were repeated after each boot.
+
+Tasks:
+- P15-1: full backend suite. The first run found 3 failures: two in team management (fixed below) and
+  the DAST sweep's n8n callbacks. That test now configures the callback secrets, so it proves unsigned
+  callbacks get 4xx. Unconfigured they fail closed with 503, so the result depended on the developer's
+  `.env`.
+- P15-2: `scripts/system_check.py` creates its user confirmed in the local `auth` schema when Auth mails
+  through real SMTP (no mail to fake addresses). The chat check reports a failed request's code instead of
+  timing out. The Grafana login is taken from `GRAFANA_ADMIN_USER`.
+- P15-3: `scripts/endpoint_sweep.py` covers all 432 operations, about 990 calls (anonymous,
+  reads with real ids, empty and schema-generated writes, cross-tenant probes, deletes), with 0 failures.
+- P15-4: 164/164 frontend calls resolve. Of 268 backend operations without a caller, the user features
+  go to Phase 16.
+- P15-5: `scripts/security_probe.py`: 29/29.
+- P15-6: pip-audit is clean after the upgrades (DRF 3.18.2: two unauthenticated DoS advisories; Pillow 13:
+  42 advisories; pytest 9.0.3). `npm audit fix` covered axios, fast-uri and follow-redirects. zod 3 is
+  justified, and vitest/puppeteer go to P16-8. Bandit: 1 medium, justified (the sandbox `exec`).
+- P15-7: `npm run test:integration` 20/20 with echo AI providers (17/20 without an AI key: the AI
+  features). `npm run test:e2e` 28/28 steps. For these runs only, GoTrue mailed to Mailpit and api/worker
+  used echo providers (shell variables and an override file outside the repo); both were restored
+  afterwards and checked.
+- P15-8: readiness report: about 87 %, below the 95 % bar. What remains: Phase 16 and the operator steps.
+
+Defects fixed:
+- Team: an editor was listed as a viewer, because the members list and the workspace list took an
+  arbitrary role row and a membership keeps its default viewer row. They now report the highest role.
+- `POST /completion/`: every call answered 500 (credit hold `SELECT … FOR UPDATE` outside a transaction).
+  Fixed with one transaction; autocommit tests.
+- AI gateway: with no provider configured, the last fallback's error (the echo model) hid the primary's
+  missing key. The chat now shows users a plain message; the cause stays in Sentry and the model run.
+- `/embeddings/` 503 now carries `code: PROVIDER_NOT_CONFIGURED`.
+- Prometheus: the API target was down since Phase 4 (replicas are scraped by IP, which Django refused as
+  Host). The entrypoint exports `POD_IP`, which the settings allow, as Kubernetes already did.
+- Security: a forged or unknown `X-Organization-ID` is refused on every endpoint (403). NUL in a path,
+  query or JSON body is refused (400; it reached PostgreSQL: 500).
+- Sign-up consent: parallel first requests raced (500 on first sign-in); the unique constraint now
+  decides.
+- `create_local_account` / `join_local_organization` failed on the Docker stack since Phase 3 (the Admin
+  API is internal-only). In DEBUG they fall back to the stack's `auth` schema.
+- FE: two loading messages nested a `<div>` (Spinner) in a `<p>` (a React DOM warning).
+- FE e2e (stale since Phases 10 and 13 and the Nov 15 UI changes): sidebar clicks scoped to
+  `nav.nav-links` (the phone top bar's hidden brand link matched first); Explore opens "All options"
+  first. Two assertions now follow the current design instead of old exact values: the gallery categories
+  wrap but stay visible, and conditional formatting repaints with theme colours. The forecast panel
+  check follows its new title, the viewer step waits for the card value, and the colleague is created
+  through the stack-aware command.
+
+Gate:
+- BE: ruff check + format ok (482 files). `makemigrations --check`: no changes.
+  `compose_config_check.py`: production, production+edge, local ok. **Full suite: 1015 passed,
+  2 skipped, 0 failed** (`pytest tests -n 3 --create-db`). Contract: 164 calls, `-k contract` green.
+- FE: typecheck ok; lint 0 errors (62 warnings, unchanged); 213/213 tests; `npm run build` ok.
+- Live: `system_check.py` 30/32 (2 need `GEMINI_API_KEY`); `endpoint_sweep.py` 0 failures;
+  `security_probe.py` 29/29; `test:integration` 20/20; `test:e2e` 28/28.
+
+⚠ Operator:
+1. Add the keys in section 5 of the readiness report (Gemini, Stripe, SMTP, Sentry; n8n optional).
+2. Grafana: your login `jt-code-admin` now has the `.env.docker` password (see the report).
+3. On the server: `make compose-up-prod`, then the three live scripts, the backup restore drill and a
+   load test.
+4. Test logins created by the checks remain in the local Docker database (`*@jt-code.local`).
+
+### 2026-11-23: Phase 16, P16-1 ☑ (API keys)
+Found while scoping the screen: organization API keys were issued but nothing accepted them (`key_hash`
+was written once and never read; the only authenticator was the JWT one). A key screen alone would have
+handed customers keys that do not work. Two more defects in the same code:
+- a `PATCH` could set a revoked key back to `active` (status was writable);
+- on `POST` the serializer returned the stored digest as `full_key` (a placeholder).
+
+Backend:
+- `apps/integrations/authentication.py`: `X-API-Key` authentication, registered after the JWT one. It
+  accepts active, unexpired keys of an active member, pinned to the key's workspace (another
+  `X-Organization-ID` gets 403). `read`/`write` scopes (no `write`: safe methods only). It never serves
+  `/api-keys/`, `/accounts/`, `/settings/`, `/organizations/` or `/tool-credentials/`. Each key has an
+  hourly limit, capped by the new setting `API_KEY_MAX_RATE_LIMIT` (default 10000). Unknown keys count
+  towards the per-IP failure lockout. `last_used_at` is written at most once a minute.
+- `key_hash` is unique and indexed (migration `integrations.0003`).
+- Serializers: responses never carry the key or its digest; the full key comes once, in the create
+  response. Only `name` can change afterwards. Scopes must be `read`/`write` (omitted: `read`); the
+  limit is capped; the expiry must be in the future.
+- Viewset: members see and revoke their own keys, admins all; revoke is idempotent and returns the key.
+- OpenAPI describes `X-API-Key` (`OrganizationAPIKey`); `docs/API_V1_CONTRACT.md` documents the rules.
+
+Frontend:
+- Settings → Developer (`?tab=developer`): create a key (name, expiry 30/90/365 days or never, an
+  explicit "allow changes" box), shown once with copy and a `curl` example, the list (status, scopes,
+  created, last used, expiry, owner), revoke with confirmation. `ApiKeyRepository` in API and mock modes.
+  English texts plus 19 machine-filled languages; "Developer" corrected by hand in fr/es/zh (the
+  machine chose the property and photo senses).
+
+Tests (each rule fails without its code: without the authenticator, 8 of the API key tests fail):
+- BE `tests/test_api_keys.py` (16): shown once, digest only; read key reads and cannot write; write key
+  writes into its own workspace only; pinned workspace; no key/account/member management; revoked,
+  expired, unknown and orphaned keys; no reactivation, only the name changes; invalid scopes, limit and
+  expiry; default read scope; member versus admin visibility; per-key hourly limit.
+- FE: `developer.test.ts` (2), `apiKeys.test.ts` (3: mock and API mapping), `DeveloperTab.test.tsx` (3).
+- Live: `security_probe.py` has 8 API key probes; 37/37 on the rebuilt stack. Browser:
+  `E2E_ONLY='API key' npm run test:e2e`: a key created in Settings reads the API from outside the browser,
+  is refused for writes, and gets 401 right after revoke. GoTrue mailed to Mailpit for that run only and
+  was restored.
+
+Gate: BE full suite **1031 passed, 2 skipped, 0 failed**; ruff ok (484 files); `makemigrations --check` no
+changes; contract 167 calls green. FE typecheck
+ok, lint 0 errors (62 warnings, unchanged), 221/221 tests, build ok.
+
+Note: `test_picture_of_a_table_is_read_by_ocr_into_rows_and_columns` failed once in a full run and passes
+alone and in two other full runs: the OCR engine is memory-hungry next to 3 test workers on this 7 GB
+machine.

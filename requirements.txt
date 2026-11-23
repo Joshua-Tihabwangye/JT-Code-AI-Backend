@@ -1,6 +1,6 @@
 # Django & Core
 Django>=5.2,<5.3
-djangorestframework>=3.17.2,<3.18
+djangorestframework>=3.18.2,<3.19
 django-cors-headers>=4.7,<5
 drf-spectacular>=0.28,<0.29
 dj-database-url>=2.3,<3
@@ -57,7 +57,7 @@ weasyprint>=70,<71
 pydyf>=0.11,<1
 
 # Image Processing
-Pillow>=12.3,<13
+Pillow>=13.0,<14
 
 # Utilities
 PyYAML>=6.0,<7

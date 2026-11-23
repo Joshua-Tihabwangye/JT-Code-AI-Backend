@@ -66,6 +66,18 @@
       "path": "/analysis/runs/{param}/retry/"
     },
     {
+      "method": "GET",
+      "path": "/api-keys/"
+    },
+    {
+      "method": "POST",
+      "path": "/api-keys/"
+    },
+    {
+      "method": "POST",
+      "path": "/api-keys/{param}/revoke/"
+    },
+    {
       "method": "POST",
       "path": "/billing/portal/"
     },

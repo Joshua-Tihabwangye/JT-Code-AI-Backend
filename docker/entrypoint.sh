@@ -25,6 +25,12 @@ case "$role" in
     # host or edge proxy). With "*" uvicorn would take the left-most, client-written entry as the peer.
     # Start the pre-loaded analytics fork server with each API process (apps/analytics/zygote.py).
     export JT_PREWARM_ENGINE=1
+    # Prometheus discovers each API replica through Docker DNS and scrapes it by IP, so that IP is the
+    # Host header. The settings add POD_IP to ALLOWED_HOSTS (as in Kubernetes); it is internal only.
+    if [ -z "${POD_IP:-}" ]; then
+      POD_IP="$(python -c 'import socket; print(socket.gethostbyname(socket.gethostname()))' 2>/dev/null || true)"
+      export POD_IP
+    fi
     exec uvicorn config.asgi:application \
       --host 0.0.0.0 --port "${PORT:-8000}" \
       --workers "${WEB_CONCURRENCY:-2}" \

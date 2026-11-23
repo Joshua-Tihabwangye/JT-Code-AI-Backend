@@ -77,6 +77,21 @@ def organization_for_request(request, *, required: bool = False) -> Organization
     return organization
 
 
+def validate_selected_organization(request, user) -> None:
+    """Refuse an ``X-Organization-ID`` that names no organization, or one ``user`` is not a member of.
+
+    Runs once per authenticated request; the lookups are memoized on ``user`` under the same keys
+    ``organization_for_request`` uses, so endpoints that resolve the tenant pay nothing extra.
+    """
+    organization_id = request.headers.get("X-Organization-ID")
+    if not organization_id:
+        return
+    selected = _memoized(user, ("selected", organization_id), _NoneOnError(organization_id))
+    if selected is None:
+        raise PermissionDenied("The selected organization does not exist.")
+    require_organization_membership(user, selected.id)
+
+
 class _NoneOnError:
     """Look up an organization by id; ``None`` when it does not exist or the id is malformed."""
 

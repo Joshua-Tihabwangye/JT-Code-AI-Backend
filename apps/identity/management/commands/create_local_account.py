@@ -22,9 +22,10 @@ from django.utils.text import slugify
 
 from apps.billing.models import CreditLedger
 from apps.billing.services import CreditService
+from apps.identity.local_auth import create_local_login
 from apps.identity.models import Organization, User, UserOrganization
 from apps.identity.provisioning import fill_empty_profile
-from apps.identity.supabase_admin import SupabaseAdminError, create_auth_user, update_user_metadata
+from apps.identity.supabase_admin import SupabaseAdminError, update_user_metadata
 
 
 def signup_metadata(first_name: str, last_name: str) -> dict[str, str]:
@@ -60,7 +61,7 @@ class Command(BaseCommand):
 
         metadata = signup_metadata(options["first_name"], options["last_name"])
         try:
-            supabase_user_id, created = create_auth_user(email, password, metadata)
+            supabase_user_id, created = create_local_login(email, password, metadata)
             if not created and metadata:
                 update_user_metadata(supabase_user_id, metadata)
         except (SupabaseAdminError, ValueError) as exc:

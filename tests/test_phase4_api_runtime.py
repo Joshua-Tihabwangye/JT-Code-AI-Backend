@@ -269,6 +269,10 @@ def test_chat_worker_surfaces_permanent_gateway_failure_without_retry(user, conv
     assert request.retry_count == 0
     assert request.model_run_id is not None
     assert request.model_run.status == ModelRun.Status.FAILED
+    # The chat shows errorMessage to the user: no key or adapter names; the run keeps the cause.
+    assert request.error_message == "The AI service is not available right now. Please try again later."
+    assert "AI_PROVIDER" not in request.error_message and "API_KEY" not in request.error_message
+    assert request.model_run.error_message
 
 
 @pytest.mark.django_db

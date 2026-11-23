@@ -15,6 +15,7 @@ infrastructure - rests on these invariants, which CI enforces on every change:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -401,3 +402,39 @@ def test_deploys_are_by_digest_signed_and_production_is_gated():
     assert "deploy by digest only" in script
     assert script.index("job/jt-code-migrate") < script.index("rollout status")  # migrate before rollout
     assert "rollout undo" in script  # failed smoke tests roll back
+
+
+def _allowed_hosts(settings_module: str, **env: str) -> list[str]:
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "JT_CODE_SKIP_DOTENV": "1",
+        "DATABASE_URL": "postgresql://u:p@127.0.0.1:5432/x",
+        "DJANGO_SETTINGS_MODULE": settings_module,
+        **env,
+    }
+    output = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import django; from django.conf import settings; django.setup();"
+            " import json; print(json.dumps(settings.ALLOWED_HOSTS))",
+        ],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    return json.loads(output.stdout.strip().splitlines()[-1])
+
+
+def test_prometheus_can_scrape_each_api_replica_by_ip():
+    # single-host.yml discovers replicas through Docker DNS and scrapes them by IP (the Host header).
+    assert "dns_sd_configs: [{names: [api]" in (ROOT / "infra/prometheus/single-host.yml").read_text()
+    entrypoint = (ROOT / "docker/entrypoint.sh").read_text()
+    api_role = entrypoint[entrypoint.index("  api)") : entrypoint.index("exec uvicorn")]
+    assert "export POD_IP" in api_role and "gethostbyname" in api_role
+
+    assert "172.19.0.14" in _allowed_hosts("config.settings.development", POD_IP="172.19.0.14")
+    assert "172.19.0.14" not in _allowed_hosts("config.settings.development")

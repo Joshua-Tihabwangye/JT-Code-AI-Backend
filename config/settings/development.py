@@ -8,6 +8,9 @@ ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")  # noqa:
 # Docker Compose: Prometheus, health checks and sibling containers call the API by its service
 # name or loopback (DJANGO_INTERNAL_HOSTS, set by the compose files), not the public host.
 ALLOWED_HOSTS = [*ALLOWED_HOSTS, *env_list("DJANGO_INTERNAL_HOSTS")]  # noqa: F405
+# The Docker entrypoint sets POD_IP to the container's address (Prometheus scrapes each replica by IP).
+if POD_IP := env("POD_IP"):  # noqa: F405
+    ALLOWED_HOSTS = [*ALLOWED_HOSTS, POD_IP]
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173")  # noqa: F405
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")  # noqa: F405
 DATABASES, CACHES, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND = runtime_connection_settings(

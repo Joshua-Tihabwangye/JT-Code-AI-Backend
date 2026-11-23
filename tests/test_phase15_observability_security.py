@@ -645,8 +645,13 @@ PUBLIC_OPERATIONS = {
 }
 
 
-def test_dast_sweep_no_operation_serves_anonymous_data_or_errors(client):
+def test_dast_sweep_no_operation_serves_anonymous_data_or_errors(client, settings):
     from drf_spectacular.generators import SchemaGenerator
+
+    # As in production: callbacks are configured, so an unsigned call must be refused (4xx). Unconfigured,
+    # they fail closed with 503, and the outcome would depend on the developer's .env.
+    settings.N8N_WEBHOOK_SECRET = "test-n8n-callback-secret"  # nosec B105
+    settings.N8N_SENTRY_RELAY_SECRET = "test-n8n-error-relay-secret"  # nosec B105
 
     schema = SchemaGenerator(api_version="v1").get_schema(request=None, public=True)
     checked = 0

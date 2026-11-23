@@ -182,7 +182,7 @@ class APIKey(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="api_keys")
     name = models.CharField(max_length=255)
     prefix = models.CharField(max_length=20)
-    key_hash = models.CharField(max_length=128)
+    key_hash = models.CharField(max_length=128, unique=True)  # SHA-256 of the key; looked up per request
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
     scopes = models.JSONField(default=list, blank=True)
     rate_limit = models.PositiveIntegerField(default=1000)

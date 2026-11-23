@@ -276,6 +276,35 @@ def test_completion_api_accepts_and_completes_job(
     assert ModelRun.objects.filter(job_id=job.id, status=ModelRun.Status.COMPLETED).exists()
 
 
+# Autocommit, as in production: pytest-django's default test transaction hid a credit hold
+# (SELECT ... FOR UPDATE) that ran outside any transaction and answered 500 on every request.
+@pytest.mark.django_db(transaction=True, serialized_rollback=True)
+@override_settings(AI_PROVIDER="echo")
+def test_completion_api_reserves_credits_in_its_own_transaction(
+    authenticated_client, user, org, credit_balance
+):
+    response = authenticated_client.post(
+        "/api/v1/completion/",
+        {"messages": [{"role": "user", "content": "Hello there"}], "task_type": "GENERAL_QUESTION"},
+        format="json",
+    )
+    assert response.status_code == 202, response.content
+    assert Job.objects.get(id=response.data["job_id"]).reserved_credits > 0
+
+
+@pytest.mark.django_db(transaction=True, serialized_rollback=True)
+@pytest.mark.unfunded
+@override_settings(AI_PROVIDER="echo")
+def test_completion_api_refused_hold_leaves_no_job(authenticated_client, user, org):
+    response = authenticated_client.post(
+        "/api/v1/completion/",
+        {"messages": [{"role": "user", "content": "Hello there"}], "task_type": "GENERAL_QUESTION"},
+        format="json",
+    )
+    assert 400 <= response.status_code < 500, response.content
+    assert not Job.objects.filter(organization=org).exists()
+
+
 @pytest.mark.django_db
 def test_completion_api_requires_messages(authenticated_client, user, org, credit_balance):
     response = authenticated_client.post("/api/v1/completion/", {"task_type": "GENERAL_QUESTION"})

@@ -189,6 +189,11 @@ class _Attempts:
     def failed(self, entry: dict[str, Any], error: AIGatewayError, started: float) -> None:
         entry["error_code"] = error.code
         entry["latency_ms"] = int((time.monotonic() - started) * 1000)
+        # When no candidate is configured, report the first one (the policy's primary model, e.g. a
+        # missing GEMINI_API_KEY), not the last fallback tried (the development echo model).
+        unconfigured = isinstance(error, AIProviderNotConfigured)
+        if unconfigured and isinstance(self.last_error, AIProviderNotConfigured):
+            return
         self.last_error = error
 
 
