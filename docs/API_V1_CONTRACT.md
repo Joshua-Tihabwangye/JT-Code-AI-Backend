@@ -115,6 +115,30 @@ See [BILLING_AND_STRIPE.md](BILLING_AND_STRIPE.md#api-frontend-contract). Plans,
 `POST /api/v1/wallets/me/topup/`, payment methods via SetupIntent, the Billing Portal, invoices and
 `POST /api/v1/webhooks/stripe/` (signed, idempotent per Stripe event id).
 
+## Outbound webhooks
+
+Organization admins register HTTPS endpoints (`/webhooks/`, Settings → Developer). The signing secret
+(`whsec_…`) is returned once, at creation and by `POST /webhooks/{id}/rotate-secret/`.
+
+* **Events:** `chat.request.completed|failed`, `jobs.job.completed|failed`,
+  `document.render.completed|failed`, `conversion.job.completed|failed`,
+  `knowledge.document.indexed|index_failed`, `images.generated`, `agents.run.completed|failed`, and
+  `webhook.test` (sent by `POST /webhooks/{id}/test/`). An endpoint receives all of them
+  (`event_filter: all`) or the listed ones.
+* **Request:** `POST`, JSON body `{"id", "type", "created_at", "organization_id", "data"}`. `id` is the event
+  id: the same event sent to several endpoints, or retried, keeps it. Headers: `X-JT-Event`,
+  `X-JT-Delivery` (unique per endpoint; use it to drop duplicates) and
+  `X-JT-Signature: t=<unix seconds>,v1=<hex>`.
+* **Verify:** compute `HMAC-SHA256(secret, "<t>.<raw body>")` and compare it to `v1` in constant time;
+  reject `t` older than 5 minutes.
+* **Delivery:** answer 2xx within 10 s. Anything else is retried after 30 s, 2 min, 8 min, 32 min, … up to
+  6 attempts (`WEBHOOK_MAX_ATTEMPTS`). Redirects are not followed. The URL must be HTTPS on port 443 and
+  resolve only to public addresses, checked when saved and again on every delivery. After 20 failed
+  deliveries in a row (`WEBHOOK_DISABLE_AFTER_FAILURES`) the endpoint is disabled; resuming it
+  (`PATCH status: active`) resets the count.
+* Custom `headers` (at most 10) cannot set `Host`, `Content-Type`, `User-Agent`, framing headers or any
+  `X-JT-*` header.
+
 ## Inbound webhooks
 
 `POST /api/v1/inbound-webhooks/{webhookId}/` (public, signature-authenticated). Send

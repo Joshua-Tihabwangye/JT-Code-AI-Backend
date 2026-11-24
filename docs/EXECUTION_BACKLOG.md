@@ -264,7 +264,7 @@ customer needs first.
 | ID | Task | Acceptance |
 | --- | --- | --- |
 | P16-1 ☑ | **API keys, end to end.** Found 2026-11-23: keys were issued but **nothing accepted them** (`key_hash` was never read; the only authenticator was the JWT one). Also, a `PATCH` could set a revoked key back to `active`, and on `POST` the serializer returned the stored digest as `full_key`. Backend: `X-API-Key` authentication (active, unexpired, member, pinned to the key's workspace, `read`/`write` scopes, never key/account/member management, a per-key hourly limit, IP failure lockout); updates change the name only; scope, limit and expiry validation; members see their own keys, admins all. Frontend: **Settings → Developer: API keys** (create with scopes and expiry, shown once with copy, list, revoke) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
-| P16-2 | **Settings → Developer: outbound webhooks** (endpoints, secret rotation, deliveries, redeliver) | Same |
+| P16-2 ☑ | **Outbound webhooks, end to end.** Found 2026-11-23: endpoints could be registered but **nothing ever delivered to them** (the only `WebhookDelivery` writer was the inbound view), `test` was a stub, the signing secret was never shown, and URLs and headers were not validated. Backend: a published event catalogue whose organization is resolved from the event's entity (fail closed); deliveries created in the producer's transaction; signed (`X-JT-Signature`), SSRF-safe, no redirects, retried with backoff, endpoint disabled after repeated failures, beat sweep for due retries; a real test send; the secret shown once and rotatable. Frontend: **Settings → Developer: webhooks** (add, events, secret once, test, pause/resume, delete, recent deliveries) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-3 | **Help → Support cases** (open, list, reply, close) | Same |
 | P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
 | P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
@@ -916,3 +916,50 @@ ok, lint 0 errors (62 warnings, unchanged), 221/221 tests, build ok.
 Note: `test_picture_of_a_table_is_read_by_ocr_into_rows_and_columns` failed once in a full run and passes
 alone and in two other full runs: the OCR engine is memory-hungry next to 3 test workers on this 7 GB
 machine.
+
+### 2026-11-24: Phase 16, P16-2 ☑ (outbound webhooks)
+Found: an organization could register webhook endpoints, but nothing ever delivered to them (the only
+`WebhookDelivery` writer was the inbound view). `POST /webhooks/{id}/test/` was a stub that sent nothing,
+the signing secret was never shown, and URLs and headers were not validated.
+
+Backend (`apps/integrations/outbound.py`, `tasks.py`):
+- Event catalogue (13 types: chat reply, job, document render, file conversion, knowledge indexing,
+  images, agent run). Each type's organization is resolved from the entity behind the event key, never from
+  the payload; with no resolvable organization nothing is sent (fail closed). Internal payload keys
+  (`traceId`, `modelRunId`) are dropped.
+- `add_outbox_event` fans out to subscribed active endpoints in the producer's transaction (as the n8n
+  deliveries do). Delivery runs after commit on `jobs.default`; `sweep-webhook-deliveries` (beat, 60 s)
+  re-dispatches due ones.
+- Each delivery is signed (`X-JT-Signature: t=…,v1=HMAC-SHA256(secret, "t.body")`) and carries
+  `X-JT-Event` and `X-JT-Delivery`. It goes out through `apps.tools.egress.safe_request`: HTTPS, public
+  addresses only, pinned connection, no redirects, 64 KiB response cap, timeout. Backoff is 30 s × 4ⁿ up to
+  6 attempts (`WEBHOOK_MAX_ATTEMPTS`). A lease on `next_retry_at` stops duplicate sends from a second task
+  or the sweep; after `WEBHOOK_DISABLE_AFTER_FAILURES` (20) failed deliveries in a row the endpoint is
+  disabled.
+- API: admins only (an endpoint receives the whole workspace's events, so an editor's webhook would be an
+  export channel). The `whsec_` secret is returned once at creation and by `rotate-secret`, never listed.
+  Users may set only `active`/`paused` (resuming resets the failure count). URLs are checked with the
+  egress rules when saved and again on each send; events must be in the catalogue; at most 10 custom
+  headers, none of them reserved or `X-JT-*`, no CR/LF. `test` sends a real signed `webhook.test`.
+- `docs/API_V1_CONTRACT.md`: how integrators verify signatures and how retries work.
+
+Frontend: Settings → Developer → Webhooks (add with all or chosen events, secret once, send test,
+deliveries with status, attempts and HTTP code (refreshed while open), pause/resume, new secret and
+delete with confirmation, an admin-only note for other members). `WebhookRepository` in API and mock
+modes; texts in 20 languages. The English "Rotate secret" became "New secret": "rotate" came back
+literally ("spin the secret") in several languages, and Swahili's title as "web whips".
+
+Tests:
+- BE `tests/test_outbound_webhooks.py` (18). Without the outbox hook the 4 fan-out tests fail; the rest
+  exercise code that did not exist. Related suites (billing, n8n, events, security): 94 passed.
+- FE: repositories (3), section (4); 228/228 overall.
+- Live: `security_probe.py` **44/44**. Unsafe URLs are refused (http, localhost, a private network
+  address, port 8443). A test event to `https://example.com` (the IANA documentation domain) left through
+  the worker and egress layer, and its answer (HTTP 405) was recorded. Another workspace does not see the
+  endpoint.
+- Browser (`E2E_ONLY='API key|webhook'`, GoTrue on Mailpit for that run only, restored): add a webhook,
+  see the secret once, send a test, see "HTTP 405" in its deliveries, delete it.
+
+Gate: BE full suite **1049 passed, 2 skipped, 0 failed**; ruff ok (487 files); `makemigrations --check` no
+changes; contract 174 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 228/228
+tests. (The machine was powered off once during the gate; the suite was rerun.)

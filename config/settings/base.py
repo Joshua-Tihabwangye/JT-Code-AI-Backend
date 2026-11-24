@@ -232,6 +232,10 @@ CELERY_TASK_TIME_LIMIT = 600
 CELERY_TASK_SOFT_TIME_LIMIT = 540
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BEAT_SCHEDULE = {
+    "sweep-webhook-deliveries": {
+        "task": "apps.integrations.tasks.sweep_webhook_deliveries",
+        "schedule": 60.0,
+    },
     "detect-cost-anomalies": {
         "task": "apps.usage.tasks.detect_cost_anomalies",
         "schedule": 3600.0,
@@ -408,6 +412,7 @@ CELERY_TASK_ROUTES = {
     "apps.tools.tasks.*": {"queue": "jobs.default"},
     "apps.usage.tasks.*": {"queue": "jobs.default"},
     "apps.orchestration.tasks.*": {"queue": "orchestration"},
+    "apps.integrations.tasks.*": {"queue": "jobs.default"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -433,6 +438,10 @@ AUTH_FAILURE_LIMIT = int(env("AUTH_FAILURE_LIMIT", "60"))
 AUTH_FAILURE_WINDOW_SECONDS = int(env("AUTH_FAILURE_WINDOW_SECONDS", "60"))
 # Organization API keys (X-API-Key): the most requests per hour one key may make, whatever its own limit.
 API_KEY_MAX_RATE_LIMIT = int(env("API_KEY_MAX_RATE_LIMIT", "10000"))
+# Outbound webhooks (apps.integrations.outbound).
+WEBHOOK_MAX_ATTEMPTS = int(env("WEBHOOK_MAX_ATTEMPTS", "6"))
+WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))
+WEBHOOK_DISABLE_AFTER_FAILURES = int(env("WEBHOOK_DISABLE_AFTER_FAILURES", "20"))
 # The Django admin (operators reach it over an SSH tunnel; the public edge blocks /admin).
 DJANGO_ADMIN_ENABLED = env_bool("DJANGO_ADMIN_ENABLED", True)
 

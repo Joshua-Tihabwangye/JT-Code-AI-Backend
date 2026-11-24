@@ -668,6 +668,34 @@
     {
       "method": "POST",
       "path": "/wallets/me/topup/"
+    },
+    {
+      "method": "GET",
+      "path": "/webhooks/"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/webhooks/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/webhooks/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/webhooks/{param}/deliveries/"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/{param}/rotate-secret/"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/{param}/test/"
     }
   ],
   "delegated": {

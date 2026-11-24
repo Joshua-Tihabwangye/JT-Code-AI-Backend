@@ -22,7 +22,7 @@ def add_outbox_event(
 ) -> OutboxEvent:
     """Record an event in the caller's transaction on ``<prefix>.<event_name>``.
 
-    Subscribed n8n workflows get their delivery rows in the same transaction.
+    Subscribed n8n workflows and organization webhooks get their delivery rows in the same transaction.
     """
     event = OutboxEvent.objects.create(
         topic=topic_name(validate_event_type(event_name)),
@@ -30,9 +30,11 @@ def add_outbox_event(
         payload=payload,
         headers=_headers_with_correlation(headers),
     )
+    from apps.integrations.outbound import fan_out as fan_out_webhooks
     from apps.orchestration.deliveries import fan_out
 
     fan_out(event, event_name)
+    fan_out_webhooks(event, event_name)
     return event
 
 

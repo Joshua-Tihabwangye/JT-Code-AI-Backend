@@ -12,6 +12,8 @@ penetration-surface table, run from outside the way an attacker would.
   banner.
 * **API keys:** a read key reads but cannot write, manage keys or reach the account, is pinned to its
   workspace and stops working when revoked.
+* **Webhooks:** unsafe endpoint URLs are refused; a test event leaves through the worker and the egress
+  layer and its answer is recorded.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -236,6 +238,49 @@ def main() -> int:
     http("POST", f"{API}/api-keys/{created.get('id')}/revoke/", headers=auth_a)
     status = http("GET", f"{API}/conversations/", headers=key)[0]
     probe("a revoked key stops working at once", status == 401, str(status))
+
+    # --- Outbound webhooks
+    print("webhooks")
+    for label, url in (
+        ("plain http", "http://example.com/jt-code-probe"),
+        ("loopback", "https://localhost/jt-code-probe"),
+        ("private network", "https://10.0.0.1/jt-code-probe"),
+        ("non-443 port", "https://example.com:8443/jt-code-probe"),
+    ):
+        status = http("POST", f"{API}/webhooks/", {"name": "probe", "url": url}, auth_a)[0]
+        probe(f"a webhook to a {label} address is refused", status == 400, str(status))
+    status, _, hook = http(
+        "POST",
+        f"{API}/webhooks/",
+        {"name": f"probe-{run}", "url": "https://example.com/jt-code-probe"},
+        auth_a,
+    )
+    probe(
+        "an admin adds a webhook (secret shown once)",
+        status == 201 and str(hook.get("secret", "")).startswith("whsec_"),
+    )
+    if status == 201:
+        http("POST", f"{API}/webhooks/{hook['id']}/test/", headers=auth_a)
+        result: dict[str, Any] = {}
+        for _ in range(40):
+            listed = http("GET", f"{API}/webhooks/{hook['id']}/deliveries/", headers=auth_a)[2]
+            rows = listed.get("results", listed) if isinstance(listed, dict) else listed
+            if rows and rows[0].get("status") not in ("pending", "retrying"):
+                result = rows[0]
+                break
+            time.sleep(1.5)
+        # example.com (IANA documentation domain) refuses the POST: the signed request left through the
+        # egress layer and its answer was recorded.
+        probe(
+            "a test event is sent by the worker and its answer recorded",
+            result.get("event_type") == "webhook.test" and bool(result.get("response_status")),
+            "{} HTTP {} {}".format(
+                result.get("status"), result.get("response_status"), result.get("error_message", "")
+            ),
+        )
+        http("DELETE", f"{API}/webhooks/{hook['id']}/", headers=auth_a)
+    listed = http("GET", f"{API}/webhooks/", headers=auth_b)[2]
+    probe("another workspace does not see the webhook", hook.get("id", "-") not in json.dumps(listed))
 
     # --- Gateway
     print("gateway")
