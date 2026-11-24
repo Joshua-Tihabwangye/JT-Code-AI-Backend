@@ -31,6 +31,7 @@ class AuditEventSerializer(serializers.ModelSerializer):
             "resource_id",
             "severity",
             "severity_display",
+            "outcome",
             "description",
             "metadata",
             "ip_address",

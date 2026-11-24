@@ -15,6 +15,7 @@ penetration-surface table, run from outside the way an attacker would.
 * **Webhooks:** unsafe endpoint URLs are refused; a test event leaves through the worker and the egress
   layer and its answer is recorded.
 * **Support:** cases stay in their workspace; customers reply and close but cannot assign.
+* **Audit log:** admins read it; malformed filters are 400; the CSV export is scoped to the workspace.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -306,6 +307,23 @@ def main() -> int:
     http("POST", f"{API}/support-cases/{case_id}/close/", headers=auth_a)
     status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "again"}, auth_a)[0]
     probe("a closed case takes no reply", status == 409, str(status))
+
+    # --- Audit log
+    print("audit log")
+    status = http("GET", f"{API}/audit-events/", headers=auth_a)[0]
+    probe("an admin reads the workspace audit log", status == 200, str(status))
+    for label, params in (("actor", "actor=not-a-uuid"), ("date", "end_date=2026-13-45")):
+        status = http("GET", f"{API}/audit-events/?{params}", headers=auth_a)[0]
+        probe(f"a malformed {label} filter is a 400, not a 500", status == 400, str(status))
+    status, response_headers, body = http("GET", f"{API}/audit-events/export/", headers=auth_a)
+    content_type = {k.lower(): v for k, v in response_headers.items()}.get("content-type", "")
+    probe(
+        "the audit export is CSV",
+        status == 200 and content_type.startswith("text/csv"),
+        f"{status} {content_type}",
+    )
+    text = body if isinstance(body, str) else json.dumps(body)
+    probe("the export holds no other workspace's entries", b["email"] not in text)
 
     # --- Gateway
     print("gateway")

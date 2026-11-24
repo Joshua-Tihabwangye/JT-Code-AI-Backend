@@ -266,7 +266,7 @@ customer needs first.
 | P16-1 ☑ | **API keys, end to end.** Found 2026-11-23: keys were issued but **nothing accepted them** (`key_hash` was never read; the only authenticator was the JWT one). Also, a `PATCH` could set a revoked key back to `active`, and on `POST` the serializer returned the stored digest as `full_key`. Backend: `X-API-Key` authentication (active, unexpired, member, pinned to the key's workspace, `read`/`write` scopes, never key/account/member management, a per-key hourly limit, IP failure lockout); updates change the name only; scope, limit and expiry validation; members see their own keys, admins all. Frontend: **Settings → Developer: API keys** (create with scopes and expiry, shown once with copy, list, revoke) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-2 ☑ | **Outbound webhooks, end to end.** Found 2026-11-23: endpoints could be registered but **nothing ever delivered to them** (the only `WebhookDelivery` writer was the inbound view), `test` was a stub, the signing secret was never shown, and URLs and headers were not validated. Backend: a published event catalogue whose organization is resolved from the event's entity (fail closed); deliveries created in the producer's transaction; signed (`X-JT-Signature`), SSRF-safe, no redirects, retried with backoff, endpoint disabled after repeated failures, beat sweep for due retries; a real test send; the secret shown once and rotatable. Frontend: **Settings → Developer: webhooks** (add, events, secret once, test, pause/resume, delete, recent deliveries) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-3 ☑ | **Support cases, end to end.** Found 2026-11-24: customers could open cases but **nobody could answer** (no replies, no notification), and any editor could `assign` a case to **any user id in the system** or `PATCH` its status and assignee. Backend: a reply thread (`SupportCaseMessage`); members see their own cases, admins all of the workspace's; customers reply and close (no assign/resolve/edit); staff answer in the Django admin; mail to `SUPPORT_NOTIFICATION_EMAIL` and back to the customer; per-user hourly limit. Frontend: **Settings → Support** (open, list, thread, reply, close) | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
-| P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
+| P16-4 ☑ | **Settings → Audit log** (admins; filters; CSV export). Found 2026-11-24: a malformed `actor` filter or an impossible date answered 500; a date-only `end_date` dropped that day's own events (`parse_datetime` reads a bare date as midnight); the list never returned `outcome`. | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
 | P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
 | P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
@@ -1003,3 +1003,30 @@ Tests:
 Gate: BE full suite **1061 passed, 2 skipped, 0 failed** (rerun after the machine restarted); ruff ok (489
 files); `makemigrations --check` no changes; contract 179 calls green. FE typecheck ok; lint 0 errors (62
 warnings, unchanged); 233/233 tests.
+
+### 2026-11-24: Phase 16, P16-4 ☑ (audit log)
+The audit API was real (admin-only, append-only, it records key, webhook, file and settings changes) but
+had no screen, and its filters had defects:
+- `actor=not-a-uuid` answered 500; so did an impossible date such as `end_date=2026-13-45`;
+- `end_date=2026-11-20` excluded the 20th's own events (`parse_datetime` accepts a bare date as midnight,
+  so the "date only" case was never reached); naive datetimes were compared with aware ones;
+- the list never returned `outcome`.
+
+Backend: the filters are validated (400) and an end date includes its whole day. New
+`GET /audit-events/export/`: CSV of the filtered trail, newest first, streamed, at most 50 000 rows,
+admin-only, workspace-scoped. Every cell starting with `=`, `+`, `-`, `@`, tab or CR is prefixed with `'`,
+so an attacker-controlled description or user agent cannot run as a formula in Excel or Sheets.
+
+Frontend: Settings → Audit log (`?tab=audit`): area and date filters (a reversed range is refused),
+date-and-time, who, what (area, action, description), result, IP; "Show more" pages; Download CSV; an
+admin-only note for other members. `AuditRepository` in API and mock modes (the mock records nothing);
+texts in 20 languages.
+
+Tests: BE `tests/test_audit_log_api.py` (10). The first four failed against the old code (500, missing
+day, no export). The append-only trigger refuses `UPDATE`, so test events are dated when written. FE
+repository (1) and tab (3); 237/237 overall. Live: `security_probe.py` **55/55** (5 audit probes). Browser:
+`E2E_ONLY='API key|webhook|audit log|support case'` 5/5 steps; the screenshot showed an empty Result column
+and date-only times, both fixed and checked again (GoTrue on Mailpit for those runs only, restored).
+
+Gate: BE full suite **1071 passed, 2 skipped, 0 failed**; ruff ok (490 files); `makemigrations --check` no
+changes; contract 181 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 237/237 tests.

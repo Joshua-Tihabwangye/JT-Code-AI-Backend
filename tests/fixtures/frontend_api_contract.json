@@ -78,6 +78,14 @@
       "path": "/api-keys/{param}/revoke/"
     },
     {
+      "method": "GET",
+      "path": "/audit-events/"
+    },
+    {
+      "method": "GET",
+      "path": "/audit-events/export/"
+    },
+    {
       "method": "POST",
       "path": "/billing/portal/"
     },

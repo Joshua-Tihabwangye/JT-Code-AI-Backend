@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, time
+import csv
+import uuid
+from datetime import UTC, datetime, time, timedelta
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status, viewsets
@@ -46,6 +49,35 @@ def _tenant_queryset(queryset, request: Request, *, organization_field: str = "o
     return queryset.filter(**{f"{organization_field}_id": organization.id})
 
 
+AUDIT_EXPORT_MAX_ROWS = 50_000
+AUDIT_EXPORT_FIELDS = (
+    "created_at",
+    "actor_email",
+    "category",
+    "action",
+    "severity",
+    "outcome",
+    "resource_type",
+    "resource_id",
+    "description",
+    "ip_address",
+    "user_agent",
+    "request_id",
+)
+# A cell starting with one of these is a formula in Excel, LibreOffice and Google Sheets.
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value) -> str:
+    text = "" if value is None else str(value)
+    return f"'{text}" if text.startswith(_FORMULA_START) else text
+
+
+class _Echo:
+    def write(self, value: str) -> str:
+        return value
+
+
 class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
     """The tenant audit trail: organization admins only (it contains IPs and actors)."""
 
@@ -57,33 +89,65 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = _tenant_queryset(AuditEvent.objects.all(), self.request).select_related(
             "organization", "actor"
         )
-
-        # Filter by category
-        category = self.request.query_params.get("category")
-        if category:
-            queryset = queryset.filter(category=category)
-
-        # Filter by severity
-        severity = self.request.query_params.get("severity")
-        if severity:
-            queryset = queryset.filter(severity=severity)
-
-        # Filter by actor
-        actor_id = self.request.query_params.get("actor")
-        if actor_id:
-            queryset = queryset.filter(actor_id=actor_id)
-
-        for name, lookup in (("start_date", "created_at__gte"), ("end_date", "created_at__lte")):
-            if value := self.request.query_params.get(name):
-                moment = parse_datetime(value) or (
-                    datetime.combine(day, time.min, tzinfo=UTC) if (day := parse_date(value)) else None
+        params = self.request.query_params
+        for name in ("category", "severity", "outcome"):
+            if value := params.get(name):
+                queryset = queryset.filter(**{name: value})
+        if actor_id := params.get("actor"):
+            try:
+                queryset = queryset.filter(actor_id=uuid.UUID(actor_id))
+            except ValueError as exc:
+                raise ValidationError({"actor": "Use a user id."}) from exc
+        if value := params.get("start_date"):
+            queryset = queryset.filter(created_at__gte=self._moment("start_date", value))
+        if value := params.get("end_date"):
+            # A date-only end includes that whole day; a datetime is an exact upper bound.
+            # (parse_datetime also accepts a bare date, as midnight, which dropped the day's own events.)
+            try:
+                day = parse_date(value) if len(value) == 10 else None
+            except ValueError as exc:
+                raise ValidationError({"end_date": "Use an ISO-8601 date or datetime."}) from exc
+            if day is not None:
+                queryset = queryset.filter(
+                    created_at__lt=datetime.combine(day + timedelta(days=1), time.min, tzinfo=UTC)
                 )
-                if moment is None:
-                    raise ValidationError({name: "Use an ISO-8601 date or datetime."})
-                queryset = queryset.filter(**{lookup: moment})
-        if outcome := self.request.query_params.get("outcome"):
-            queryset = queryset.filter(outcome=outcome)
-        return queryset
+            else:
+                queryset = queryset.filter(created_at__lte=self._moment("end_date", value))
+        return queryset.order_by("-created_at")
+
+    @staticmethod
+    def _moment(name: str, value: str) -> datetime:
+        try:
+            moment = parse_datetime(value) or (
+                datetime.combine(day, time.min, tzinfo=UTC) if (day := parse_date(value)) else None
+            )
+        except ValueError:
+            moment = None
+        if moment is None:
+            raise ValidationError({name: "Use an ISO-8601 date or datetime."})
+        return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+    @action(detail=False, methods=["get"])
+    def export(self, request: Request):
+        """CSV of the filtered trail (newest first, at most AUDIT_EXPORT_MAX_ROWS rows), formula-safe."""
+        writer = csv.writer(_Echo())
+        rows = self.get_queryset()[:AUDIT_EXPORT_MAX_ROWS].iterator(chunk_size=2000)
+
+        def lines():
+            yield writer.writerow(AUDIT_EXPORT_FIELDS)
+            for event in rows:
+                values = {
+                    "created_at": event.created_at.isoformat(),
+                    "actor_email": event.actor.email if event.actor_id else "",
+                }
+                yield writer.writerow(
+                    [_csv_cell(values.get(field, getattr(event, field, ""))) for field in AUDIT_EXPORT_FIELDS]
+                )
+
+        response = StreamingHttpResponse(lines(), content_type="text/csv; charset=utf-8")
+        stamp = timezone.now().strftime("%Y%m%d-%H%M%S")
+        response["Content-Disposition"] = f'attachment; filename="audit-log-{stamp}.csv"'
+        return response
 
 
 class ConsentRecordViewSet(viewsets.ModelViewSet):
