@@ -115,6 +115,16 @@ See [BILLING_AND_STRIPE.md](BILLING_AND_STRIPE.md#api-frontend-contract). Plans,
 `POST /api/v1/wallets/me/topup/`, payment methods via SetupIntent, the Billing Portal, invoices and
 `POST /api/v1/webhooks/stripe/` (signed, idempotent per Stripe event id).
 
+## Support cases
+
+Any member opens a case (`POST /support-cases/`: `subject` ≤ 200, `description` ≤ 10 000, `category`,
+`priority` low|medium|high|urgent; `SUPPORT_CASES_PER_HOUR` per user, then 429). Members list their own
+cases; organization admins list every case of the organization. The conversation is
+`GET|POST /support-cases/{id}/messages/` (`body` ≤ 10 000; 409 once closed); a reply reopens a resolved
+case. `POST /support-cases/{id}/close/` closes it. Status, priority and assignment are support's: JT-Code
+staff answer in the Django admin (Governance → Support cases), which mails the customer.
+`SUPPORT_NOTIFICATION_EMAIL` receives new cases and customer replies.
+
 ## Outbound webhooks
 
 Organization admins register HTTPS endpoints (`/webhooks/`, Settings → Developer). The signing secret

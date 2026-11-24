@@ -1,6 +1,13 @@
 from rest_framework import serializers
 
-from apps.governance.models import AuditEvent, ConsentRecord, RetentionRule, SafetyEvent, SupportCase
+from apps.governance.models import (
+    AuditEvent,
+    ConsentRecord,
+    RetentionRule,
+    SafetyEvent,
+    SupportCase,
+    SupportCaseMessage,
+)
 
 
 class AuditEventSerializer(serializers.ModelSerializer):
@@ -200,50 +207,61 @@ class SafetyEventReviewSerializer(serializers.Serializer):
     review_notes = serializers.CharField(required=False, allow_blank=True)
 
 
+class SupportCaseMessageSerializer(serializers.ModelSerializer):
+    """A reply as the customer sees it: support staff appear as "JT-Code support", not by name."""
+
+    author_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SupportCaseMessage
+        fields = ["id", "author_role", "author_name", "body", "created_at"]
+        read_only_fields = fields
+
+    def get_author_name(self, obj) -> str:
+        if obj.author_role == SupportCaseMessage.Author.SUPPORT:
+            return "JT-Code support"
+        author = obj.author
+        return (author.full_name or author.email) if author else ""
+
+
 class SupportCaseSerializer(serializers.ModelSerializer):
+    """A case as members see it. Everything is read-only: customers act through ``messages`` and ``close``."""
+
     user_email = serializers.EmailField(source="user.email", read_only=True)
-    organization_name = serializers.CharField(source="organization.name", read_only=True)
-    assigned_to_email = serializers.EmailField(source="assigned_to.email", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    priority_display = serializers.CharField(source="get_priority_display", read_only=True)
-    category_display = serializers.CharField(source="get_category_display", read_only=True)
+    message_count = serializers.IntegerField(source="messages.count", read_only=True)
 
     class Meta:
         model = SupportCase
         fields = [
             "id",
-            "organization",
-            "organization_name",
-            "user",
             "user_email",
             "status",
-            "status_display",
             "priority",
-            "priority_display",
             "category",
-            "category_display",
             "subject",
             "description",
-            "assigned_to",
-            "assigned_to_email",
-            "tags",
-            "metadata",
+            "message_count",
             "resolved_at",
             "closed_at",
             "first_response_at",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "resolved_at", "closed_at", "first_response_at", "created_at", "updated_at"]
+        read_only_fields = fields
 
 
 class SupportCaseCreateSerializer(serializers.ModelSerializer):
+    subject = serializers.CharField(max_length=200)
+    description = serializers.CharField(max_length=10000)
+    priority = serializers.ChoiceField(
+        choices=SupportCase.Priority.choices, default=SupportCase.Priority.MEDIUM
+    )
+    category = serializers.ChoiceField(choices=SupportCase.Category.choices)
+
     class Meta:
         model = SupportCase
-        fields = ["subject", "description", "priority", "category", "tags"]
+        fields = ["subject", "description", "priority", "category"]
 
 
-class SupportCaseUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SupportCase
-        fields = ["status", "priority", "category", "assigned_to", "tags", "metadata"]
+class SupportCaseReplySerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=10000)

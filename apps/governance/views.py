@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, time
 
+from django.conf import settings
+from django.db import transaction
 from django.db.models import Count
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import Throttled, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -24,14 +26,17 @@ from apps.governance.serializers import (
     SafetyEventReviewSerializer,
     SafetyEventSerializer,
     SupportCaseCreateSerializer,
+    SupportCaseMessageSerializer,
+    SupportCaseReplySerializer,
     SupportCaseSerializer,
-    SupportCaseUpdateSerializer,
 )
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
     IsOrganizationAdmin,
     organization_for_request,
+    user_has_role,
 )
+from apps.identity.models import Role
 
 
 def _tenant_queryset(queryset, request: Request, *, organization_field: str = "organization"):
@@ -186,83 +191,78 @@ class SafetyEventViewSet(viewsets.ModelViewSet):
 
 
 class SupportCaseViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+    """Support cases from the customer's side. JT-Code support answers in the Django admin.
+
+    Any member opens cases and sees their own; organization admins see every case of the organization.
+    Customers reply and close; status, priority, assignment and resolution belong to support staff.
+    """
+
+    permission_classes = [IsAuthenticated]
     serializer_class = SupportCaseSerializer
     lookup_field = "id"
-
-    def get_permissions(self):
-        # Any member can open a case for their selected tenant. Assignment,
-        # resolution, and other management actions remain role-protected.
-        if self.action == "create":
-            return [IsAuthenticated()]
-        return super().get_permissions()
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        queryset = _tenant_queryset(SupportCase.objects.all(), self.request).select_related(
-            "organization", "user", "assigned_to"
-        )
-
-        # Filter by status
+        organization = organization_for_request(self.request, required=True)
+        queryset = SupportCase.objects.filter(organization=organization).select_related("user")
+        if not user_has_role(self.request.user, Role.RoleType.ADMIN, organization.id):
+            queryset = queryset.filter(user=self.request.user)
         status_filter = self.request.query_params.get("status")
         if status_filter:
             queryset = queryset.filter(status=status_filter)
-
-        # Filter by priority
-        priority = self.request.query_params.get("priority")
-        if priority:
-            queryset = queryset.filter(priority=priority)
-
-        return queryset
+        return queryset.order_by("-updated_at")
 
     def get_serializer_class(self):
         if self.action == "create":
             return SupportCaseCreateSerializer
-        if self.action in ["update", "partial_update"]:
-            return SupportCaseUpdateSerializer
         return SupportCaseSerializer
 
-    def perform_create(self, serializer):
-        serializer.save(
-            organization=organization_for_request(self.request, required=True), user=self.request.user
-        )
+    def create(self, request, *args, **kwargs):
+        from apps.core.ratelimit import hit
+        from apps.governance.support import after_commit, notify_support
 
-    @action(detail=True, methods=["post"])
-    def assign(self, request: Request, id=None):
+        serializer = SupportCaseCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not hit(
+            f"support-case:{request.user.pk}", limit=settings.SUPPORT_CASES_PER_HOUR, window=3600
+        ).allowed:
+            raise Throttled(detail="Too many support cases this hour. Reply to an open case instead.")
+        with transaction.atomic():
+            case = serializer.save(
+                organization=organization_for_request(request, required=True), user=request.user
+            )
+            after_commit(notify_support, str(case.id))
+        return Response(SupportCaseSerializer(case).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get", "post"])
+    def messages(self, request: Request, id=None):
         case = self.get_object()
-        assigned_to_id = request.data.get("assigned_to_id")
-        if not assigned_to_id:
-            return Response({"detail": "assigned_to_id required"}, status=status.HTTP_400_BAD_REQUEST)
+        if request.method == "GET":
+            return Response(
+                SupportCaseMessageSerializer(case.messages.select_related("author"), many=True).data
+            )
+        if case.status == SupportCase.Status.CLOSED:
+            return Response(
+                {"detail": "This case is closed. Open a new one."}, status=status.HTTP_409_CONFLICT
+            )
+        reply = SupportCaseReplySerializer(data=request.data)
+        reply.is_valid(raise_exception=True)
+        from apps.governance.models import SupportCaseMessage
+        from apps.governance.support import add_message
 
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        try:
-            user = User.objects.get(id=assigned_to_id)
-        except User.DoesNotExist:
-            return Response({"detail": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        case.assigned_to = user
-        case.status = SupportCase.Status.IN_PROGRESS
-        if not case.first_response_at:
-            case.first_response_at = timezone.now()
-        case.save(update_fields=["assigned_to", "status", "first_response_at"])
-
-        return Response(SupportCaseSerializer(case).data)
-
-    @action(detail=True, methods=["post"])
-    def resolve(self, request: Request, id=None):
-        case = self.get_object()
-        case.status = SupportCase.Status.RESOLVED
-        case.resolved_at = timezone.now()
-        case.save(update_fields=["status", "resolved_at"])
-        return Response(SupportCaseSerializer(case).data)
+        with transaction.atomic():
+            message = add_message(
+                case, request.user, SupportCaseMessage.Author.CUSTOMER, reply.validated_data["body"]
+            )
+        return Response(SupportCaseMessageSerializer(message).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def close(self, request: Request, id=None):
         case = self.get_object()
-        case.status = SupportCase.Status.CLOSED
-        case.closed_at = timezone.now()
-        case.save(update_fields=["status", "closed_at"])
+        if case.status != SupportCase.Status.CLOSED:
+            case.status = SupportCase.Status.CLOSED
+            case.closed_at = timezone.now()
+            case.save(update_fields=["status", "closed_at", "updated_at"])
         return Response(SupportCaseSerializer(case).data)
 
 

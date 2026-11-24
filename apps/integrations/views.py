@@ -22,6 +22,7 @@ from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
+    IsOrganizationAdmin,
     organization_for_request,
     user_has_role,
 )
@@ -153,23 +154,11 @@ class ConnectorAccountViewSet(viewsets.ModelViewSet):
         return Response({"detail": "Sync triggered", "queued_sources": queued})
 
 
-class HasOrganizationAdminAccess(HasOrganizationWriteAccess):
-    """Webhooks receive the organization's events, so only its admins manage them or read deliveries."""
-
-    message = "Only organization admins can manage webhooks."
-
-    def has_permission(self, request, view) -> bool:
-        if not super().has_permission(request, view):
-            return False
-        organization = organization_for_request(request, required=True)
-        return user_has_role(request.user, Role.RoleType.ADMIN, organization.id)
-
-
 class WebhookViewSet(viewsets.ModelViewSet):
     """Outbound webhooks (``apps.integrations.outbound``). The signing secret is returned once, at
     creation and at rotation; deliveries are signed with it (``X-JT-Signature``)."""
 
-    permission_classes = [IsAuthenticated, HasOrganizationAdminAccess]
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
     serializer_class = WebhookSerializer
     lookup_field = "id"
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
@@ -221,7 +210,7 @@ class WebhookViewSet(viewsets.ModelViewSet):
 
 
 class WebhookDeliveryViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [IsAuthenticated, HasOrganizationAdminAccess]
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
     serializer_class = WebhookDeliverySerializer
     lookup_field = "id"
 

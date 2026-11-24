@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from apps.governance.models import AuditEvent, ConsentRecord, RetentionRule, SafetyEvent, SupportCase
+from apps.governance.models import (
+    AuditEvent,
+    ConsentRecord,
+    RetentionRule,
+    SafetyEvent,
+    SupportCase,
+    SupportCaseMessage,
+)
 
 
 @admin.register(AuditEvent)
@@ -94,8 +101,37 @@ class SafetyEventAdmin(admin.ModelAdmin):
     raw_id_fields = ("organization", "user", "job", "reviewed_by")
 
 
+class SupportCaseMessageInline(admin.TabularInline):
+    """The conversation. Earlier messages are read-only; a reply typed in the empty row is sent as support."""
+
+    model = SupportCaseMessage
+    extra = 1
+    fields = ("author_role", "author", "body", "created_at")
+    readonly_fields = ("author_role", "author", "created_at")
+    can_delete = False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+
 @admin.register(SupportCase)
 class SupportCaseAdmin(admin.ModelAdmin):
+    inlines = (SupportCaseMessageInline,)
+
+    def save_formset(self, request, form, formset, change):
+        if formset.model is not SupportCaseMessage:
+            return super().save_formset(request, form, formset, change)
+        from apps.governance.support import add_message
+
+        for message in formset.save(commit=False):
+            if message.pk and SupportCaseMessage.objects.filter(pk=message.pk).exists():
+                continue  # messages are never edited
+            if message.body.strip():
+                add_message(
+                    form.instance, request.user, SupportCaseMessage.Author.SUPPORT, message.body.strip()
+                )
+        return None
+
     list_display = (
         "id",
         "subject",

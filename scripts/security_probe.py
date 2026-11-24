@@ -14,6 +14,7 @@ penetration-surface table, run from outside the way an attacker would.
   workspace and stops working when revoked.
 * **Webhooks:** unsafe endpoint URLs are refused; a test event leaves through the worker and the egress
   layer and its answer is recorded.
+* **Support:** cases stay in their workspace; customers reply and close but cannot assign.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -281,6 +282,30 @@ def main() -> int:
         http("DELETE", f"{API}/webhooks/{hook['id']}/", headers=auth_a)
     listed = http("GET", f"{API}/webhooks/", headers=auth_b)[2]
     probe("another workspace does not see the webhook", hook.get("id", "-") not in json.dumps(listed))
+
+    # --- Support cases
+    print("support")
+    status, _, case = http(
+        "POST",
+        f"{API}/support-cases/",
+        {"subject": f"probe {run}", "description": "Security probe.", "category": "other", "priority": "low"},
+        auth_a,
+    )
+    probe("a member opens a support case", status == 201, str(status))
+    case_id = case.get("id", "-") if isinstance(case, dict) else "-"
+    status = http("GET", f"{API}/support-cases/{case_id}/", headers=auth_b)[0]
+    probe("another workspace cannot read the case", status == 404, str(status))
+    status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "hi"}, auth_b)[0]
+    probe("another workspace cannot reply to the case", status == 404, str(status))
+    status = http(
+        "POST", f"{API}/support-cases/{case_id}/assign/", {"assigned_to_id": str(uuid.uuid4())}, auth_a
+    )[0]
+    probe("customers cannot assign cases", status == 404, str(status))
+    status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "More detail."}, auth_a)[0]
+    probe("the customer replies", status == 201, str(status))
+    http("POST", f"{API}/support-cases/{case_id}/close/", headers=auth_a)
+    status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "again"}, auth_a)[0]
+    probe("a closed case takes no reply", status == 409, str(status))
 
     # --- Gateway
     print("gateway")

@@ -413,6 +413,7 @@ CELERY_TASK_ROUTES = {
     "apps.usage.tasks.*": {"queue": "jobs.default"},
     "apps.orchestration.tasks.*": {"queue": "orchestration"},
     "apps.integrations.tasks.*": {"queue": "jobs.default"},
+    "apps.governance.support.*": {"queue": "jobs.default"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -442,6 +443,10 @@ API_KEY_MAX_RATE_LIMIT = int(env("API_KEY_MAX_RATE_LIMIT", "10000"))
 WEBHOOK_MAX_ATTEMPTS = int(env("WEBHOOK_MAX_ATTEMPTS", "6"))
 WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))
 WEBHOOK_DISABLE_AFTER_FAILURES = int(env("WEBHOOK_DISABLE_AFTER_FAILURES", "20"))
+# Support cases: where new cases and customer replies are mailed (empty: no mail), and how many cases one
+# user may open per hour.
+SUPPORT_NOTIFICATION_EMAIL = env("SUPPORT_NOTIFICATION_EMAIL", "")
+SUPPORT_CASES_PER_HOUR = int(env("SUPPORT_CASES_PER_HOUR", "10"))
 # The Django admin (operators reach it over an SSH tunnel; the public edge blocks /admin).
 DJANGO_ADMIN_ENABLED = env_bool("DJANGO_ADMIN_ENABLED", True)
 

@@ -379,6 +379,26 @@
     },
     {
       "method": "GET",
+      "path": "/support-cases/"
+    },
+    {
+      "method": "POST",
+      "path": "/support-cases/"
+    },
+    {
+      "method": "POST",
+      "path": "/support-cases/{param}/close/"
+    },
+    {
+      "method": "GET",
+      "path": "/support-cases/{param}/messages/"
+    },
+    {
+      "method": "POST",
+      "path": "/support-cases/{param}/messages/"
+    },
+    {
+      "method": "GET",
       "path": "/usage/"
     },
     {

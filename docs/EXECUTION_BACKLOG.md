@@ -265,7 +265,7 @@ customer needs first.
 | --- | --- | --- |
 | P16-1 ☑ | **API keys, end to end.** Found 2026-11-23: keys were issued but **nothing accepted them** (`key_hash` was never read; the only authenticator was the JWT one). Also, a `PATCH` could set a revoked key back to `active`, and on `POST` the serializer returned the stored digest as `full_key`. Backend: `X-API-Key` authentication (active, unexpired, member, pinned to the key's workspace, `read`/`write` scopes, never key/account/member management, a per-key hourly limit, IP failure lockout); updates change the name only; scope, limit and expiry validation; members see their own keys, admins all. Frontend: **Settings → Developer: API keys** (create with scopes and expiry, shown once with copy, list, revoke) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-2 ☑ | **Outbound webhooks, end to end.** Found 2026-11-23: endpoints could be registered but **nothing ever delivered to them** (the only `WebhookDelivery` writer was the inbound view), `test` was a stub, the signing secret was never shown, and URLs and headers were not validated. Backend: a published event catalogue whose organization is resolved from the event's entity (fail closed); deliveries created in the producer's transaction; signed (`X-JT-Signature`), SSRF-safe, no redirects, retried with backoff, endpoint disabled after repeated failures, beat sweep for due retries; a real test send; the secret shown once and rotatable. Frontend: **Settings → Developer: webhooks** (add, events, secret once, test, pause/resume, delete, recent deliveries) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
-| P16-3 | **Help → Support cases** (open, list, reply, close) | Same |
+| P16-3 ☑ | **Support cases, end to end.** Found 2026-11-24: customers could open cases but **nobody could answer** (no replies, no notification), and any editor could `assign` a case to **any user id in the system** or `PATCH` its status and assignee. Backend: a reply thread (`SupportCaseMessage`); members see their own cases, admins all of the workspace's; customers reply and close (no assign/resolve/edit); staff answer in the Django admin; mail to `SUPPORT_NOTIFICATION_EMAIL` and back to the customer; per-user hourly limit. Frontend: **Settings → Support** (open, list, thread, reply, close) | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
 | P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
 | P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
@@ -963,3 +963,43 @@ Tests:
 Gate: BE full suite **1049 passed, 2 skipped, 0 failed**; ruff ok (487 files); `makemigrations --check` no
 changes; contract 174 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 228/228
 tests. (The machine was powered off once during the gate; the suite was rerun.)
+
+### 2026-11-24: Phase 16, P16-3 ☑ (support cases)
+Found: customers could open support cases, but nobody could answer them (no replies, no notification).
+Any editor could `POST /support-cases/{id}/assign/` with **any user id in the system** (no membership
+check) and `PATCH` a case's status and assignee. No test or screen used the endpoints.
+
+Backend:
+- `governance.SupportCaseMessage` (migration `0013`; RLS through the existing `post_migrate` hook): the
+  conversation, from the customer or from support.
+- API: any member opens cases (validated subject, description, category, priority;
+  `SUPPORT_CASES_PER_HOUR`, 429 after). Members see their own cases, admins all of the organization's;
+  other workspaces get 404. `messages` (GET/POST; 409 once closed; a customer reply reopens a resolved
+  case) and `close`. `assign`, `resolve`, `PATCH`, `PUT` and `DELETE` are gone for customers. Support
+  staff appear as "JT-Code support", never by name.
+- Staff answer in the Django admin: the case page shows the thread, and a reply typed in the empty row is
+  stored as support, sets "waiting for user" and the first-response time.
+- Mail (`apps/governance/support.py`, Celery on `jobs.default`, after commit, retried): new cases and
+  customer replies go to `SUPPORT_NOTIFICATION_EMAIL` (empty: none); support replies go to the customer
+  with a link to Settings → Support.
+- The webhook views now use the existing `IsOrganizationAdmin` instead of a duplicate class added in
+  P16-2 (G10).
+
+Frontend: Settings → Support (`?tab=support`): open a case (topic, urgency, subject, description); the
+list; a thread with support replies marked; reply; close with confirmation; a closed case takes no reply.
+`SupportRepository` in API and mock modes. Texts in 20 languages; the brand is a `{{brand}}` placeholder
+(machine translation turned "JT-Code" into "code JT"), and "Support" is set by hand in de/fr/es/pt/it/zh/ja
+(the machine chose "helpfulness").
+
+Tests:
+- BE `tests/test_support_cases.py` (12): mail to the support inbox and none without it; who sees which
+  cases; the conversation, a support reply mailed to the customer, a customer reply reopening the case;
+  closed cases; no assign/resolve/edit; validation; rate limit; a reply typed in the Django admin is stored
+  as support and mailed.
+- FE: repositories (2), tab (3); 233/233 overall.
+- Live: `security_probe.py` **50/50** (6 support probes). Browser: `E2E_ONLY='API key|webhook|support case'`
+  4/4 steps (GoTrue on Mailpit for that run only, restored).
+
+Gate: BE full suite **1061 passed, 2 skipped, 0 failed** (rerun after the machine restarted); ruff ok (489
+files); `makemigrations --check` no changes; contract 179 calls green. FE typecheck ok; lint 0 errors (62
+warnings, unchanged); 233/233 tests.
