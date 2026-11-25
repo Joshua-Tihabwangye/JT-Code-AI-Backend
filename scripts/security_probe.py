@@ -16,6 +16,7 @@ penetration-surface table, run from outside the way an attacker would.
   layer and its answer is recorded.
 * **Support:** cases stay in their workspace; customers reply and close but cannot assign.
 * **Audit log:** admins read it; malformed filters are 400; the CSV export is scoped to the workspace.
+* **Consents:** personal, never deleted; terms are not created or withdrawn through the API.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -324,6 +325,22 @@ def main() -> int:
     )
     text = body if isinstance(body, str) else json.dumps(body)
     probe("the export holds no other workspace's entries", b["email"] not in text)
+
+    # --- Consents
+    print("consents")
+    status, _, created = http(
+        "POST", f"{API}/consents/", {"consent_type": "marketing", "status": "granted", "version": run}, auth_a
+    )
+    probe("a member records an optional consent", status == 201, str(status))
+    consent_id = created.get("id", "-") if isinstance(created, dict) else "-"
+    status = http("GET", f"{API}/consents/{consent_id}/", headers=auth_b)[0]
+    probe("another user cannot read the consent", status == 404, str(status))
+    status = http("DELETE", f"{API}/consents/{consent_id}/", headers=auth_a)[0]
+    probe("consent records cannot be deleted", status == 405, str(status))
+    status = http(
+        "POST", f"{API}/consents/", {"consent_type": "terms", "status": "granted", "version": "x"}, auth_a
+    )[0]
+    probe("terms cannot be created or replaced through the API", status == 400, str(status))
 
     # --- Gateway
     print("gateway")

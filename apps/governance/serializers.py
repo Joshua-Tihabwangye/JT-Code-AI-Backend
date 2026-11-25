@@ -74,15 +74,32 @@ class ConsentRecordSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at"]
 
 
+# Recorded at sign-up (apps.identity.provisioning) and ended only by deleting the account.
+REQUIRED_CONSENTS = frozenset(
+    {
+        ConsentRecord.ConsentType.TERMS,
+        ConsentRecord.ConsentType.PRIVACY,
+        ConsentRecord.ConsentType.DATA_PROCESSING,
+    }
+)
+
+
 class ConsentCreateSerializer(serializers.ModelSerializer):
+    """A member's own optional consent. IP, user agent and times are set by the server."""
+
+    consent_type = serializers.ChoiceField(
+        choices=[choice for choice in ConsentRecord.ConsentType.choices if choice[0] not in REQUIRED_CONSENTS]
+    )
+    status = serializers.ChoiceField(choices=[ConsentRecord.Status.GRANTED, ConsentRecord.Status.DENIED])
+    version = serializers.CharField(max_length=50)
+
     class Meta:
         model = ConsentRecord
-        fields = ["consent_type", "status", "version", "metadata", "expires_at"]
+        fields = ["consent_type", "status", "version"]
 
 
 class ConsentUpdateSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(choices=ConsentRecord.Status.choices)
-    version = serializers.CharField(max_length=50, required=False)
+    status = serializers.ChoiceField(choices=[ConsentRecord.Status.GRANTED, ConsentRecord.Status.WITHDRAWN])
 
 
 def _retention_floor_days(data_category: str) -> int:

@@ -103,6 +103,10 @@
     },
     {
       "method": "GET",
+      "path": "/consents/"
+    },
+    {
+      "method": "GET",
       "path": "/conversations/"
     },
     {

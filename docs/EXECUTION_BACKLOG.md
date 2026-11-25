@@ -267,7 +267,7 @@ customer needs first.
 | P16-2 ☑ | **Outbound webhooks, end to end.** Found 2026-11-23: endpoints could be registered but **nothing ever delivered to them** (the only `WebhookDelivery` writer was the inbound view), `test` was a stub, the signing secret was never shown, and URLs and headers were not validated. Backend: a published event catalogue whose organization is resolved from the event's entity (fail closed); deliveries created in the producer's transaction; signed (`X-JT-Signature`), SSRF-safe, no redirects, retried with backoff, endpoint disabled after repeated failures, beat sweep for due retries; a real test send; the secret shown once and rotatable. Frontend: **Settings → Developer: webhooks** (add, events, secret once, test, pause/resume, delete, recent deliveries) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-3 ☑ | **Support cases, end to end.** Found 2026-11-24: customers could open cases but **nobody could answer** (no replies, no notification), and any editor could `assign` a case to **any user id in the system** or `PATCH` its status and assignee. Backend: a reply thread (`SupportCaseMessage`); members see their own cases, admins all of the workspace's; customers reply and close (no assign/resolve/edit); staff answer in the Django admin; mail to `SUPPORT_NOTIFICATION_EMAIL` and back to the customer; per-user hourly limit. Frontend: **Settings → Support** (open, list, thread, reply, close) | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-4 ☑ | **Settings → Audit log** (admins; filters; CSV export). Found 2026-11-24: a malformed `actor` filter or an impossible date answered 500; a date-only `end_date` dropped that day's own events (`parse_datetime` reads a bare date as midnight); the list never returned `outcome`. | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
-| P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
+| P16-5 ☑ | **Consents: personal and tamper-proof; "Your agreements" in Profile.** Found 2026-11-25: consent records are personal, but the API scoped them to the workspace, so any editor could list, change or **delete** other members' records, while viewers could not read their own. Records are legal evidence and could be deleted. Terms/privacy could be "withdrawn" through `PATCH` without deleting the account. The client supplied the IP and user agent. Nothing acts on the optional consents (marketing, analytics, AI training, third-party), so no switches are added for them (they would promise what the system does not do). Backend: own records only, any role; no `DELETE`/`PUT`; terms/privacy are recorded at sign-up and not withdrawn here (409: delete the account); the server records IP and user agent; withdrawal stamps `withdrawn_at`. Frontend: a read-only "Your agreements" section in Profile | BE tests (G9); repository + section + unit tests; contract snapshot; live check |
 | P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
 | P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
 | P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
@@ -1030,3 +1030,28 @@ and date-only times, both fixed and checked again (GoTrue on Mailpit for those r
 
 Gate: BE full suite **1071 passed, 2 skipped, 0 failed**; ruff ok (490 files); `makemigrations --check` no
 changes; contract 181 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 237/237 tests.
+
+### 2026-11-25: Phase 16, P16-5 ☑ (consents)
+Found: consent records are personal, but `/consents/` scoped them to the workspace and required write
+access. An editor could list, `PATCH` or `DELETE` other members' records (legal evidence), and a viewer
+could not read their own. Terms and privacy could be marked "withdrawn" without deleting the account, and
+the client supplied the IP and user agent of a new record. Nothing in the code acts on the optional
+consents (marketing, analytics, AI training, third-party), so no switches were added for them: they would
+promise behaviour the system does not have.
+
+Backend: own records only, in any role (others get 404); no `DELETE`/`PUT`. Creating is limited to optional
+types with `granted`/`denied`; terms, privacy and the data processing agreement are recorded at sign-up
+only. `PATCH` grants or withdraws an optional consent and stamps the time; on a required consent it answers
+409 ("delete your account"). The server records IP (`client_ip`) and user agent.
+
+Frontend: Settings → Profile → "Your agreements" (read-only): each consent, its version, when accepted or
+withdrawn, and a note that terms and privacy end with the account. `ConsentRepository` in API and mock
+modes; texts in 20 languages (zh "Accepted" corrected by hand).
+
+Tests: BE `tests/test_consents_api.py` (5), all of which failed against the old code. FE: section (1) and
+repository (1); 239/239 overall. Live: `security_probe.py` **59/59** (4 consent probes). Browser: after a
+real sign-up the section lists the terms and privacy policy as accepted (`E2E_ONLY='agreements'`); the
+other Settings steps still pass (GoTrue on Mailpit for those runs only, restored).
+
+Gate: BE full suite **1076 passed, 2 skipped, 0 failed**; ruff ok (491 files); `makemigrations --check` no
+changes; contract 182 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 239/239 tests.

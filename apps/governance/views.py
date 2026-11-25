@@ -20,6 +20,7 @@ from rest_framework.response import Response
 from apps.core.views import APIView
 from apps.governance.models import AuditEvent, ConsentRecord, RetentionRule, SafetyEvent, SupportCase
 from apps.governance.serializers import (
+    REQUIRED_CONSENTS,
     AuditEventSerializer,
     ConsentCreateSerializer,
     ConsentRecordSerializer,
@@ -151,34 +152,56 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ConsentRecordViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+    """A member's own consent records, in any role. Records are evidence: never deleted, never edited
+    beyond granting or withdrawing an optional consent. Terms and privacy end only with the account."""
+
+    permission_classes = [IsAuthenticated]
     serializer_class = ConsentRecordSerializer
     lookup_field = "id"
-
-    def get_permissions(self):
-        # Consent is a member's own record; management of existing tenant
-        # records still requires an editor or admin role.
-        if self.action == "create":
-            return [IsAuthenticated()]
-        return super().get_permissions()
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
-        return _tenant_queryset(ConsentRecord.objects.all(), self.request).select_related(
-            "organization", "user"
-        )
+        return ConsentRecord.objects.filter(user=self.request.user).select_related("organization")
 
     def get_serializer_class(self):
         if self.action == "create":
             return ConsentCreateSerializer
-        if self.action in ["update", "partial_update"]:
+        if self.action == "partial_update":
             return ConsentUpdateSerializer
         return ConsentRecordSerializer
 
-    def perform_create(self, serializer):
-        serializer.save(
-            organization=organization_for_request(self.request, required=True),
-            user=self.request.user,
+    def create(self, request, *args, **kwargs):
+        from apps.core.edge import client_ip
+
+        serializer = ConsentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        granted = serializer.validated_data["status"] == ConsentRecord.Status.GRANTED
+        record = serializer.save(
+            organization=organization_for_request(request, required=True),
+            user=request.user,
+            ip_address=client_ip(request._request) if client_ip(request._request) != "unknown" else None,
+            user_agent=request.headers.get("User-Agent", "")[:500],
+            granted_at=timezone.now() if granted else None,
         )
+        return Response(ConsentRecordSerializer(record).data, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, *args, **kwargs):
+        record = self.get_object()
+        if record.consent_type in REQUIRED_CONSENTS:
+            return Response(
+                {"detail": "Terms and privacy end only when you delete your account (Settings → Profile)."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        update = ConsentUpdateSerializer(data=request.data)
+        update.is_valid(raise_exception=True)
+        record.status = update.validated_data["status"]
+        now = timezone.now()
+        if record.status == ConsentRecord.Status.WITHDRAWN:
+            record.withdrawn_at = now
+        else:
+            record.granted_at, record.withdrawn_at = now, None
+        record.save(update_fields=["status", "withdrawn_at", "granted_at", "updated_at"])
+        return Response(ConsentRecordSerializer(record).data)
 
 
 class RetentionRuleViewSet(viewsets.ModelViewSet):
