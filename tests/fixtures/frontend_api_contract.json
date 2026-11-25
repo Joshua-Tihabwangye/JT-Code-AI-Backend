@@ -23,6 +23,38 @@
     },
     {
       "method": "GET",
+      "path": "/agent-runs/"
+    },
+    {
+      "method": "GET",
+      "path": "/agent-runs/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/agent-runs/{param}/cancel/"
+    },
+    {
+      "method": "GET",
+      "path": "/agent-runs/{param}/steps/"
+    },
+    {
+      "method": "GET",
+      "path": "/agents/"
+    },
+    {
+      "method": "POST",
+      "path": "/agents/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agents/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/agents/{param}/"
+    },
+    {
+      "method": "GET",
       "path": "/analysis/datasets/"
     },
     {
@@ -84,6 +116,26 @@
     {
       "method": "GET",
       "path": "/audit-events/export/"
+    },
+    {
+      "method": "GET",
+      "path": "/automations/"
+    },
+    {
+      "method": "POST",
+      "path": "/automations/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/automations/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/automations/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/automations/{param}/run/"
     },
     {
       "method": "POST",

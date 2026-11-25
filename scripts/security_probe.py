@@ -17,6 +17,7 @@ penetration-surface table, run from outside the way an attacker would.
 * **Support:** cases stay in their workspace; customers reply and close but cannot assign.
 * **Audit log:** admins read it; malformed filters are 400; the CSV export is scoped to the workspace.
 * **Consents:** personal, never deleted; terms are not created or withdrawn through the API.
+* **Agents:** runs need an idempotency key and stay in their workspace; automations answer cleanly.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -341,6 +342,38 @@ def main() -> int:
         "POST", f"{API}/consents/", {"consent_type": "terms", "status": "granted", "version": "x"}, auth_a
     )[0]
     probe("terms cannot be created or replaced through the API", status == 400, str(status))
+
+    # --- Agents and automations
+    print("agents")
+    status = http("POST", f"{API}/agent-runs/", {"input": "hello"}, auth_a)[0]
+    probe("an agent run without an Idempotency-Key is refused", status == 400, str(status))
+    status, _, agent_run = http(
+        "POST",
+        f"{API}/agent-runs/",
+        {"input": "Say hello."},
+        {**auth_a, "Idempotency-Key": str(uuid.uuid4())},
+    )
+    probe("a member starts an agent run", status == 202, f"{status} {str(agent_run)[:80]}")
+    run_id = agent_run.get("id", "-") if isinstance(agent_run, dict) else "-"
+    status = http("GET", f"{API}/agent-runs/{run_id}/", headers=auth_b)[0]
+    probe("another workspace cannot read the run", status == 404, str(status))
+    status = http("POST", f"{API}/agent-runs/{run_id}/cancel/", headers=auth_b)[0]
+    probe("another workspace cannot cancel the run", status == 404, str(status))
+    status, _, body = http(
+        "POST",
+        f"{API}/automations/",
+        {
+            "name": "probe",
+            "schedule": "@daily",
+            "input": {"action": "email", "to": [a["email"]], "subject": "s", "text": "t"},
+        },
+        auth_a,
+    )
+    probe(
+        "automations answer cleanly (created, or 403 without the workflow engine)",
+        status in (201, 403),
+        str(status),
+    )
 
     # --- Gateway
     print("gateway")

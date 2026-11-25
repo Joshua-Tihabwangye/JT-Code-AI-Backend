@@ -27,6 +27,25 @@ limit_req_status 429;
 client_max_body_size 32m;
 server_tokens off;
 
+# Upstreams are resolved per request through Docker's DNS (10 s cache), not once at start: a recreated
+# container gets a new IP, and a name resolved at start kept the old one (502 for every Auth call until
+# the gateway restarted). The path after the prefix comes from $request_uri, so the client's encoding
+# (e.g. %2F in storage object names) and the query string pass through unchanged.
+resolver 127.0.0.11 valid=10s ipv6=off;
+resolver_timeout 5s;
+map $request_uri $jt_auth_uri {
+    default /;
+    ~^/auth/v1(?<rest>/.*)$ $rest;
+}
+map $request_uri $jt_storage_uri {
+    default /;
+    ~^/storage/v1(?<rest>/.*)$ $rest;
+}
+map $request_uri $jt_rest_uri {
+    default /;
+    ~^/rest/v1(?<rest>/.*)$ $rest;
+}
+
 server {
     listen 8000;
     server_name _;
@@ -75,7 +94,8 @@ server {
 
     location /auth/v1/ {
         limit_req zone=jt_auth burst=20 nodelay;
-        proxy_pass http://supabase-auth:9999/;
+        set $jt_auth_upstream supabase-auth:9999;
+        proxy_pass http://$jt_auth_upstream$jt_auth_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -86,7 +106,8 @@ server {
     }
 
     location /storage/v1/ {
-        proxy_pass http://supabase-storage:5000/;
+        set $jt_storage_upstream supabase-storage:5000;
+        proxy_pass http://$jt_storage_upstream$jt_storage_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -108,7 +129,8 @@ server {
     }
 
     location /auth/v1/ {
-        proxy_pass http://supabase-auth:9999/;
+        set $jt_auth_upstream supabase-auth:9999;
+        proxy_pass http://$jt_auth_upstream$jt_auth_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $remote_addr;
@@ -117,14 +139,16 @@ server {
     }
 
     location /storage/v1/ {
-        proxy_pass http://supabase-storage:5000/;
+        set $jt_storage_upstream supabase-storage:5000;
+        proxy_pass http://$jt_storage_upstream$jt_storage_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
     location /rest/v1/ {
-        proxy_pass http://supabase-rest:3000/;
+        set $jt_rest_upstream supabase-rest:3000;
+        proxy_pass http://$jt_rest_upstream$jt_rest_uri;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-For $remote_addr;

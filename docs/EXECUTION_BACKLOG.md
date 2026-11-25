@@ -268,8 +268,9 @@ customer needs first.
 | P16-3 ☑ | **Support cases, end to end.** Found 2026-11-24: customers could open cases but **nobody could answer** (no replies, no notification), and any editor could `assign` a case to **any user id in the system** or `PATCH` its status and assignee. Backend: a reply thread (`SupportCaseMessage`); members see their own cases, admins all of the workspace's; customers reply and close (no assign/resolve/edit); staff answer in the Django admin; mail to `SUPPORT_NOTIFICATION_EMAIL` and back to the customer; per-user hourly limit. Frontend: **Settings → Support** (open, list, thread, reply, close) | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-4 ☑ | **Settings → Audit log** (admins; filters; CSV export). Found 2026-11-24: a malformed `actor` filter or an impossible date answered 500; a date-only `end_date` dropped that day's own events (`parse_datetime` reads a bare date as midnight); the list never returned `outcome`. | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-5 ☑ | **Consents: personal and tamper-proof; "Your agreements" in Profile.** Found 2026-11-25: consent records are personal, but the API scoped them to the workspace, so any editor could list, change or **delete** other members' records, while viewers could not read their own. Records are legal evidence and could be deleted. Terms/privacy could be "withdrawn" through `PATCH` without deleting the account. The client supplied the IP and user agent. Nothing acts on the optional consents (marketing, analytics, AI training, third-party), so no switches are added for them (they would promise what the system does not do). Backend: own records only, any role; no `DELETE`/`PUT`; terms/privacy are recorded at sign-up and not withdrawn here (409: delete the account); the server records IP and user agent; withdrawal stamps `withdrawn_at`. Frontend: a read-only "Your agreements" section in Profile | BE tests (G9); repository + section + unit tests; contract snapshot; live check |
-| P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
+| P16-6 ☑ | **Automations, agents and agent runs** (list, create, run, history) | Same |
 | P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
+| P16-9 ☑ | **Supabase gateway re-resolves its upstreams.** Found 2026-11-25 during the P16-6 browser check: after `supabase-auth` was recreated, the gateway answered **502** to every `/auth/v1` call (sign-up and sign-in down) until the gateway restarted. nginx resolved `proxy_pass http://supabase-auth:9999/` once at start and kept the old container IP. Fix: Docker's resolver (`127.0.0.11`, 10 s) and variable upstreams; the path comes from `$request_uri` through `map`, so the client's encoding (e.g. `%2F` in storage object names) is passed through unchanged | `test_gateway_hardening` asserts no literal upstream host; live: recreate `supabase-auth`, auth answers without restarting the gateway |
 | P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
 
 Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
@@ -1055,3 +1056,48 @@ other Settings steps still pass (GoTrue on Mailpit for those runs only, restored
 
 Gate: BE full suite **1076 passed, 2 skipped, 0 failed**; ruff ok (491 files); `makemigrations --check` no
 changes; contract 182 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 239/239 tests.
+
+### 2026-11-25: Phase 16, P16-6 ☑ (agents and automations) and P16-9 ☑ (gateway upstreams)
+P16-6. The agents API was complete and needed no change: idempotent run starts, per-workspace concurrency,
+credit metering, a step trace, cancel, and runs visible to their owner and to admins. Automations need the
+n8n `scheduled-automation` workflow, and creating one answers 403 without it. An automation's webhook host
+must be on `WEBHOOK_ALLOWED_HOSTS`, and an e-mail automation may only address members.
+
+Frontend: a new sidebar page, Agents (`/app/agents`):
+- **Agents tab:** run a task with the default assistant or a saved agent; follow the run (status,
+  model/tool calls, output, step trace; refreshed every 2 s until it ends; cancel); create an agent (name
+  with a derived slug, how it works: direct answer, tools or research, description, instructions);
+  activate or deactivate; delete with confirmation; recent runs. An editors-only note for viewers (runs
+  use credits).
+- **Scheduled tab:** e-mail members, a Slack message or a webhook, on a preset or a custom cron (five fields
+  with a fixed minute, checked before sending); run now, pause/resume, delete; a plain message when the
+  server has no workflow engine.
+
+`AgentRepository` and `AutomationRepository` in API mode; the mock explains that agents only run on the
+server. Texts in 20 languages. "Run" became "Start": it came back as running on foot in de/fr/es/pt/zh/sw.
+zh "Agents" was set by hand to 智能体 (the machine chose sales agents).
+
+Tests: FE helpers (2), page (5), repository (1); 247/247 overall. Live: `security_probe.py` **64/64** (5
+agent probes: no idempotency key → 400, a run starts, another workspace cannot read or cancel it,
+automations answer 403 without n8n). Browser: with the development echo AI provider for that run only, a
+task ran to "Done" with its output and step, and a new agent appeared in the list and the picker.
+
+P16-9. The first browser attempt failed at sign-up with "Cannot reach the sign-in service". The Supabase
+gateway answered 502 to every `/auth/v1` call because GoTrue had been recreated and nginx kept the IP it
+resolved at start. In production any GoTrue recreate (a config change, an update) would have taken sign-in
+down until someone restarted the gateway. Fix in `docker/supabase/gateway/default.conf.template`: Docker's
+resolver (`127.0.0.11`, 10 s) and variable upstreams (`set $jt_auth_upstream …; proxy_pass
+http://$jt_auth_upstream$jt_auth_uri;`). The path after the prefix comes from `$request_uri` through
+`map`, so the client's encoding and query string pass through unchanged (no decoded `rewrite`).
+`test_gateway_hardening.py`: a new test (no literal upstream host, the resolver present, paths from
+`$request_uri`) and the PostgREST listener test updated to the new form; both fail without the fix.
+Live: after a gateway restart, Auth, Storage and an encoded query answered 200. GoTrue was then forced onto
+a new IP (172.19.0.23 → .26, by parking a throwaway container on the old address), and Auth still answered
+200 through the gateway with no restart.
+
+Gate: BE full suite **1077 passed, 2 skipped, 0 failed**; ruff ok (491 files); compose check production,
+production+edge, local ok; contract 195 calls green. FE typecheck ok; lint 0 errors (62 warnings,
+unchanged); 247/247 tests.
+
+Note: a first full run died at 60 % when earlyoom killed VS Code processes (the operator's editor) on
+this 7 GB machine: 3 test workers plus the Docker stack. Full runs now use `-n 2`.

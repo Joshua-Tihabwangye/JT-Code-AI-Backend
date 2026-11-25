@@ -101,9 +101,23 @@ def test_public_listener_closes_postgrest_and_the_auth_admin_api():
 
     for prefix in ("^~ /auth/v1/admin", "^~ /rest/v1/"):
         assert "return 404" in _location(public, prefix)
-    assert "proxy_pass http://supabase-rest:3000/" not in public
-    assert "proxy_pass http://supabase-rest:3000/" in internal
-    assert "proxy_pass http://supabase-auth:9999/" in internal
+    assert "supabase-rest:3000" not in public
+    assert "set $jt_rest_upstream supabase-rest:3000;" in internal
+    assert "set $jt_auth_upstream supabase-auth:9999;" in internal
+
+
+def test_upstreams_are_resolved_per_request_not_once_at_start():
+    # A name in proxy_pass is resolved once at start: after supabase-auth was recreated (new IP) the
+    # gateway answered 502 to every Auth call until it was restarted.
+    template = TEMPLATE
+    assert re.search(r"^resolver 127\.0\.0\.11 valid=\d+s", template, re.M)
+    passes = re.findall(r"proxy_pass\s+([^;]+);", template)
+    assert passes and all(target.startswith("http://$jt_") for target in passes), passes
+    # The path keeps the client's encoding: it comes from $request_uri, not a decoded rewrite.
+    for prefix, name in (("auth", "jt_auth_uri"), ("storage", "jt_storage_uri"), ("rest", "jt_rest_uri")):
+        assert f"map $request_uri ${name}" in template
+        assert f"~^/{prefix}/v1(?<rest>/.*)$ $rest;" in template
+    assert "rewrite " not in template
 
 
 def test_every_auth_route_overwrites_the_client_ip_header_and_the_public_one_is_rate_limited():
