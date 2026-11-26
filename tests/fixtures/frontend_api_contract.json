@@ -23,6 +23,38 @@
     },
     {
       "method": "GET",
+      "path": "/agent-runs/"
+    },
+    {
+      "method": "GET",
+      "path": "/agent-runs/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/agent-runs/{param}/cancel/"
+    },
+    {
+      "method": "GET",
+      "path": "/agent-runs/{param}/steps/"
+    },
+    {
+      "method": "GET",
+      "path": "/agents/"
+    },
+    {
+      "method": "POST",
+      "path": "/agents/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/agents/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/agents/{param}/"
+    },
+    {
+      "method": "GET",
       "path": "/analysis/datasets/"
     },
     {
@@ -78,6 +110,34 @@
       "path": "/api-keys/{param}/revoke/"
     },
     {
+      "method": "GET",
+      "path": "/audit-events/"
+    },
+    {
+      "method": "GET",
+      "path": "/audit-events/export/"
+    },
+    {
+      "method": "GET",
+      "path": "/automations/"
+    },
+    {
+      "method": "POST",
+      "path": "/automations/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/automations/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/automations/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/automations/{param}/run/"
+    },
+    {
       "method": "POST",
       "path": "/billing/portal/"
     },
@@ -92,6 +152,10 @@
     {
       "method": "POST",
       "path": "/chat/requests/{param}/cancel/"
+    },
+    {
+      "method": "GET",
+      "path": "/consents/"
     },
     {
       "method": "GET",
@@ -319,6 +383,26 @@
     },
     {
       "method": "GET",
+      "path": "/mcp/servers/"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/mcp/servers/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/mcp/servers/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/{param}/discover/"
+    },
+    {
+      "method": "GET",
       "path": "/organizations/"
     },
     {
@@ -376,6 +460,46 @@
     {
       "method": "POST",
       "path": "/subscriptions/reactivate/"
+    },
+    {
+      "method": "GET",
+      "path": "/support-cases/"
+    },
+    {
+      "method": "POST",
+      "path": "/support-cases/"
+    },
+    {
+      "method": "POST",
+      "path": "/support-cases/{param}/close/"
+    },
+    {
+      "method": "GET",
+      "path": "/support-cases/{param}/messages/"
+    },
+    {
+      "method": "POST",
+      "path": "/support-cases/{param}/messages/"
+    },
+    {
+      "method": "GET",
+      "path": "/tool-approvals/"
+    },
+    {
+      "method": "GET",
+      "path": "/tool-credentials/"
+    },
+    {
+      "method": "POST",
+      "path": "/tool-credentials/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tool-credentials/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/tools/"
     },
     {
       "method": "GET",
@@ -668,6 +792,34 @@
     {
       "method": "POST",
       "path": "/wallets/me/topup/"
+    },
+    {
+      "method": "GET",
+      "path": "/webhooks/"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/webhooks/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/webhooks/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/webhooks/{param}/deliveries/"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/{param}/rotate-secret/"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/{param}/test/"
     }
   ],
   "delegated": {

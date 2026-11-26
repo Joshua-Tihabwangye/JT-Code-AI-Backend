@@ -12,6 +12,13 @@ penetration-surface table, run from outside the way an attacker would.
   banner.
 * **API keys:** a read key reads but cannot write, manage keys or reach the account, is pinned to its
   workspace and stops working when revoked.
+* **Webhooks:** unsafe endpoint URLs are refused; a test event leaves through the worker and the egress
+  layer and its answer is recorded.
+* **Support:** cases stay in their workspace; customers reply and close but cannot assign.
+* **Audit log:** admins read it; malformed filters are 400; the CSV export is scoped to the workspace.
+* **Consents:** personal, never deleted; terms are not created or withdrawn through the API.
+* **Agents:** runs need an idempotency key and stay in their workspace; automations answer cleanly.
+* **Tools:** MCP servers only on public HTTPS; credential secrets never returned or shared.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -236,6 +243,162 @@ def main() -> int:
     http("POST", f"{API}/api-keys/{created.get('id')}/revoke/", headers=auth_a)
     status = http("GET", f"{API}/conversations/", headers=key)[0]
     probe("a revoked key stops working at once", status == 401, str(status))
+
+    # --- Outbound webhooks
+    print("webhooks")
+    for label, url in (
+        ("plain http", "http://example.com/jt-code-probe"),
+        ("loopback", "https://localhost/jt-code-probe"),
+        ("private network", "https://10.0.0.1/jt-code-probe"),
+        ("non-443 port", "https://example.com:8443/jt-code-probe"),
+    ):
+        status = http("POST", f"{API}/webhooks/", {"name": "probe", "url": url}, auth_a)[0]
+        probe(f"a webhook to a {label} address is refused", status == 400, str(status))
+    status, _, hook = http(
+        "POST",
+        f"{API}/webhooks/",
+        {"name": f"probe-{run}", "url": "https://example.com/jt-code-probe"},
+        auth_a,
+    )
+    probe(
+        "an admin adds a webhook (secret shown once)",
+        status == 201 and str(hook.get("secret", "")).startswith("whsec_"),
+    )
+    if status == 201:
+        http("POST", f"{API}/webhooks/{hook['id']}/test/", headers=auth_a)
+        result: dict[str, Any] = {}
+        for _ in range(40):
+            listed = http("GET", f"{API}/webhooks/{hook['id']}/deliveries/", headers=auth_a)[2]
+            rows = listed.get("results", listed) if isinstance(listed, dict) else listed
+            if rows and rows[0].get("status") not in ("pending", "retrying"):
+                result = rows[0]
+                break
+            time.sleep(1.5)
+        # example.com (IANA documentation domain) refuses the POST: the signed request left through the
+        # egress layer and its answer was recorded.
+        probe(
+            "a test event is sent by the worker and its answer recorded",
+            result.get("event_type") == "webhook.test" and bool(result.get("response_status")),
+            "{} HTTP {} {}".format(
+                result.get("status"), result.get("response_status"), result.get("error_message", "")
+            ),
+        )
+        http("DELETE", f"{API}/webhooks/{hook['id']}/", headers=auth_a)
+    listed = http("GET", f"{API}/webhooks/", headers=auth_b)[2]
+    probe("another workspace does not see the webhook", hook.get("id", "-") not in json.dumps(listed))
+
+    # --- Support cases
+    print("support")
+    status, _, case = http(
+        "POST",
+        f"{API}/support-cases/",
+        {"subject": f"probe {run}", "description": "Security probe.", "category": "other", "priority": "low"},
+        auth_a,
+    )
+    probe("a member opens a support case", status == 201, str(status))
+    case_id = case.get("id", "-") if isinstance(case, dict) else "-"
+    status = http("GET", f"{API}/support-cases/{case_id}/", headers=auth_b)[0]
+    probe("another workspace cannot read the case", status == 404, str(status))
+    status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "hi"}, auth_b)[0]
+    probe("another workspace cannot reply to the case", status == 404, str(status))
+    status = http(
+        "POST", f"{API}/support-cases/{case_id}/assign/", {"assigned_to_id": str(uuid.uuid4())}, auth_a
+    )[0]
+    probe("customers cannot assign cases", status == 404, str(status))
+    status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "More detail."}, auth_a)[0]
+    probe("the customer replies", status == 201, str(status))
+    http("POST", f"{API}/support-cases/{case_id}/close/", headers=auth_a)
+    status = http("POST", f"{API}/support-cases/{case_id}/messages/", {"body": "again"}, auth_a)[0]
+    probe("a closed case takes no reply", status == 409, str(status))
+
+    # --- Audit log
+    print("audit log")
+    status = http("GET", f"{API}/audit-events/", headers=auth_a)[0]
+    probe("an admin reads the workspace audit log", status == 200, str(status))
+    for label, params in (("actor", "actor=not-a-uuid"), ("date", "end_date=2026-13-45")):
+        status = http("GET", f"{API}/audit-events/?{params}", headers=auth_a)[0]
+        probe(f"a malformed {label} filter is a 400, not a 500", status == 400, str(status))
+    status, response_headers, body = http("GET", f"{API}/audit-events/export/", headers=auth_a)
+    content_type = {k.lower(): v for k, v in response_headers.items()}.get("content-type", "")
+    probe(
+        "the audit export is CSV",
+        status == 200 and content_type.startswith("text/csv"),
+        f"{status} {content_type}",
+    )
+    text = body if isinstance(body, str) else json.dumps(body)
+    probe("the export holds no other workspace's entries", b["email"] not in text)
+
+    # --- Consents
+    print("consents")
+    status, _, created = http(
+        "POST", f"{API}/consents/", {"consent_type": "marketing", "status": "granted", "version": run}, auth_a
+    )
+    probe("a member records an optional consent", status == 201, str(status))
+    consent_id = created.get("id", "-") if isinstance(created, dict) else "-"
+    status = http("GET", f"{API}/consents/{consent_id}/", headers=auth_b)[0]
+    probe("another user cannot read the consent", status == 404, str(status))
+    status = http("DELETE", f"{API}/consents/{consent_id}/", headers=auth_a)[0]
+    probe("consent records cannot be deleted", status == 405, str(status))
+    status = http(
+        "POST", f"{API}/consents/", {"consent_type": "terms", "status": "granted", "version": "x"}, auth_a
+    )[0]
+    probe("terms cannot be created or replaced through the API", status == 400, str(status))
+
+    # --- Agents and automations
+    print("agents")
+    status = http("POST", f"{API}/agent-runs/", {"input": "hello"}, auth_a)[0]
+    probe("an agent run without an Idempotency-Key is refused", status == 400, str(status))
+    status, _, agent_run = http(
+        "POST",
+        f"{API}/agent-runs/",
+        {"input": "Say hello."},
+        {**auth_a, "Idempotency-Key": str(uuid.uuid4())},
+    )
+    probe("a member starts an agent run", status == 202, f"{status} {str(agent_run)[:80]}")
+    run_id = agent_run.get("id", "-") if isinstance(agent_run, dict) else "-"
+    status = http("GET", f"{API}/agent-runs/{run_id}/", headers=auth_b)[0]
+    probe("another workspace cannot read the run", status == 404, str(status))
+    status = http("POST", f"{API}/agent-runs/{run_id}/cancel/", headers=auth_b)[0]
+    probe("another workspace cannot cancel the run", status == 404, str(status))
+    status, _, body = http(
+        "POST",
+        f"{API}/automations/",
+        {
+            "name": "probe",
+            "schedule": "@daily",
+            "input": {"action": "email", "to": [a["email"]], "subject": "s", "text": "t"},
+        },
+        auth_a,
+    )
+    probe(
+        "automations answer cleanly (created, or 403 without the workflow engine)",
+        status in (201, 403),
+        str(status),
+    )
+
+    # --- Agent tools
+    print("tools")
+    status = http("GET", f"{API}/tools/", headers=auth_a)[0]
+    probe("a member reads the tool catalogue", status == 200, str(status))
+    for label, url in (("loopback", "https://localhost/mcp"), ("private network", "https://10.0.0.5/mcp")):
+        status = http(
+            "POST", f"{API}/mcp/servers/", {"name": "probe", "slug": f"p-{run}", "url": url}, auth_a
+        )[0]
+        probe(f"an MCP server on a {label} address is refused", status == 400, str(status))
+    status, _, credential = http(
+        "POST",
+        f"{API}/tool-credentials/",
+        {"provider": "mcp", "name": f"probe-{run}", "secret": f"s3cret-{run}"},
+        auth_a,
+    )
+    probe(
+        "a credential is stored and its secret never returned",
+        status == 201 and f"s3cret-{run}" not in json.dumps(credential),
+    )
+    listed = http("GET", f"{API}/tool-credentials/", headers=auth_a)[2]
+    probe("listing credentials never returns a secret", f"s3cret-{run}" not in json.dumps(listed))
+    listed_b = http("GET", f"{API}/tool-credentials/", headers=auth_b)[2]
+    probe("another workspace does not see the credential", f"probe-{run}" not in json.dumps(listed_b))
 
     # --- Gateway
     print("gateway")

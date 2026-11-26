@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from uuid import uuid4
@@ -605,11 +606,16 @@ class ChatRequestRuntimeViewSet(
                         return
                     await asyncio.sleep(poll_interval)
             finally:
+                # Each step on its own: a broken connection must not skip closing the rest (a leaked
+                # Redis socket per stream).
                 if pubsub is not None:
-                    await pubsub.unsubscribe(chat_status_channel(request_id))
-                    await pubsub.aclose()
+                    with contextlib.suppress(Exception):
+                        await pubsub.unsubscribe(chat_status_channel(request_id))
+                    with contextlib.suppress(Exception):
+                        await pubsub.aclose()
                 if redis_client is not None:
-                    await redis_client.aclose()
+                    with contextlib.suppress(Exception):
+                        await redis_client.aclose()
 
         response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
         response["Cache-Control"] = "no-cache, no-store"

@@ -1,9 +1,11 @@
 """Image generation, editing and understanding providers.
 
-* ``gemini`` (default) - Google's Generative Language REST API: Imagen
-  (``models/{GEMINI_IMAGE_MODEL}:predict``) generates images, a Gemini image
-  model (``models/{GEMINI_IMAGE_EDIT_MODEL}:generateContent`` with an inline
-  source image) edits them, and the vision-capable chat model describes them.
+* ``gemini`` (default) - Google's Generative Language REST API: a Gemini image
+  model (``models/{GEMINI_IMAGE_MODEL}:generateContent``, one call per image)
+  generates images (an ``imagen-*`` model name uses Imagen's ``:predict``
+  instead; Google has shut those down in the Gemini API), a Gemini image model
+  (``models/{GEMINI_IMAGE_EDIT_MODEL}:generateContent`` with an inline source
+  image) edits them, and the vision-capable chat model describes them.
 * ``echo`` - deterministic offline renderer for development and tests only;
   settings validation forbids ``AI_PROVIDER=echo`` in staging/production.
 
@@ -135,17 +137,48 @@ class GeminiImageProvider:
         negative_prompt: str = "",
         seed: int | None = None,
     ) -> list[RenderedImage]:
-        parameters: dict[str, Any] = {
-            "sampleCount": count,
-            "aspectRatio": aspect_ratio if aspect_ratio in ASPECT_RATIOS else "1:1",
-        }
+        ratio = aspect_ratio if aspect_ratio in ASPECT_RATIOS else "1:1"
+        model = settings.GEMINI_IMAGE_MODEL
+        images = (
+            self._generate_imagen(model, prompt, count, ratio, negative_prompt, seed)
+            if model.startswith("imagen")
+            else self._generate_gemini(model, prompt, count, ratio, negative_prompt, seed)
+        )
+        if not images:
+            raise ImageProviderError(
+                "The provider returned no images (the prompt may have been filtered).", code="NO_IMAGES"
+            )
+        return images
+
+    def _generate_gemini(
+        self, model: str, prompt: str, count: int, ratio: str, negative_prompt: str, seed: int | None
+    ) -> list[RenderedImage]:
+        text = f"{prompt}\n\nAvoid: {negative_prompt}" if negative_prompt else prompt
+        config: dict[str, Any] = {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": ratio}}
+        images = []
+        for index in range(count):  # one image per call
+            if seed is not None:
+                config = {**config, "seed": seed + index}
+            data = self._post(
+                f"models/{model}:generateContent",
+                {"contents": [{"role": "user", "parts": [{"text": text}]}], "generationConfig": config},
+            )
+            for content, mime in self._inline_images(data)[:1]:
+                width, height = _png_size(content)
+                images.append(RenderedImage(content, mime, width, height))
+        return images
+
+    def _generate_imagen(
+        self, model: str, prompt: str, count: int, ratio: str, negative_prompt: str, seed: int | None
+    ) -> list[RenderedImage]:
+        parameters: dict[str, Any] = {"sampleCount": count, "aspectRatio": ratio}
         if negative_prompt:
             parameters["negativePrompt"] = negative_prompt
         if seed is not None:
             parameters["seed"] = seed
             parameters["addWatermark"] = False  # Imagen requires this for deterministic seeds
         data = self._post(
-            f"models/{settings.GEMINI_IMAGE_MODEL}:predict",
+            f"models/{model}:predict",
             {"instances": [{"prompt": prompt}], "parameters": parameters},
         )
         images = []
@@ -154,10 +187,6 @@ class GeminiImageProvider:
                 content = base64.b64decode(prediction["bytesBase64Encoded"])
                 width, height = _png_size(content)
                 images.append(RenderedImage(content, prediction.get("mimeType", "image/png"), width, height))
-        if not images:
-            raise ImageProviderError(
-                "The provider returned no images (the prompt may have been filtered).", code="NO_IMAGES"
-            )
         return images
 
     def edit(self, source: bytes, source_mime: str, instruction: str) -> RenderedImage:
@@ -272,5 +301,5 @@ def available_models() -> list[dict[str, str]]:
         return []
     models = [{"id": "auto", "label": "Auto (recommended)"}]
     if provider.name == "gemini":
-        models.append({"id": "imagen", "label": "Imagen"})
+        models.append({"id": "imagen", "label": "Gemini"})  # id kept: the frontend's ImageModel
     return models

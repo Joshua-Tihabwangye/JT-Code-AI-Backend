@@ -195,6 +195,7 @@ def test_gemini_image_provider_speaks_the_rest_api_and_retries(settings, monkeyp
     from apps.ai_gateway import images
 
     settings.GEMINI_API_KEY = "gemini-test-key"  # pragma: allowlist secret
+    settings.GEMINI_IMAGE_MODEL = "imagen-4.0-generate-001"  # the legacy :predict path
     settings.AI_MAX_RETRIES = 2
     settings.AI_RETRY_BASE_SECONDS = 0
     png = base64.b64encode(_png()).decode()

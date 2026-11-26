@@ -8,7 +8,6 @@ import time
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
-from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status, viewsets
@@ -23,6 +22,7 @@ from apps.core.views import APIView
 from apps.events.outbox import enqueue_outbox_event
 from apps.identity.authorization import (
     HasOrganizationWriteAccess,
+    IsOrganizationAdmin,
     organization_for_request,
     user_has_role,
 )
@@ -155,25 +155,41 @@ class ConnectorAccountViewSet(viewsets.ModelViewSet):
 
 
 class WebhookViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated, HasOrganizationWriteAccess]
+    """Outbound webhooks (``apps.integrations.outbound``). The signing secret is returned once, at
+    creation and at rotation; deliveries are signed with it (``X-JT-Signature``)."""
+
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
     serializer_class = WebhookSerializer
     lookup_field = "id"
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
-        return _tenant_queryset(Webhook.objects.all(), self.request).select_related(
-            "organization", "created_by"
-        )
+        return _tenant_queryset(Webhook.objects.all(), self.request).select_related("created_by")
 
     def get_serializer_class(self):
         if self.action == "create":
             return WebhookCreateSerializer
         return WebhookSerializer
 
-    def perform_create(self, serializer):
-        org = organization_for_request(self.request, required=True)
-        # Generate secret
-        secret = secrets.token_urlsafe(32)
-        serializer.save(organization=org, created_by=self.request.user, secret=secret)
+    def create(self, request, *args, **kwargs):
+        serializer = WebhookCreateSerializer(data=request.data, context=self.get_serializer_context())
+        serializer.is_valid(raise_exception=True)
+        secret = f"whsec_{secrets.token_urlsafe(32)}"
+        webhook = serializer.save(
+            organization=organization_for_request(request, required=True),
+            created_by=request.user,
+            secret=secret,
+        )
+        data = WebhookSerializer(webhook, context=self.get_serializer_context()).data
+        return Response({**data, "secret": secret}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="rotate-secret")
+    def rotate_secret(self, request: Request, id=None):
+        webhook = self.get_object()
+        webhook.secret = f"whsec_{secrets.token_urlsafe(32)}"
+        webhook.save(update_fields=["secret", "updated_at"])
+        data = WebhookSerializer(webhook, context=self.get_serializer_context()).data
+        return Response({**data, "secret": webhook.secret})
 
     @action(detail=True, methods=["get"])
     def deliveries(self, request: Request, id=None):
@@ -181,28 +197,20 @@ class WebhookViewSet(viewsets.ModelViewSet):
         deliveries = webhook.deliveries.all()
         page = self.paginate_queryset(deliveries)
         if page is not None:
-            serializer = WebhookDeliverySerializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        serializer = WebhookDeliverySerializer(deliveries, many=True)
-        return Response(serializer.data)
+            return self.get_paginated_response(WebhookDeliverySerializer(page, many=True).data)
+        return Response(WebhookDeliverySerializer(deliveries, many=True).data)
 
     @action(detail=True, methods=["post"])
     def test(self, request: Request, id=None):
-        self.get_object()  # permission/lookup check for the target webhook
-        # Send test payload
-        test_payload = {
-            "event": "webhook.test",
-            "timestamp": timezone.now().isoformat(),
-            "data": {"message": "Test webhook from JT-Code"},
-        }
+        """Send a signed ``webhook.test`` event now (one attempt); poll ``deliveries`` for the result."""
+        from apps.integrations.outbound import create_test_delivery
 
-        # This would actually send the webhook
-        # For now, just return success
-        return Response({"status": "sent", "payload": test_payload})
+        delivery = create_test_delivery(self.get_object())
+        return Response(WebhookDeliverySerializer(delivery).data, status=status.HTTP_202_ACCEPTED)
 
 
 class WebhookDeliveryViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOrganizationAdmin]
     serializer_class = WebhookDeliverySerializer
     lookup_field = "id"
 

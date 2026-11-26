@@ -171,6 +171,17 @@ services:
       GOTRUE_MAILER_SUBJECTS_MAGIC_LINK: Your JT-Code sign-in link
       GOTRUE_MAILER_SUBJECTS_EMAIL_CHANGE: Confirm your new JT-Code email
       GOTRUE_MAILER_SUBJECTS_INVITE: You're invited to JT-Code
+      # Social sign-in. Off until the operator adds the provider's keys; the frontend shows a provider's
+      # button only when /auth/v1/settings reports it enabled. Register the redirect URI
+      # ${SUPABASE_PUBLIC_URL}/auth/v1/callback with Google and Apple.
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${SUPABASE_GOOGLE_ENABLED:-false}
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${SUPABASE_GOOGLE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${SUPABASE_GOOGLE_SECRET:-}
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${SUPABASE_PUBLIC_URL}/auth/v1/callback
+      GOTRUE_EXTERNAL_APPLE_ENABLED: ${SUPABASE_APPLE_ENABLED:-false}
+      GOTRUE_EXTERNAL_APPLE_CLIENT_ID: ${SUPABASE_APPLE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_APPLE_SECRET: ${SUPABASE_APPLE_SECRET:-}
+      GOTRUE_EXTERNAL_APPLE_REDIRECT_URI: ${SUPABASE_PUBLIC_URL}/auth/v1/callback
       GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
       GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: "false"
       # Password policy enforced by the server, matching the sign-up form (8+ chars, a letter, a digit);

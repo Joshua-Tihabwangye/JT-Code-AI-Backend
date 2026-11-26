@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 
 from apps.integrations.models import (
@@ -99,42 +101,77 @@ class ConnectorAccountAuthSerializer(serializers.Serializer):
     credentials = serializers.JSONField(required=False)
 
 
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def validate_webhook_url(value: str) -> str:
+    """A public HTTPS endpoint, checked with the same rules deliveries use (``apps.tools.egress``)."""
+    from apps.tools.egress import EgressDenied, EgressError, validate_url
+
+    try:
+        validate_url(value)
+    except (EgressDenied, EgressError) as exc:
+        raise serializers.ValidationError(str(exc)) from exc
+    return value
+
+
+def validate_webhook_events(value: list[str]) -> list[str]:
+    from apps.integrations.outbound import WEBHOOK_EVENTS
+
+    unknown = sorted(set(value) - set(WEBHOOK_EVENTS))
+    if unknown:
+        raise serializers.ValidationError(f"Unknown events: {', '.join(unknown)}.")
+    return sorted(set(value))
+
+
+def validate_webhook_headers(value: dict) -> dict:
+    from apps.integrations.outbound import RESERVED_HEADERS, RESERVED_PREFIX
+
+    if not isinstance(value, dict) or len(value) > 10:
+        raise serializers.ValidationError("At most 10 headers.")
+    for name, header in value.items():
+        lowered = str(name).lower()
+        if (
+            not _HEADER_NAME.match(str(name))
+            or lowered in RESERVED_HEADERS
+            or lowered.startswith(RESERVED_PREFIX)
+        ):
+            raise serializers.ValidationError(f"The header {name!r} cannot be set.")
+        if not isinstance(header, str) or len(header) > 512 or "\r" in header or "\n" in header:
+            raise serializers.ValidationError(
+                f"The value of {name!r} must be one line of at most 512 characters."
+            )
+    return value
+
+
 class WebhookSerializer(serializers.ModelSerializer):
-    organization_name = serializers.CharField(source="organization.name", read_only=True)
+    """An endpoint as listed: never its signing secret (returned once, at creation or rotation)."""
+
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    event_filter_display = serializers.CharField(source="get_event_filter_display", read_only=True)
+    events = serializers.ListField(child=serializers.CharField(), required=False)
+    # Users pause and resume; ``disabled`` (too many failures) and ``error`` are set by the platform.
+    status = serializers.ChoiceField(choices=["active", "paused"], required=False)
 
     class Meta:
         model = Webhook
         fields = [
             "id",
-            "organization",
-            "organization_name",
             "name",
             "url",
             "status",
-            "status_display",
             "event_filter",
-            "event_filter_display",
             "events",
             "headers",
-            "retry_policy",
             "is_verified",
             "last_triggered_at",
             "last_success_at",
             "last_failure_at",
             "failure_count",
-            "metadata",
-            "created_by",
             "created_by_email",
             "created_at",
             "updated_at",
         ]
-        # The signing secret is never listed: it is returned once, in the create response.
         read_only_fields = [
-            "organization",
-            "created_by",
             "id",
             "is_verified",
             "last_triggered_at",
@@ -145,11 +182,36 @@ class WebhookSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["status"] = instance.status  # also "disabled"/"error"
+        return data
 
-class WebhookCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Webhook
-        fields = ["name", "url", "events", "headers", "retry_policy"]
+    def validate_url(self, value: str) -> str:
+        return validate_webhook_url(value)
+
+    def validate_events(self, value: list[str]) -> list[str]:
+        return validate_webhook_events(value)
+
+    def validate_headers(self, value: dict) -> dict:
+        return validate_webhook_headers(value)
+
+    def validate(self, attrs):
+        if "events" in attrs and "event_filter" not in attrs:
+            attrs["event_filter"] = Webhook.EventFilter.CUSTOM if attrs["events"] else Webhook.EventFilter.ALL
+        if attrs.get("event_filter") == Webhook.EventFilter.CUSTOM and not attrs.get(
+            "events", getattr(self.instance, "events", None)
+        ):
+            raise serializers.ValidationError({"events": "Choose at least one event, or receive all events."})
+        if attrs.get("status") == Webhook.Status.ACTIVE and self.instance is not None:
+            attrs["failure_count"] = 0  # resuming starts a fresh failure count
+        return attrs
+
+
+class WebhookCreateSerializer(WebhookSerializer):
+    class Meta(WebhookSerializer.Meta):
+        fields = ["name", "url", "event_filter", "events", "headers"]
+        read_only_fields: list[str] = []
 
 
 class WebhookDeliverySerializer(serializers.ModelSerializer):

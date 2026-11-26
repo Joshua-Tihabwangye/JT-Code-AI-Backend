@@ -157,7 +157,7 @@ def runtime_connection_settings(
 
     def redis_cache(key_prefix: str, timeout: int) -> dict[str, Any]:
         return {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "BACKEND": "apps.core.cache.SharedPoolRedisCache",
             "LOCATION": redis_url,
             "TIMEOUT": timeout,
             "OPTIONS": {"socket_connect_timeout": 3, "socket_timeout": 3},
@@ -232,6 +232,10 @@ CELERY_TASK_TIME_LIMIT = 600
 CELERY_TASK_SOFT_TIME_LIMIT = 540
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BEAT_SCHEDULE = {
+    "sweep-webhook-deliveries": {
+        "task": "apps.integrations.tasks.sweep_webhook_deliveries",
+        "schedule": 60.0,
+    },
     "detect-cost-anomalies": {
         "task": "apps.usage.tasks.detect_cost_anomalies",
         "schedule": 3600.0,
@@ -408,6 +412,8 @@ CELERY_TASK_ROUTES = {
     "apps.tools.tasks.*": {"queue": "jobs.default"},
     "apps.usage.tasks.*": {"queue": "jobs.default"},
     "apps.orchestration.tasks.*": {"queue": "orchestration"},
+    "apps.integrations.tasks.*": {"queue": "jobs.default"},
+    "apps.governance.support.*": {"queue": "jobs.default"},
 }
 CELERY_TASK_DEFAULT_DELIVERY_MODE = "persistent"
 CELERY_TASK_RESULT_EXPIRES = 3600
@@ -433,6 +439,14 @@ AUTH_FAILURE_LIMIT = int(env("AUTH_FAILURE_LIMIT", "60"))
 AUTH_FAILURE_WINDOW_SECONDS = int(env("AUTH_FAILURE_WINDOW_SECONDS", "60"))
 # Organization API keys (X-API-Key): the most requests per hour one key may make, whatever its own limit.
 API_KEY_MAX_RATE_LIMIT = int(env("API_KEY_MAX_RATE_LIMIT", "10000"))
+# Outbound webhooks (apps.integrations.outbound).
+WEBHOOK_MAX_ATTEMPTS = int(env("WEBHOOK_MAX_ATTEMPTS", "6"))
+WEBHOOK_TIMEOUT_SECONDS = float(env("WEBHOOK_TIMEOUT_SECONDS", "10"))
+WEBHOOK_DISABLE_AFTER_FAILURES = int(env("WEBHOOK_DISABLE_AFTER_FAILURES", "20"))
+# Support cases: where new cases and customer replies are mailed (empty: no mail), and how many cases one
+# user may open per hour.
+SUPPORT_NOTIFICATION_EMAIL = env("SUPPORT_NOTIFICATION_EMAIL", "")
+SUPPORT_CASES_PER_HOUR = int(env("SUPPORT_CASES_PER_HOUR", "10"))
 # The Django admin (operators reach it over an SSH tunnel; the public edge blocks /admin).
 DJANGO_ADMIN_ENABLED = env_bool("DJANGO_ADMIN_ENABLED", True)
 
@@ -569,11 +583,12 @@ AI_RETRY_MAX_BACKOFF_SECONDS = env_float("AI_RETRY_MAX_BACKOFF_SECONDS", 8.0)
 AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(env("AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS", "30"))
 # Gemini (Generative Language REST API).
 GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
-GEMINI_DEFAULT_MODEL = env("GEMINI_DEFAULT_MODEL", "gemini-2.5-flash")
-# Images: Imagen generates, a Gemini image model edits, the chat model describes.
+GEMINI_DEFAULT_MODEL = env("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
+# Images: a Gemini image model generates and edits, the chat model describes. An ``imagen-*``
+# GEMINI_IMAGE_MODEL uses the legacy Imagen :predict API (shut down in the Gemini API in 2026).
 IMAGE_PROVIDER = env("IMAGE_PROVIDER")  # "gemini" (default) or "echo" (development/tests only)
-GEMINI_IMAGE_MODEL = env("GEMINI_IMAGE_MODEL", "imagen-3.0-generate-002")
-GEMINI_IMAGE_EDIT_MODEL = env("GEMINI_IMAGE_EDIT_MODEL", "gemini-2.5-flash-image")
+GEMINI_IMAGE_MODEL = env("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+GEMINI_IMAGE_EDIT_MODEL = env("GEMINI_IMAGE_EDIT_MODEL", "gemini-3.1-flash-image")
 GEMINI_SAFETY_THRESHOLD = env("GEMINI_SAFETY_THRESHOLD", "BLOCK_MEDIUM_AND_ABOVE")
 # Llama via any hosted or self-hosted OpenAI-compatible endpoint.
 LLAMA_API_BASE = env("LLAMA_API_BASE")

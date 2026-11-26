@@ -58,9 +58,15 @@ class ReadyView(APIView):
 
         checks = {"database": _check("database", database), "redis": _check("redis", redis)}
         if settings.HEALTHCHECK_EXTERNAL_DEPENDENCIES:
-            checks["celery_broker"] = _check(
-                "celery_broker", lambda: current_app.connection_for_read().ensure_connection(max_retries=0)
-            )
+
+            def broker() -> None:
+                # Closed here, not left to the garbage collector: under uvicorn the dropped connection
+                # (a broker socket and an epoll poller) was never collected, so every probe (every 15 s
+                # from Docker) leaked descriptors until the worker hit its limit and failed requests.
+                with current_app.connection_for_read() as conn:
+                    conn.ensure_connection(max_retries=0, timeout=3)
+
+            checks["celery_broker"] = _check("celery_broker", broker)
 
             def kafka() -> None:
                 from confluent_kafka.admin import AdminClient

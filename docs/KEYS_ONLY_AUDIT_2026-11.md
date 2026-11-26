@@ -1,0 +1,123 @@
+# "Only the keys are left" audit (2026-11-26, Phase 17)
+
+The operator asked: are all parts of both repositories set up, so that only the keys remain to be entered in
+the env files? This report answers that question. Tasks and gate results are in the Phase 17 section of
+[EXECUTION_BACKLOG.md](EXECUTION_BACKLOG.md).
+
+**Answer: almost.** After Phase 17, a production deploy needs the third-party keys below plus two
+operator steps that are not keys:
+
+* deploying n8n, which is a separate service with its own setup;
+* the one-time console work at Stripe, Google and Apple (register the webhook and the redirect URIs).
+
+Everything else is generated, seeded, or runs by itself on deploy. Phase 17 found seven things that broke
+the claim and fixed six of them (one is ⚠ for the operator). One leftover stays open because it is a
+product decision.
+
+## 1. Read this first: a leaked password
+
+| What | Where | What to do |
+| --- | --- | --- |
+| A real Gmail app password and the operator's Gmail address were committed in `.env.example`, `.env.docker.example` and `.env.production.example` | Since commit `e709f6d` (2026-11-13), which is on `origin/main` and `origin/Working_256`: **it is public on GitHub** | ⚠ **Revoke that app password now** at Google (Account → Security → App passwords). Create a new one and put it only in `.env.docker` / `.env.production`, which are never committed. The examples now carry placeholders, and `tests/test_env_examples.py` fails if a real-looking password or a `@gmail.com` address comes back. History was not rewritten (G2); if you want it gone from GitHub too, that is your decision |
+
+## 2. What is already done for you
+
+`make prod-env` creates `.env.production` (mode 600) and generates every internal secret:
+`DJANGO_SECRET_KEY`, `SUPABASE_DB_PASSWORD`, `APP_DB_PASSWORD`, `SUPABASE_JWT_SECRET` (and from it
+`SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`), `SUPABASE_WEBHOOK_SIGNING_SECRET`,
+`REDIS_CACHE_PASSWORD`, `REDIS_BROKER_PASSWORD`, `KAFKA_ADMIN_PASSWORD`, `KAFKA_PRODUCER_PASSWORD`,
+`KAFKA_CONSUMER_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `METRICS_AUTH_TOKEN`, `WEBHOOK_SIGNING_SECRET`,
+`N8N_DISPATCH_SECRET`, `N8N_WEBHOOK_SECRET`, `N8N_SENTRY_RELAY_SECRET` and `TOOL_CREDENTIALS_ENCRYPTION_KEYS`.
+
+On every deploy the `migrate` container:
+
+1. applies the migrations, which seed the plans, AI providers, models and policies;
+2. provisions the least-privilege database role;
+3. configures private storage;
+4. creates the Kafka topics;
+5. verifies Redis, Kafka and Supabase;
+6. **new:** creates the Stripe products and prices once a Stripe key is set (P17-6).
+
+Every app container reads `.env.production` (`env_file`), so a key you add reaches Django after
+`make compose-up-prod`.
+
+Verified on 2026-11-26 in a throwaway worktree:
+
+* `make prod-env` followed by `make prod-check` lists only the keys in section 3, and real domains are
+  required (`example.com` is refused).
+* Django's `check --deploy` with the full production environment shows **no security warnings**. Its 6
+  warnings are about OpenAPI schema generation only.
+
+## 3. What you enter
+
+In `.env.production` on the server (for local tests, the same keys go in `.env.docker`):
+
+| Purpose | Keys | Required by `prod-check` |
+| --- | --- | --- |
+| Domains | `APP_DOMAIN`, `FRONTEND_URL`, `SUPABASE_PUBLIC_URL`, `SUPABASE_SITE_URL`, `SUPABASE_REDIRECT_URLS`, `DJANGO_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `CSRF_TRUSTED_ORIGINS` | yes (no `example.com`) |
+| AI | `GEMINI_API_KEY` (or `LLAMA_API_BASE` + `LLAMA_API_KEY`); optional `OPENAI_API_KEY` | yes |
+| Payments | `STRIPE_SECRET_KEY` (`sk_`/`rk_`), `STRIPE_WEBHOOK_SECRET` (`whsec_`), `STRIPE_PUBLISHABLE_KEY` | yes |
+| E-mail | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`, `SUPPORT_NOTIFICATION_EMAIL` | yes (host and sender) |
+| Errors | `SENTRY_DSN` (optional: `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`) | yes |
+| Workflows (n8n) | `N8N_BASE_URL`, `N8N_WEBHOOK_BASE_URL`, `N8N_CALLBACK_BASE_URL`, `N8N_API_KEY`, `N8N_CREDENTIAL_GITHUB`, `N8N_CREDENTIAL_GOOGLE_DRIVE`, `N8N_CREDENTIAL_NOTION`, `N8N_CREDENTIAL_SLACK`, `N8N_CREDENTIAL_SMTP` | `N8N_API_KEY` yes |
+| Social sign-in (optional, new) | `SUPABASE_GOOGLE_ENABLED=true`, `SUPABASE_GOOGLE_CLIENT_ID`, `SUPABASE_GOOGLE_SECRET`; `SUPABASE_APPLE_ENABLED=true`, `SUPABASE_APPLE_CLIENT_ID`, `SUPABASE_APPLE_SECRET` | no |
+| Automations | `WEBHOOK_ALLOWED_HOSTS` | no |
+
+Model names have working defaults. If your own `.env`, `.env.docker` or `.env.production` sets
+`GEMINI_DEFAULT_MODEL`, `GEMINI_IMAGE_MODEL` or `GEMINI_IMAGE_EDIT_MODEL`, check the values (section 4,
+P17-7). I did not read your values (G5).
+
+For the frontend, as build variables on Vercel or as Docker build arguments:
+
+| Key | Note |
+| --- | --- |
+| `VITE_DATA_MODE=api` | |
+| `VITE_API_BASE_URL` | A full URL on Vercel |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | The anon key is generated by `make prod-env` |
+| `VITE_SENTRY_DSN`, `VITE_SENTRY_ENVIRONMENT` | |
+
+Every `import.meta.env` key the code reads is listed in `.env.example` and in the `Dockerfile`. The audit
+compared the two lists, and nothing is missing.
+
+Not keys, but needed once:
+
+1. **n8n** is a separate deployment ([infra/n8n/README.md](../infra/n8n/README.md)):
+   * its database and roles;
+   * starting it in queue mode;
+   * creating the API key and the provider credentials in the n8n UI and copying their ids into the
+     `N8N_CREDENTIAL_*` keys;
+   * `manage.py n8n_workflows push`.
+
+   The previous readiness report called n8n optional. That was wrong, because production validation
+   requires `N8N_API_KEY`.
+2. **Stripe:** register the webhook `POST /api/v1/webhooks/stripe/` with the events listed in
+   [BILLING_AND_STRIPE.md](BILLING_AND_STRIPE.md) and enable the Billing Portal. Prices are now created by
+   the deploy.
+3. **Google and Apple** (only if you enable them): register `${SUPABASE_PUBLIC_URL}/auth/v1/callback` as
+   the redirect URI.
+4. The server run itself (TLS, backups, restore drill, load test): [PRODUCTION_READINESS_2026-11.md](PRODUCTION_READINESS_2026-11.md),
+   section 5.
+
+## 4. Findings
+
+| # | Finding | Evidence | State |
+| --- | --- | --- | --- |
+| P17-1 | A real Gmail app password and the operator's address in three example files, pushed to GitHub | `git log -S`; `e709f6d` | ☑ placeholders, guard test (8 tests; 7 fail on the old files). ⚠ **you revoke the password** |
+| P17-3 | Stray `docker-compose.yml.backup` with a Supabase `service_role` JWT as a default value | referenced nowhere | ☑ removed |
+| — | `N8N_CREDENTIAL_*` and `SUPPORT_NOTIFICATION_EMAIL` missing from the production example | compared settings with the example | ☑ added (empty, documented) |
+| P17-4 | "Sign in with Google/Apple" were shown but could not work: Supabase Auth had no providers (`/auth/v1/settings`: `google: false, apple: false`; authorize answered 400 "provider is not enabled") | live request to the local stack | ☑ compose wires `GOTRUE_EXTERNAL_GOOGLE_*`/`APPLE_*` from env keys (off by default); the frontend shows a button only for an enabled provider. Tests: compose wiring; 3 frontend unit tests |
+| P17-5 | The Vercel-hosted frontend sent **no security headers**: pages could be framed (clickjacking) and MIME-sniffed. The nginx image had them; `vercel.json` set only caching | `vercel.json` | ☑ `X-Frame-Options`, CSP `frame-ancestors`/`object-src`/`base-uri`/`form-action`, `nosniff`, referrer, permissions, COOP, HSTS. `/embed/` stays frameable. `npm run test:refresh` checks them and fails on the old file |
+| P17-6 | Stripe checkout answered 503 after the keys were added, until someone ran `manage.py sync_stripe_prices` by hand; a test-mode product id would be reused after switching to live keys | `stripe_client.create_subscription_checkout`; the `migrate` role | ☑ the deploy runs it (`--if-configured`, never blocks the deploy); an unknown product id is replaced. 6 tests |
+| P17-7 | **The shipped Gemini defaults were shut-down models**: image generation used Imagen `imagen-3.0-generate-002` through `:predict`, which Google has shut down in the Gemini API (Imagen 4 also, 2026-08-17). The chat default `gemini-2.5-flash` shuts down 2026-12-01, and the seeded `gemini-2.0-flash` is shut down. With a valid key, image generation would still have failed | Google AI models and deprecations pages, read 2026-11-26 | ☑ generation uses a Gemini image model through `generateContent` (an `imagen-*` name keeps the old path). Defaults: `gemini-3.8-flash` (chat), `gemini-3.1-flash-image` (generate and edit). The seeded model row follows `GEMINI_DEFAULT_MODEL`. Embeddings stay `gemini-embedding-001` (served until 2028; a change would need re-indexing). ⚠ not called live (no key here) |
+| — | `POST /connector-accounts/{id}/authorize/` is a stub: it builds an authorize URL, but there is no callback or token exchange | `apps/integrations/views.py` | Open, product decision. No screen calls it; the Integrations screen stores credentials in n8n. Decide whether connectors are a feature before building OAuth |
+| — | Backend stub sweep (`TODO`, `NotImplementedError`, "for now") and frontend secret scan | grep in both repositories | Clean apart from the stub above. Test fixtures and the CI Stripe key are fake |
+
+## 5. Not verified, and why
+
+* Live Google and Apple sign-in, live Stripe and live Gemini calls: this machine has no such keys. Each
+  path is covered by tests at the SDK or HTTP boundary.
+* The Vercel headers were checked with a local server that applies `vercel.json` the way Vercel does,
+  not on Vercel itself. ⚠ After deploying, check the headers with
+  `curl -I https://<your-app>/app/chat`.
+* The new compose settings for Supabase Auth take effect on the next `make docker-up` or
+  `make compose-up-prod`. With the provider keys absent, behaviour is unchanged.

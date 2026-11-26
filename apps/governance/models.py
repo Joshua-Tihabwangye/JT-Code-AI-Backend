@@ -302,3 +302,27 @@ class SupportCase(models.Model):
 
     def __str__(self):
         return f"{self.subject} ({self.status}) - {self.organization}"
+
+
+class SupportCaseMessage(models.Model):
+    """One reply in a support case: from the customer (a member) or from JT-Code support (staff)."""
+
+    class Author(models.TextChoices):
+        CUSTOMER = "customer", "Customer"
+        SUPPORT = "support", "Support"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    case = models.ForeignKey(SupportCase, on_delete=models.CASCADE, related_name="messages")
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="support_messages"
+    )
+    author_role = models.CharField(max_length=10, choices=Author.choices)
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("created_at",)
+        indexes = [models.Index(fields=("case", "created_at"))]
+
+    def __str__(self):
+        return f"{self.author_role} on {self.case_id}"

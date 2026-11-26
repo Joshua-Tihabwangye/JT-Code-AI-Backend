@@ -94,3 +94,7 @@ def check_consent_expiry():
             },
             headers={"trace_id": f"consent-{consent.id}"},
         )
+
+
+# Registered with the worker through this module (Celery autodiscovers ``tasks`` modules only).
+from apps.governance.support import notify_customer, notify_support  # noqa: E402, F401

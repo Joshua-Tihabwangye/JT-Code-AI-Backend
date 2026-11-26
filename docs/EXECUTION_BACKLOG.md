@@ -254,7 +254,7 @@ fixes what the verification finds; new screens for API-only features are scoped 
 
 Gate: BE-gate (full suite) + FE-gate + build; `scripts/system_check.py` on the live stack.
 
-## Phase 16: Screens for API-only features; dependency majors (added 2026-11-23, G1, BE + FE)
+## Phase 16: Screens for API-only features; dependency majors ☑ (added 2026-11-23, G1, BE + FE)
 
 Reason: P15-4 found 268 of 432 operations without a frontend caller. About 80 are server-to-server or
 operator-only by design. The others are user features with no screen, and the operator asks for every
@@ -264,16 +264,33 @@ customer needs first.
 | ID | Task | Acceptance |
 | --- | --- | --- |
 | P16-1 ☑ | **API keys, end to end.** Found 2026-11-23: keys were issued but **nothing accepted them** (`key_hash` was never read; the only authenticator was the JWT one). Also, a `PATCH` could set a revoked key back to `active`, and on `POST` the serializer returned the stored digest as `full_key`. Backend: `X-API-Key` authentication (active, unexpired, member, pinned to the key's workspace, `read`/`write` scopes, never key/account/member management, a per-key hourly limit, IP failure lockout); updates change the name only; scope, limit and expiry validation; members see their own keys, admins all. Frontend: **Settings → Developer: API keys** (create with scopes and expiry, shown once with copy, list, revoke) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
-| P16-2 | **Settings → Developer: outbound webhooks** (endpoints, secret rotation, deliveries, redeliver) | Same |
-| P16-3 | **Help → Support cases** (open, list, reply, close) | Same |
-| P16-4 | **Settings → Workspace: audit log** (admins; filters; export) | Same |
-| P16-5 | **Settings → Privacy: consents** (view, withdraw) | Same |
-| P16-6 | **Automations, agents and agent runs** (list, create, run, history) | Same |
-| P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
-| P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
+| P16-2 ☑ | **Outbound webhooks, end to end.** Found 2026-11-23: endpoints could be registered but **nothing ever delivered to them** (the only `WebhookDelivery` writer was the inbound view), `test` was a stub, the signing secret was never shown, and URLs and headers were not validated. Backend: a published event catalogue whose organization is resolved from the event's entity (fail closed); deliveries created in the producer's transaction; signed (`X-JT-Signature`), SSRF-safe, no redirects, retried with backoff, endpoint disabled after repeated failures, beat sweep for due retries; a real test send; the secret shown once and rotatable. Frontend: **Settings → Developer: webhooks** (add, events, secret once, test, pause/resume, delete, recent deliveries) | BE tests for each rule (G9); repository + screen + unit tests; contract snapshot; live check |
+| P16-3 ☑ | **Support cases, end to end.** Found 2026-11-24: customers could open cases but **nobody could answer** (no replies, no notification), and any editor could `assign` a case to **any user id in the system** or `PATCH` its status and assignee. Backend: a reply thread (`SupportCaseMessage`); members see their own cases, admins all of the workspace's; customers reply and close (no assign/resolve/edit); staff answer in the Django admin; mail to `SUPPORT_NOTIFICATION_EMAIL` and back to the customer; per-user hourly limit. Frontend: **Settings → Support** (open, list, thread, reply, close) | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
+| P16-4 ☑ | **Settings → Audit log** (admins; filters; CSV export). Found 2026-11-24: a malformed `actor` filter or an impossible date answered 500; a date-only `end_date` dropped that day's own events (`parse_datetime` reads a bare date as midnight); the list never returned `outcome`. | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
+| P16-5 ☑ | **Consents: personal and tamper-proof; "Your agreements" in Profile.** Found 2026-11-25: consent records are personal, but the API scoped them to the workspace, so any editor could list, change or **delete** other members' records, while viewers could not read their own. Records are legal evidence and could be deleted. Terms/privacy could be "withdrawn" through `PATCH` without deleting the account. The client supplied the IP and user agent. Nothing acts on the optional consents (marketing, analytics, AI training, third-party), so no switches are added for them (they would promise what the system does not do). Backend: own records only, any role; no `DELETE`/`PUT`; terms/privacy are recorded at sign-up and not withdrawn here (409: delete the account); the server records IP and user agent; withdrawal stamps `withdrawn_at`. Frontend: a read-only "Your agreements" section in Profile | BE tests (G9); repository + section + unit tests; contract snapshot; live check |
+| P16-6 ☑ | **Automations, agents and agent runs** (list, create, run, history) | Same |
+| P16-7 ☑ | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
+| P16-9 ☑ | **Supabase gateway re-resolves its upstreams.** Found 2026-11-25 during the P16-6 browser check: after `supabase-auth` was recreated, the gateway answered **502** to every `/auth/v1` call (sign-up and sign-in down) until the gateway restarted. nginx resolved `proxy_pass http://supabase-auth:9999/` once at start and kept the old container IP. Fix: Docker's resolver (`127.0.0.11`, 10 s) and variable upstreams; the path comes from `$request_uri` through `map`, so the client's encoding (e.g. `%2F` in storage object names) is passed through unchanged | `test_gateway_hardening` asserts no literal upstream host; live: recreate `supabase-auth`, auth answers without restarting the gateway |
+| P16-10 ☑ | **API leaks file descriptors (outage within hours).** Found 2026-11-25 by a live probe that answered 500 with `OSError: [Errno 24] Too many open files`. One uvicorn worker held 1023/1024 descriptors: 759 Redis sockets and 237 epoll pollers. Even idle, a worker gained about one descriptor per Docker health probe (every 15 s). Causes: (1) the readiness probe opened a Celery broker connection and never closed it (a socket and an epoll poller each time); (2) under ASGI Django creates a cache object per request context, and the stock `RedisCache` built a new connection pool for each and never closed it. Neither was collected under uvicorn. Fix: close the probe's connection (context manager, 3 s timeout); `apps.core.cache.SharedPoolRedisCache` shares pools per process; the chat stream closes its Redis subscription even when one step fails | Tests for each; live: worker descriptors stay flat while idle |
+| P16-8 ☑ | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
 
 Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
 the Docker stack.
+
+## Phase 17: "Only the keys are left" audit ☑ (P17-1 ⚠, P17-7 ⚠) (added 2026-11-26, G1, BE + FE)
+
+Reason: the operator asks for a deep audit of both repositories to confirm that everything is set and only
+keys remain to be entered in the env files. Every finding that is not a key is fixed here or listed.
+
+| ID | Task | Acceptance |
+| --- | --- | --- |
+| P17-1 | **A real Gmail app password and the operator's address were committed** in `.env.example`, `.env.docker.example` and `.env.production.example` (since `e709f6d`, 2026-11-13; on `origin/main`). Replace them with placeholders (the local example defaults to Mailpit). History is not rewritten (G2): ⚠ the operator revokes that app password at Google and creates a new one only in `.env.docker`/`.env.production` | No personal value in any tracked file; a test fails if a real-looking SMTP password or a `@gmail.com` address returns to an example file |
+| P17-3 | **Stray `docker-compose.yml.backup`** in the repository root (400 lines, last changed 2026-10-14, referenced nowhere) with a Supabase `service_role` JWT as a default value. Removed (history keeps it) | File gone; nothing references it |
+| P17-4 | **"Sign in with Google/Apple" are shown but cannot work**: Supabase Auth (GoTrue) has no external providers configured in `compose.yaml` (`/auth/v1/settings` reports `google: false, apple: false`), so a click ends in "provider is not enabled". Wire `GOTRUE_EXTERNAL_GOOGLE_*`/`GOTRUE_EXTERNAL_APPLE_*` from env keys (off by default, G8), document the keys in the examples, and make the frontend show a provider button only when Supabase Auth reports it enabled | With the keys absent, no social button is shown in API mode; enabling a provider needs only its keys; compose test asserts the wiring; frontend unit test covers shown/hidden |
+| P17-5 | **The Vercel-hosted frontend sends no security headers**: `nginx.conf` (Docker image) sets CSP `frame-ancestors`, `X-Frame-Options: DENY`, `nosniff`, referrer and permissions policies, but `vercel.json` sets only caching, so every page on Vercel can be framed (clickjacking) and sniffed. Mirror the origin-independent headers in `vercel.json` (embeds under `/embed/` stay frameable, like nginx) plus HSTS | `npm run test:refresh` checks the headers and fails on the old `vercel.json` |
+| P17-6 | **Stripe checkout needs a manual command after the keys**: paid plans have no Stripe price until someone runs `manage.py sync_stripe_prices`; until then checkout answers 503. The migrate role runs it (`--if-configured`: nothing without a key; a Stripe failure warns, never blocks the deploy). A stored Product id the account does not have (test-mode id after switching to live keys) is replaced instead of reused | Tests: skipped without a key, every paid plan priced with one, other-mode product replaced, other Stripe errors still raise, entrypoint runs it non-fatally |
+| P17-7 | **The shipped Gemini defaults are shut down**: image generation used Imagen (`imagen-3.0-generate-002`, `:predict`), which Google has shut down in the Gemini API (Imagen 4 too, 2026-08-17); `gemini-2.5-flash` (chat default) shuts down 2026-12-01 and `gemini-2.0-flash` is already shut down (source: Google's models and deprecations pages, read 2026-11-26). Generate with a Gemini image model through `generateContent` (one call per image; an `imagen-*` name keeps the old path) and default to `gemini-3.8-flash` (chat) and `gemini-3.1-flash-image` (generate and edit). Embeddings stay `gemini-embedding-001` (served until 2028; changing it means re-indexing) | Tests: defaults are not shut-down models; generation calls `generateContent` per image with aspect ratio, negative prompt and seeds; the Imagen path still works when chosen. ⚠ Live call needs `GEMINI_API_KEY` |
+| P17-2 | **Audit report** `docs/KEYS_ONLY_AUDIT_2026-11.md`: what `make prod-env` generates, what the operator must enter (from a dry run of `prod-env` + `prod-check` in a throwaway worktree), every non-key finding and its state | File exists; every finding has evidence |
 
 ---
 
@@ -916,3 +933,326 @@ ok, lint 0 errors (62 warnings, unchanged), 221/221 tests, build ok.
 Note: `test_picture_of_a_table_is_read_by_ocr_into_rows_and_columns` failed once in a full run and passes
 alone and in two other full runs: the OCR engine is memory-hungry next to 3 test workers on this 7 GB
 machine.
+
+### 2026-11-24: Phase 16, P16-2 ☑ (outbound webhooks)
+Found: an organization could register webhook endpoints, but nothing ever delivered to them (the only
+`WebhookDelivery` writer was the inbound view). `POST /webhooks/{id}/test/` was a stub that sent nothing,
+the signing secret was never shown, and URLs and headers were not validated.
+
+Backend (`apps/integrations/outbound.py`, `tasks.py`):
+- Event catalogue (13 types: chat reply, job, document render, file conversion, knowledge indexing,
+  images, agent run). Each type's organization is resolved from the entity behind the event key, never from
+  the payload; with no resolvable organization nothing is sent (fail closed). Internal payload keys
+  (`traceId`, `modelRunId`) are dropped.
+- `add_outbox_event` fans out to subscribed active endpoints in the producer's transaction (as the n8n
+  deliveries do). Delivery runs after commit on `jobs.default`; `sweep-webhook-deliveries` (beat, 60 s)
+  re-dispatches due ones.
+- Each delivery is signed (`X-JT-Signature: t=…,v1=HMAC-SHA256(secret, "t.body")`) and carries
+  `X-JT-Event` and `X-JT-Delivery`. It goes out through `apps.tools.egress.safe_request`: HTTPS, public
+  addresses only, pinned connection, no redirects, 64 KiB response cap, timeout. Backoff is 30 s × 4ⁿ up to
+  6 attempts (`WEBHOOK_MAX_ATTEMPTS`). A lease on `next_retry_at` stops duplicate sends from a second task
+  or the sweep; after `WEBHOOK_DISABLE_AFTER_FAILURES` (20) failed deliveries in a row the endpoint is
+  disabled.
+- API: admins only (an endpoint receives the whole workspace's events, so an editor's webhook would be an
+  export channel). The `whsec_` secret is returned once at creation and by `rotate-secret`, never listed.
+  Users may set only `active`/`paused` (resuming resets the failure count). URLs are checked with the
+  egress rules when saved and again on each send; events must be in the catalogue; at most 10 custom
+  headers, none of them reserved or `X-JT-*`, no CR/LF. `test` sends a real signed `webhook.test`.
+- `docs/API_V1_CONTRACT.md`: how integrators verify signatures and how retries work.
+
+Frontend: Settings → Developer → Webhooks (add with all or chosen events, secret once, send test,
+deliveries with status, attempts and HTTP code (refreshed while open), pause/resume, new secret and
+delete with confirmation, an admin-only note for other members). `WebhookRepository` in API and mock
+modes; texts in 20 languages. The English "Rotate secret" became "New secret": "rotate" came back
+literally ("spin the secret") in several languages, and Swahili's title as "web whips".
+
+Tests:
+- BE `tests/test_outbound_webhooks.py` (18). Without the outbox hook the 4 fan-out tests fail; the rest
+  exercise code that did not exist. Related suites (billing, n8n, events, security): 94 passed.
+- FE: repositories (3), section (4); 228/228 overall.
+- Live: `security_probe.py` **44/44**. Unsafe URLs are refused (http, localhost, a private network
+  address, port 8443). A test event to `https://example.com` (the IANA documentation domain) left through
+  the worker and egress layer, and its answer (HTTP 405) was recorded. Another workspace does not see the
+  endpoint.
+- Browser (`E2E_ONLY='API key|webhook'`, GoTrue on Mailpit for that run only, restored): add a webhook,
+  see the secret once, send a test, see "HTTP 405" in its deliveries, delete it.
+
+Gate: BE full suite **1049 passed, 2 skipped, 0 failed**; ruff ok (487 files); `makemigrations --check` no
+changes; contract 174 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 228/228
+tests. (The machine was powered off once during the gate; the suite was rerun.)
+
+### 2026-11-24: Phase 16, P16-3 ☑ (support cases)
+Found: customers could open support cases, but nobody could answer them (no replies, no notification).
+Any editor could `POST /support-cases/{id}/assign/` with **any user id in the system** (no membership
+check) and `PATCH` a case's status and assignee. No test or screen used the endpoints.
+
+Backend:
+- `governance.SupportCaseMessage` (migration `0013`; RLS through the existing `post_migrate` hook): the
+  conversation, from the customer or from support.
+- API: any member opens cases (validated subject, description, category, priority;
+  `SUPPORT_CASES_PER_HOUR`, 429 after). Members see their own cases, admins all of the organization's;
+  other workspaces get 404. `messages` (GET/POST; 409 once closed; a customer reply reopens a resolved
+  case) and `close`. `assign`, `resolve`, `PATCH`, `PUT` and `DELETE` are gone for customers. Support
+  staff appear as "JT-Code support", never by name.
+- Staff answer in the Django admin: the case page shows the thread, and a reply typed in the empty row is
+  stored as support, sets "waiting for user" and the first-response time.
+- Mail (`apps/governance/support.py`, Celery on `jobs.default`, after commit, retried): new cases and
+  customer replies go to `SUPPORT_NOTIFICATION_EMAIL` (empty: none); support replies go to the customer
+  with a link to Settings → Support.
+- The webhook views now use the existing `IsOrganizationAdmin` instead of a duplicate class added in
+  P16-2 (G10).
+
+Frontend: Settings → Support (`?tab=support`): open a case (topic, urgency, subject, description); the
+list; a thread with support replies marked; reply; close with confirmation; a closed case takes no reply.
+`SupportRepository` in API and mock modes. Texts in 20 languages; the brand is a `{{brand}}` placeholder
+(machine translation turned "JT-Code" into "code JT"), and "Support" is set by hand in de/fr/es/pt/it/zh/ja
+(the machine chose "helpfulness").
+
+Tests:
+- BE `tests/test_support_cases.py` (12): mail to the support inbox and none without it; who sees which
+  cases; the conversation, a support reply mailed to the customer, a customer reply reopening the case;
+  closed cases; no assign/resolve/edit; validation; rate limit; a reply typed in the Django admin is stored
+  as support and mailed.
+- FE: repositories (2), tab (3); 233/233 overall.
+- Live: `security_probe.py` **50/50** (6 support probes). Browser: `E2E_ONLY='API key|webhook|support case'`
+  4/4 steps (GoTrue on Mailpit for that run only, restored).
+
+Gate: BE full suite **1061 passed, 2 skipped, 0 failed** (rerun after the machine restarted); ruff ok (489
+files); `makemigrations --check` no changes; contract 179 calls green. FE typecheck ok; lint 0 errors (62
+warnings, unchanged); 233/233 tests.
+
+### 2026-11-24: Phase 16, P16-4 ☑ (audit log)
+The audit API was real (admin-only, append-only, it records key, webhook, file and settings changes) but
+had no screen, and its filters had defects:
+- `actor=not-a-uuid` answered 500; so did an impossible date such as `end_date=2026-13-45`;
+- `end_date=2026-11-20` excluded the 20th's own events (`parse_datetime` accepts a bare date as midnight,
+  so the "date only" case was never reached); naive datetimes were compared with aware ones;
+- the list never returned `outcome`.
+
+Backend: the filters are validated (400) and an end date includes its whole day. New
+`GET /audit-events/export/`: CSV of the filtered trail, newest first, streamed, at most 50 000 rows,
+admin-only, workspace-scoped. Every cell starting with `=`, `+`, `-`, `@`, tab or CR is prefixed with `'`,
+so an attacker-controlled description or user agent cannot run as a formula in Excel or Sheets.
+
+Frontend: Settings → Audit log (`?tab=audit`): area and date filters (a reversed range is refused),
+date-and-time, who, what (area, action, description), result, IP; "Show more" pages; Download CSV; an
+admin-only note for other members. `AuditRepository` in API and mock modes (the mock records nothing);
+texts in 20 languages.
+
+Tests: BE `tests/test_audit_log_api.py` (10). The first four failed against the old code (500, missing
+day, no export). The append-only trigger refuses `UPDATE`, so test events are dated when written. FE
+repository (1) and tab (3); 237/237 overall. Live: `security_probe.py` **55/55** (5 audit probes). Browser:
+`E2E_ONLY='API key|webhook|audit log|support case'` 5/5 steps; the screenshot showed an empty Result column
+and date-only times, both fixed and checked again (GoTrue on Mailpit for those runs only, restored).
+
+Gate: BE full suite **1071 passed, 2 skipped, 0 failed**; ruff ok (490 files); `makemigrations --check` no
+changes; contract 181 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 237/237 tests.
+
+### 2026-11-25: Phase 16, P16-5 ☑ (consents)
+Found: consent records are personal, but `/consents/` scoped them to the workspace and required write
+access. An editor could list, `PATCH` or `DELETE` other members' records (legal evidence), and a viewer
+could not read their own. Terms and privacy could be marked "withdrawn" without deleting the account, and
+the client supplied the IP and user agent of a new record. Nothing in the code acts on the optional
+consents (marketing, analytics, AI training, third-party), so no switches were added for them: they would
+promise behaviour the system does not have.
+
+Backend: own records only, in any role (others get 404); no `DELETE`/`PUT`. Creating is limited to optional
+types with `granted`/`denied`; terms, privacy and the data processing agreement are recorded at sign-up
+only. `PATCH` grants or withdraws an optional consent and stamps the time; on a required consent it answers
+409 ("delete your account"). The server records IP (`client_ip`) and user agent.
+
+Frontend: Settings → Profile → "Your agreements" (read-only): each consent, its version, when accepted or
+withdrawn, and a note that terms and privacy end with the account. `ConsentRepository` in API and mock
+modes; texts in 20 languages (zh "Accepted" corrected by hand).
+
+Tests: BE `tests/test_consents_api.py` (5), all of which failed against the old code. FE: section (1) and
+repository (1); 239/239 overall. Live: `security_probe.py` **59/59** (4 consent probes). Browser: after a
+real sign-up the section lists the terms and privacy policy as accepted (`E2E_ONLY='agreements'`); the
+other Settings steps still pass (GoTrue on Mailpit for those runs only, restored).
+
+Gate: BE full suite **1076 passed, 2 skipped, 0 failed**; ruff ok (491 files); `makemigrations --check` no
+changes; contract 182 calls green. FE typecheck ok; lint 0 errors (62 warnings, unchanged); 239/239 tests.
+
+### 2026-11-25: Phase 16, P16-6 ☑ (agents and automations) and P16-9 ☑ (gateway upstreams)
+P16-6. The agents API was complete and needed no change: idempotent run starts, per-workspace concurrency,
+credit metering, a step trace, cancel, and runs visible to their owner and to admins. Automations need the
+n8n `scheduled-automation` workflow, and creating one answers 403 without it. An automation's webhook host
+must be on `WEBHOOK_ALLOWED_HOSTS`, and an e-mail automation may only address members.
+
+Frontend: a new sidebar page, Agents (`/app/agents`):
+- **Agents tab:** run a task with the default assistant or a saved agent; follow the run (status,
+  model/tool calls, output, step trace; refreshed every 2 s until it ends; cancel); create an agent (name
+  with a derived slug, how it works: direct answer, tools or research, description, instructions);
+  activate or deactivate; delete with confirmation; recent runs. An editors-only note for viewers (runs
+  use credits).
+- **Scheduled tab:** e-mail members, a Slack message or a webhook, on a preset or a custom cron (five fields
+  with a fixed minute, checked before sending); run now, pause/resume, delete; a plain message when the
+  server has no workflow engine.
+
+`AgentRepository` and `AutomationRepository` in API mode; the mock explains that agents only run on the
+server. Texts in 20 languages. "Run" became "Start": it came back as running on foot in de/fr/es/pt/zh/sw.
+zh "Agents" was set by hand to 智能体 (the machine chose sales agents).
+
+Tests: FE helpers (2), page (5), repository (1); 247/247 overall. Live: `security_probe.py` **64/64** (5
+agent probes: no idempotency key → 400, a run starts, another workspace cannot read or cancel it,
+automations answer 403 without n8n). Browser: with the development echo AI provider for that run only, a
+task ran to "Done" with its output and step, and a new agent appeared in the list and the picker.
+
+P16-9. The first browser attempt failed at sign-up with "Cannot reach the sign-in service". The Supabase
+gateway answered 502 to every `/auth/v1` call because GoTrue had been recreated and nginx kept the IP it
+resolved at start. In production any GoTrue recreate (a config change, an update) would have taken sign-in
+down until someone restarted the gateway. Fix in `docker/supabase/gateway/default.conf.template`: Docker's
+resolver (`127.0.0.11`, 10 s) and variable upstreams (`set $jt_auth_upstream …; proxy_pass
+http://$jt_auth_upstream$jt_auth_uri;`). The path after the prefix comes from `$request_uri` through
+`map`, so the client's encoding and query string pass through unchanged (no decoded `rewrite`).
+`test_gateway_hardening.py`: a new test (no literal upstream host, the resolver present, paths from
+`$request_uri`) and the PostgREST listener test updated to the new form; both fail without the fix.
+Live: after a gateway restart, Auth, Storage and an encoded query answered 200. GoTrue was then forced onto
+a new IP (172.19.0.23 → .26, by parking a throwaway container on the old address), and Auth still answered
+200 through the gateway with no restart.
+
+Gate: BE full suite **1077 passed, 2 skipped, 0 failed**; ruff ok (491 files); compose check production,
+production+edge, local ok; contract 195 calls green. FE typecheck ok; lint 0 errors (62 warnings,
+unchanged); 247/247 tests.
+
+Note: a first full run died at 60 % when earlyoom killed VS Code processes (the operator's editor) on
+this 7 GB machine: 3 test workers plus the Docker stack. Full runs now use `-n 2`.
+
+### 2026-11-25: Phase 16, P16-7 ☑ (tools and MCP) and P16-10 ☑ (file descriptor leak)
+P16-7. The tools API needed no change: the catalogue per role, approvals decided by editors and admins,
+MCP servers only on public HTTPS (the egress rules), credentials encrypted, write-only and scoped to
+their workspace, and management admin-only. Frontend: Agents → Tools (`?tab=tools`):
+- approvals waiting for a decision (tool, summary, arguments, an optional note; approve or reject;
+  refreshed every 15 s);
+- the tool catalogue (which tools ask for approval or need a higher role);
+- for admins, MCP servers (connect, find tools, allow tools one by one, remove) and credentials
+  (provider, name, secret: shown never again; remove); for other members, an admin-only note.
+
+`ToolsRepository` in API and mock modes; texts in 20 languages. "List tools" became "Find tools": it
+translated as a noun ("tools of list"). The browser check found that a credential's name must be a slug
+(the server refused "E2E credential …"), so the form now sends the name as a slug and says so.
+
+Prompts were not given a screen: nothing in the code reads stored prompts (no agent, chat or job uses
+them), so a prompt library would be a feature that does nothing. The API stays.
+
+P16-10. A probe for P16-7 (an MCP server on 10.0.0.5) answered 500 with `OSError: [Errno 24] Too many open
+files`. One API worker held 1023 of 1024 descriptors: 759 Redis sockets and 237 epoll pollers. Idle, a
+worker gained about one descriptor per Docker health probe (every 15 s): an outage within hours in
+production, once every request failed. In-process tests did not show it, because they collect garbage
+explicitly; under uvicorn the dropped objects were not collected. Measured per process with `nsenter`/`ss`:
+- the readiness probe's Celery broker connection (`connection_for_read().ensure_connection()`) was never
+  closed: one broker socket and one epoll poller per probe. Now a context manager with a 3 s timeout;
+- under ASGI Django creates a cache object per request context, and the stock `RedisCache` built a new
+  connection pool for each and never closed it. `apps.core.cache.SharedPoolRedisCache` shares the pools
+  per process (redis-py pools are thread-safe and reset after a fork); `base.py` uses it;
+- the chat SSE stream now closes its Redis subscription and client even when one step fails.
+
+Live, after the fix: 16 health probes over 4 idle minutes left both workers at exactly 29 descriptors, 1
+Redis socket and 1 epoll each (before: +6 Redis sockets and +2 epoll every 2 minutes). After the full probe
+run: 34–36 descriptors per worker. Tests: `test_readiness_closes_the_broker_connection_it_opens` (fails
+without the fix) and `tests/test_shared_redis_cache.py` (3; the stock backend makes a pool per cache object,
+the new one exactly one).
+
+Tests and checks: FE Tools tab (4); 251/251 overall. Live: `security_probe.py` **70/70** (6 tools probes:
+the catalogue; MCP on loopback and on a private network refused; a credential stored, its secret never
+returned nor visible to another workspace). Browser: the Tools tab lists the catalogue and stores a
+credential whose secret does not appear on the page.
+
+Gate: BE full suite **1081 passed, 2 skipped, 0 failed** (`-n 2`). The first run caught two things, both
+fixed: the Kafka readiness test's stand-in broker was not a context manager, and the contract extractor
+could not read a computed approve/reject path (now two literal paths). Ruff ok (493 files);
+`makemigrations --check` no changes; contract 205 calls green. FE typecheck ok; lint 0 errors (62
+warnings, unchanged); 251/251 tests.
+
+### 2026-11-26: Phase 16, P16-8 ☑ (dependency majors) and Phase 16 closed
+- zod 3 → 4.6.7 (high: memory exhaustion validating oversized collections). `src/lib/config.ts`: the
+  conditional `.merge` no longer typed under zod 4. It is now one schema with optional Supabase fields and
+  a refinement that requires them in api mode (same behaviour).
+- vitest 3 → 5.1.2 (critical: tinypool, @vitest/mocker). The test setup's `ResizeObserver`/`IntersectionObserver`
+  stubs were arrow-function mocks, which vitest 4+ cannot construct; now one stub class. Vitest 5 no longer
+  brings Node's types, so `tsconfig.app.json` names `node` for the test files.
+- puppeteer-core 23 → 25.19.0 (high: extract-zip, basic-ftp, proxy chain). Launch options unchanged.
+- `npm audit`: **0 vulnerabilities**, development tools included (12 before: 2 critical, 9 high, 1
+  moderate). pip-audit stays clean.
+- `tests/integration/live-stack.test.ts`: the password was `Integration-<base-36 time>-pass!`. On days
+  when the time has no digit, GoTrue's policy (letters and digits, Phase 3) refused it and all 19 tests
+  after sign-up failed. A fixed digit now.
+- Note: `npm run test:refresh` serves whatever `dist/` holds. Its two stale-deploy checks need a mock-mode
+  build (`VITE_DATA_MODE=mock npm run build`): with `.env.local` (api mode, signed out) `/app/billing`
+  redirects to sign-in before its file is requested. All 24 checks pass on a mock build.
+
+Phase 16 gate (all on the upgraded stack):
+- BE full suite **1081 passed, 2 skipped, 0 failed** (no backend change in P16-8).
+- FE typecheck ok; lint 0 errors (62 warnings, unchanged); **251/251** unit tests; `npm run build` ok;
+  `test:refresh` 24/24 (mock build).
+- Live, Docker stack: `security_probe.py` **70/70**; `npm run test:integration` **20/20**; the whole browser
+  suite `npm run test:e2e` **35/35 steps**: sign-up, chat, history, data, gallery, Explore, Predict,
+  assistant, reports, every dashboard feature, public links, a viewer colleague, exports, API keys,
+  webhooks, agents, tools, agreements, audit log, support, profile, billing, sign-out, sign-in. For these
+  runs only, GoTrue mailed to Mailpit and the API and worker used the echo AI provider; all restored and
+  checked afterwards.
+
+### 2026-11-26: Phase 17 ☑ ("only the keys are left" audit; P17-1 ⚠, P17-7 ⚠)
+Report: [KEYS_ONLY_AUDIT_2026-11.md](KEYS_ONLY_AUDIT_2026-11.md). The readiness report now links to it and
+no longer calls n8n optional.
+- P17-1 ⚠: the three example env files carried a real Gmail app password and the operator's address
+  (since `e709f6d`, pushed). They now carry placeholders, and the local example defaults to Mailpit.
+  `tests/test_env_examples.py` (8 tests; 7 fail on the old files). The production example also gained
+  `N8N_CREDENTIAL_*` and `SUPPORT_NOTIFICATION_EMAIL`. `test_production_template_and_compose_pass_single_host_validation`
+  filled the operator's keys and relied on the leaked password for `SMTP_PASSWORD`. It now fills that key
+  like the others, and validation is unchanged. History not rewritten. ⚠ **The operator revokes the app
+  password at Google.**
+- P17-3: `docker-compose.yml.backup` (a `service_role` JWT as a default value) removed.
+- P17-4: Supabase Auth reported `google: false, apple: false`, so the social buttons could not work.
+  - `compose.yaml` wires `GOTRUE_EXTERNAL_GOOGLE_*`/`APPLE_*` from `SUPABASE_GOOGLE_*`/`SUPABASE_APPLE_*`
+    (off by default; keys in both examples). Compose test added; `compose_config_check` ok on all three
+    stacks.
+  - The frontend shows a button, and the "or" divider, only for a provider `/auth/v1/settings` reports
+    enabled; mock mode shows both. 3 unit tests.
+  - Not verified live: no provider keys. The local stack picks up the new settings on its next
+    `make docker-up`; with no keys, nothing changes.
+- P17-5: `vercel.json` gained `X-Frame-Options: DENY`, a CSP with `frame-ancestors 'none'`, `object-src`,
+  `base-uri` and `form-action`, `nosniff`, referrer, permissions, COOP and HSTS. `/embed/` stays frameable,
+  as in nginx.
+  - `test:refresh` checks the headers: 25/25 on a mock build. With the old `vercel.json` the header check
+    fails.
+  - ⚠ After the next Vercel deploy, check them with `curl -I`.
+- P17-6: the migrate role runs `sync_stripe_prices --if-configured`.
+  - Without a key it does nothing. A Stripe failure warns and never blocks the deploy.
+  - A stored product id that the Stripe account does not have (test mode → live) is replaced.
+  - `tests/test_stripe_price_sync.py`: 6 tests.
+- P17-7 ⚠: Google's models and deprecations pages (read 2026-11-26) show the shipped defaults were shut
+  down or about to be:
+  - Imagen `:predict` (3.0 and 4) is shut down;
+  - `gemini-2.0-flash` is shut down;
+  - `gemini-2.5-flash` shuts down 2026-12-01.
+
+  What changed:
+  - Generation now uses `generateContent` with a Gemini image model, one call per image (aspect ratio,
+    negative prompt and seeds passed). An `imagen-*` name keeps the old path, and the existing test pins
+    it.
+  - Defaults: `gemini-3.8-flash` (chat), `gemini-3.1-flash-image` (generate and edit). Embeddings stay
+    `gemini-embedding-001` (served until 2028; changing it would need re-indexing). The image model label
+    is "Gemini" (id `imagen` kept for the frontend).
+  - `tests/test_gemini_image_generation.py`: 3 tests.
+  - ⚠ Not called live (no key). The operator's own env files may set these model keys; their values were
+    not read (G5).
+- Checked, no change needed:
+  - Django `check --deploy` with the full rendered production environment (fake keys, throwaway worktree)
+    shows no security warnings; its 6 warnings are drf-spectacular schema notes.
+  - `make prod-env` + `prod-check` require exactly the operator keys listed in the report.
+  - Every frontend `import.meta.env` key is in `.env.example` and the Dockerfile.
+  - Seeded AI rows follow `GEMINI_DEFAULT_MODEL`.
+- Left open (product decision): the connector OAuth `authorize` stub (no callback; no screen uses it).
+- Cleanup: the throwaway worktree (its generated env held the leaked password) and the scratch copies are
+  deleted.
+
+Phase 17 gate:
+- BE: `ruff check` and `ruff format --check` ok; `makemigrations --check` no changes. Full suite
+  (`-n 2 --create-db`): 1098 passed, 2 skipped, 1 failed. The failure was the template test above. After
+  the fix, its file passes, and the contract, image and Stripe files were rerun and pass.
+- Contract snapshot regenerated: 205 calls, unchanged, all resolve.
+- FE: typecheck ok; lint 0 errors (63 warnings: +1, a fast-refresh note for the new
+  `fetchEnabledProviders` export in `supabase.tsx`, like the 13 already there); 254/254 unit tests;
+  build ok; `test:refresh` 25/25.
+- i18n: the label "Gemini" was added to the brand names allowed untranslated, next to Imagen.
