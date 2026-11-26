@@ -247,3 +247,18 @@ def test_database_is_reachable_for_pgadmin_on_loopback_and_studio_is_gone():
     assert "supabase-studio" not in services and "supabase-meta" not in services
     assert "PG_META" not in (ROOT / "compose.yaml").read_text()
     assert "54322" in (ROOT / "scripts" / "prod_tunnel.sh").read_text()
+
+
+def test_social_sign_in_providers_are_off_until_their_keys_are_set():
+    auth = _compose("compose.yaml")["services"]["supabase-auth"]["environment"]
+    for provider in ("GOOGLE", "APPLE"):
+        prefix = f"GOTRUE_EXTERNAL_{provider}"
+        assert auth[f"{prefix}_ENABLED"] == f"${{SUPABASE_{provider}_ENABLED:-false}}"
+        assert auth[f"{prefix}_CLIENT_ID"] == f"${{SUPABASE_{provider}_CLIENT_ID:-}}"
+        assert auth[f"{prefix}_SECRET"] == f"${{SUPABASE_{provider}_SECRET:-}}"
+        assert auth[f"{prefix}_REDIRECT_URI"] == "${SUPABASE_PUBLIC_URL}/auth/v1/callback"
+    for template in (".env.docker.example", ".env.production.example"):
+        text = (ROOT / template).read_text()
+        for provider in ("GOOGLE", "APPLE"):
+            assert f"SUPABASE_{provider}_ENABLED=false\n" in text, template
+            assert re.search(rf"^SUPABASE_{provider}_SECRET=$", text, re.M), template

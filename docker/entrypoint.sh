@@ -63,6 +63,10 @@ case "$role" in
     fi
     python manage.py configure_asset_storage
     python manage.py ensure_kafka_topics --grow
+    # Stripe Products/Prices for the paid plans, once STRIPE_SECRET_KEY is set (idempotent). A Stripe
+    # outage must not block the deploy: checkout answers 503 until the next successful run.
+    python manage.py sync_stripe_prices --if-configured \
+      || echo "warning: sync_stripe_prices failed; checkout stays unavailable until it succeeds" >&2
     case "${DJANGO_SETTINGS_MODULE:-}" in
       *.staging|*.production) python manage.py verify_messaging --strict ;;
       *) python manage.py verify_messaging ;;

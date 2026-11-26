@@ -277,6 +277,21 @@ customer needs first.
 Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
 the Docker stack.
 
+## Phase 17: "Only the keys are left" audit ☑ (P17-1 ⚠, P17-7 ⚠) (added 2026-11-26, G1, BE + FE)
+
+Reason: the operator asks for a deep audit of both repositories to confirm that everything is set and only
+keys remain to be entered in the env files. Every finding that is not a key is fixed here or listed.
+
+| ID | Task | Acceptance |
+| --- | --- | --- |
+| P17-1 | **A real Gmail app password and the operator's address were committed** in `.env.example`, `.env.docker.example` and `.env.production.example` (since `e709f6d`, 2026-11-13; on `origin/main`). Replace them with placeholders (the local example defaults to Mailpit). History is not rewritten (G2): ⚠ the operator revokes that app password at Google and creates a new one only in `.env.docker`/`.env.production` | No personal value in any tracked file; a test fails if a real-looking SMTP password or a `@gmail.com` address returns to an example file |
+| P17-3 | **Stray `docker-compose.yml.backup`** in the repository root (400 lines, last changed 2026-10-14, referenced nowhere) with a Supabase `service_role` JWT as a default value. Removed (history keeps it) | File gone; nothing references it |
+| P17-4 | **"Sign in with Google/Apple" are shown but cannot work**: Supabase Auth (GoTrue) has no external providers configured in `compose.yaml` (`/auth/v1/settings` reports `google: false, apple: false`), so a click ends in "provider is not enabled". Wire `GOTRUE_EXTERNAL_GOOGLE_*`/`GOTRUE_EXTERNAL_APPLE_*` from env keys (off by default, G8), document the keys in the examples, and make the frontend show a provider button only when Supabase Auth reports it enabled | With the keys absent, no social button is shown in API mode; enabling a provider needs only its keys; compose test asserts the wiring; frontend unit test covers shown/hidden |
+| P17-5 | **The Vercel-hosted frontend sends no security headers**: `nginx.conf` (Docker image) sets CSP `frame-ancestors`, `X-Frame-Options: DENY`, `nosniff`, referrer and permissions policies, but `vercel.json` sets only caching, so every page on Vercel can be framed (clickjacking) and sniffed. Mirror the origin-independent headers in `vercel.json` (embeds under `/embed/` stay frameable, like nginx) plus HSTS | `npm run test:refresh` checks the headers and fails on the old `vercel.json` |
+| P17-6 | **Stripe checkout needs a manual command after the keys**: paid plans have no Stripe price until someone runs `manage.py sync_stripe_prices`; until then checkout answers 503. The migrate role runs it (`--if-configured`: nothing without a key; a Stripe failure warns, never blocks the deploy). A stored Product id the account does not have (test-mode id after switching to live keys) is replaced instead of reused | Tests: skipped without a key, every paid plan priced with one, other-mode product replaced, other Stripe errors still raise, entrypoint runs it non-fatally |
+| P17-7 | **The shipped Gemini defaults are shut down**: image generation used Imagen (`imagen-3.0-generate-002`, `:predict`), which Google has shut down in the Gemini API (Imagen 4 too, 2026-08-17); `gemini-2.5-flash` (chat default) shuts down 2026-12-01 and `gemini-2.0-flash` is already shut down (source: Google's models and deprecations pages, read 2026-11-26). Generate with a Gemini image model through `generateContent` (one call per image; an `imagen-*` name keeps the old path) and default to `gemini-3.8-flash` (chat) and `gemini-3.1-flash-image` (generate and edit). Embeddings stay `gemini-embedding-001` (served until 2028; changing it means re-indexing) | Tests: defaults are not shut-down models; generation calls `generateContent` per image with aspect ratio, negative prompt and seeds; the Imagen path still works when chosen. ⚠ Live call needs `GEMINI_API_KEY` |
+| P17-2 | **Audit report** `docs/KEYS_ONLY_AUDIT_2026-11.md`: what `make prod-env` generates, what the operator must enter (from a dry run of `prod-env` + `prod-check` in a throwaway worktree), every non-key finding and its state | File exists; every finding has evidence |
+
 ---
 
 ## Progress log
@@ -1176,3 +1191,68 @@ Phase 16 gate (all on the upgraded stack):
   webhooks, agents, tools, agreements, audit log, support, profile, billing, sign-out, sign-in. For these
   runs only, GoTrue mailed to Mailpit and the API and worker used the echo AI provider; all restored and
   checked afterwards.
+
+### 2026-11-26: Phase 17 ☑ ("only the keys are left" audit; P17-1 ⚠, P17-7 ⚠)
+Report: [KEYS_ONLY_AUDIT_2026-11.md](KEYS_ONLY_AUDIT_2026-11.md). The readiness report now links to it and
+no longer calls n8n optional.
+- P17-1 ⚠: the three example env files carried a real Gmail app password and the operator's address
+  (since `e709f6d`, pushed). They now carry placeholders, and the local example defaults to Mailpit.
+  `tests/test_env_examples.py` (8 tests; 7 fail on the old files). The production example also gained
+  `N8N_CREDENTIAL_*` and `SUPPORT_NOTIFICATION_EMAIL`. `test_production_template_and_compose_pass_single_host_validation`
+  filled the operator's keys and relied on the leaked password for `SMTP_PASSWORD`. It now fills that key
+  like the others, and validation is unchanged. History not rewritten. ⚠ **The operator revokes the app
+  password at Google.**
+- P17-3: `docker-compose.yml.backup` (a `service_role` JWT as a default value) removed.
+- P17-4: Supabase Auth reported `google: false, apple: false`, so the social buttons could not work.
+  - `compose.yaml` wires `GOTRUE_EXTERNAL_GOOGLE_*`/`APPLE_*` from `SUPABASE_GOOGLE_*`/`SUPABASE_APPLE_*`
+    (off by default; keys in both examples). Compose test added; `compose_config_check` ok on all three
+    stacks.
+  - The frontend shows a button, and the "or" divider, only for a provider `/auth/v1/settings` reports
+    enabled; mock mode shows both. 3 unit tests.
+  - Not verified live: no provider keys. The local stack picks up the new settings on its next
+    `make docker-up`; with no keys, nothing changes.
+- P17-5: `vercel.json` gained `X-Frame-Options: DENY`, a CSP with `frame-ancestors 'none'`, `object-src`,
+  `base-uri` and `form-action`, `nosniff`, referrer, permissions, COOP and HSTS. `/embed/` stays frameable,
+  as in nginx.
+  - `test:refresh` checks the headers: 25/25 on a mock build. With the old `vercel.json` the header check
+    fails.
+  - ⚠ After the next Vercel deploy, check them with `curl -I`.
+- P17-6: the migrate role runs `sync_stripe_prices --if-configured`.
+  - Without a key it does nothing. A Stripe failure warns and never blocks the deploy.
+  - A stored product id that the Stripe account does not have (test mode → live) is replaced.
+  - `tests/test_stripe_price_sync.py`: 6 tests.
+- P17-7 ⚠: Google's models and deprecations pages (read 2026-11-26) show the shipped defaults were shut
+  down or about to be:
+  - Imagen `:predict` (3.0 and 4) is shut down;
+  - `gemini-2.0-flash` is shut down;
+  - `gemini-2.5-flash` shuts down 2026-12-01.
+
+  What changed:
+  - Generation now uses `generateContent` with a Gemini image model, one call per image (aspect ratio,
+    negative prompt and seeds passed). An `imagen-*` name keeps the old path, and the existing test pins
+    it.
+  - Defaults: `gemini-3.8-flash` (chat), `gemini-3.1-flash-image` (generate and edit). Embeddings stay
+    `gemini-embedding-001` (served until 2028; changing it would need re-indexing). The image model label
+    is "Gemini" (id `imagen` kept for the frontend).
+  - `tests/test_gemini_image_generation.py`: 3 tests.
+  - ⚠ Not called live (no key). The operator's own env files may set these model keys; their values were
+    not read (G5).
+- Checked, no change needed:
+  - Django `check --deploy` with the full rendered production environment (fake keys, throwaway worktree)
+    shows no security warnings; its 6 warnings are drf-spectacular schema notes.
+  - `make prod-env` + `prod-check` require exactly the operator keys listed in the report.
+  - Every frontend `import.meta.env` key is in `.env.example` and the Dockerfile.
+  - Seeded AI rows follow `GEMINI_DEFAULT_MODEL`.
+- Left open (product decision): the connector OAuth `authorize` stub (no callback; no screen uses it).
+- Cleanup: the throwaway worktree (its generated env held the leaked password) and the scratch copies are
+  deleted.
+
+Phase 17 gate:
+- BE: `ruff check` and `ruff format --check` ok; `makemigrations --check` no changes. Full suite
+  (`-n 2 --create-db`): 1098 passed, 2 skipped, 1 failed. The failure was the template test above. After
+  the fix, its file passes, and the contract, image and Stripe files were rerun and pass.
+- Contract snapshot regenerated: 205 calls, unchanged, all resolve.
+- FE: typecheck ok; lint 0 errors (63 warnings: +1, a fast-refresh note for the new
+  `fetchEnabledProviders` export in `supabase.tsx`, like the 13 already there); 254/254 unit tests;
+  build ok; `test:refresh` 25/25.
+- i18n: the label "Gemini" was added to the brand names allowed untranslated, next to Imagen.

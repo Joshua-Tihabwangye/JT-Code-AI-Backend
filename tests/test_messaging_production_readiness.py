@@ -391,7 +391,8 @@ def _single_host_env() -> dict[str, str]:
     # Fill only what an operator must fill: values validation requires and values the compose
     # file refuses to start without (${VAR:?...}). Optional integrations stay empty, as in reality.
     required = {*_REQUIRED_STRICT, *re.findall(r"\$\{(\w+):\?", compose_text), "GEMINI_API_KEY"}
-    required |= {"TOOL_CREDENTIALS_ENCRYPTION_KEYS"}
+    # SMTP_PASSWORD: validation requires it in production, and the example carries none (P17-1).
+    required |= {"TOOL_CREDENTIALS_ENCRYPTION_KEYS", "SMTP_PASSWORD"}
     env = {}
     for line in (ROOT / ".env.production.example").read_text().splitlines():
         if line and not line.startswith("#") and "=" in line:

@@ -583,11 +583,12 @@ AI_RETRY_MAX_BACKOFF_SECONDS = env_float("AI_RETRY_MAX_BACKOFF_SECONDS", 8.0)
 AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS = int(env("AI_CIRCUIT_BREAKER_COOLDOWN_SECONDS", "30"))
 # Gemini (Generative Language REST API).
 GEMINI_API_BASE = env("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
-GEMINI_DEFAULT_MODEL = env("GEMINI_DEFAULT_MODEL", "gemini-2.5-flash")
-# Images: Imagen generates, a Gemini image model edits, the chat model describes.
+GEMINI_DEFAULT_MODEL = env("GEMINI_DEFAULT_MODEL", "gemini-3.8-flash")
+# Images: a Gemini image model generates and edits, the chat model describes. An ``imagen-*``
+# GEMINI_IMAGE_MODEL uses the legacy Imagen :predict API (shut down in the Gemini API in 2026).
 IMAGE_PROVIDER = env("IMAGE_PROVIDER")  # "gemini" (default) or "echo" (development/tests only)
-GEMINI_IMAGE_MODEL = env("GEMINI_IMAGE_MODEL", "imagen-3.0-generate-002")
-GEMINI_IMAGE_EDIT_MODEL = env("GEMINI_IMAGE_EDIT_MODEL", "gemini-2.5-flash-image")
+GEMINI_IMAGE_MODEL = env("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+GEMINI_IMAGE_EDIT_MODEL = env("GEMINI_IMAGE_EDIT_MODEL", "gemini-3.1-flash-image")
 GEMINI_SAFETY_THRESHOLD = env("GEMINI_SAFETY_THRESHOLD", "BLOCK_MEDIUM_AND_ABOVE")
 # Llama via any hosted or self-hosted OpenAI-compatible endpoint.
 LLAMA_API_BASE = env("LLAMA_API_BASE")

@@ -1,4 +1,4 @@
-# Production readiness (updated 2026-11-26, after Phase 16)
+# Production readiness (updated 2026-11-26, after Phase 16; Phase 17 audit: [KEYS_ONLY_AUDIT_2026-11.md](KEYS_ONLY_AUDIT_2026-11.md))
 
 The operator's bar for deploying is **95 %**. This report scores each area against evidence gathered on
 this machine in Phases 15 and 16 (backlog and progress log: [EXECUTION_BACKLOG.md](EXECUTION_BACKLOG.md)).
@@ -98,7 +98,7 @@ Not built:
 | Payments | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PUBLISHABLE_KEY` (live keys in production) |
 | E-mail (Auth mail, support notifications) | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`; `SUPPORT_NOTIFICATION_EMAIL` (your support inbox) |
 | Errors and tracing | `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE`; frontend `VITE_SENTRY_DSN`, `VITE_SENTRY_ENVIRONMENT` |
-| Workflows (optional; needed for scheduled automations) | `N8N_BASE_URL`, `N8N_WEBHOOK_BASE_URL`, `N8N_CALLBACK_BASE_URL`, `N8N_API_KEY`, `N8N_DISPATCH_SECRET`, `N8N_WEBHOOK_SECRET`, `N8N_SENTRY_RELAY_SECRET` |
+| Workflows (required: production validation needs `N8N_API_KEY`; n8n is a separate deployment, see [infra/n8n/README.md](../infra/n8n/README.md)) | `N8N_BASE_URL`, `N8N_WEBHOOK_BASE_URL`, `N8N_CALLBACK_BASE_URL`, `N8N_API_KEY`, `N8N_DISPATCH_SECRET`, `N8N_WEBHOOK_SECRET`, `N8N_SENTRY_RELAY_SECRET` (generated), `N8N_CREDENTIAL_*` |
 | Webhook automations | `WEBHOOK_ALLOWED_HOSTS`: the hosts automations may call |
 | Domains | `APP_DOMAIN`, `FRONTEND_URL`, `SUPABASE_PUBLIC_URL`; frontend `VITE_API_BASE_URL` (full URL on Vercel), `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` |
 
@@ -114,7 +114,7 @@ New settings with safe defaults: `API_KEY_MAX_RATE_LIMIT` (10000), `WEBHOOK_MAX_
 3. Backups: confirm the nightly `make prod-backup` runs and an off-host copy exists; run
    `make prod-restore-check` once (restore drill).
 4. Load test: `loadtests/` against the server; record the result in `docs/CAPACITY_PLAN.md`.
-5. Stripe: register the webhook endpoint; send a test event.
+5. Stripe: register the webhook endpoint; send a test event. Prices are created by the deploy (P17-6).
 6. Grant staff access (`is_staff`) to the people who answer support cases in the Django admin.
 
 ### Local machine notes
