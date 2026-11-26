@@ -254,7 +254,7 @@ fixes what the verification finds; new screens for API-only features are scoped 
 
 Gate: BE-gate (full suite) + FE-gate + build; `scripts/system_check.py` on the live stack.
 
-## Phase 16: Screens for API-only features; dependency majors (added 2026-11-23, G1, BE + FE)
+## Phase 16: Screens for API-only features; dependency majors ☑ (added 2026-11-23, G1, BE + FE)
 
 Reason: P15-4 found 268 of 432 operations without a frontend caller. About 80 are server-to-server or
 operator-only by design. The others are user features with no screen, and the operator asks for every
@@ -272,7 +272,7 @@ customer needs first.
 | P16-7 ☑ | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
 | P16-9 ☑ | **Supabase gateway re-resolves its upstreams.** Found 2026-11-25 during the P16-6 browser check: after `supabase-auth` was recreated, the gateway answered **502** to every `/auth/v1` call (sign-up and sign-in down) until the gateway restarted. nginx resolved `proxy_pass http://supabase-auth:9999/` once at start and kept the old container IP. Fix: Docker's resolver (`127.0.0.11`, 10 s) and variable upstreams; the path comes from `$request_uri` through `map`, so the client's encoding (e.g. `%2F` in storage object names) is passed through unchanged | `test_gateway_hardening` asserts no literal upstream host; live: recreate `supabase-auth`, auth answers without restarting the gateway |
 | P16-10 ☑ | **API leaks file descriptors (outage within hours).** Found 2026-11-25 by a live probe that answered 500 with `OSError: [Errno 24] Too many open files`. One uvicorn worker held 1023/1024 descriptors: 759 Redis sockets and 237 epoll pollers. Even idle, a worker gained about one descriptor per Docker health probe (every 15 s). Causes: (1) the readiness probe opened a Celery broker connection and never closed it (a socket and an epoll poller each time); (2) under ASGI Django creates a cache object per request context, and the stock `RedisCache` built a new connection pool for each and never closed it. Neither was collected under uvicorn. Fix: close the probe's connection (context manager, 3 s timeout); `apps.core.cache.SharedPoolRedisCache` shares pools per process; the chat stream closes its Redis subscription even when one step fails | Tests for each; live: worker descriptors stay flat while idle |
-| P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
+| P16-8 ☑ | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
 
 Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
 the Docker stack.
@@ -1148,3 +1148,31 @@ fixed: the Kafka readiness test's stand-in broker was not a context manager, and
 could not read a computed approve/reject path (now two literal paths). Ruff ok (493 files);
 `makemigrations --check` no changes; contract 205 calls green. FE typecheck ok; lint 0 errors (62
 warnings, unchanged); 251/251 tests.
+
+### 2026-11-26: Phase 16, P16-8 ☑ (dependency majors) and Phase 16 closed
+- zod 3 → 4.6.7 (high: memory exhaustion validating oversized collections). `src/lib/config.ts`: the
+  conditional `.merge` no longer typed under zod 4. It is now one schema with optional Supabase fields and
+  a refinement that requires them in api mode (same behaviour).
+- vitest 3 → 5.1.2 (critical: tinypool, @vitest/mocker). The test setup's `ResizeObserver`/`IntersectionObserver`
+  stubs were arrow-function mocks, which vitest 4+ cannot construct; now one stub class. Vitest 5 no longer
+  brings Node's types, so `tsconfig.app.json` names `node` for the test files.
+- puppeteer-core 23 → 25.19.0 (high: extract-zip, basic-ftp, proxy chain). Launch options unchanged.
+- `npm audit`: **0 vulnerabilities**, development tools included (12 before: 2 critical, 9 high, 1
+  moderate). pip-audit stays clean.
+- `tests/integration/live-stack.test.ts`: the password was `Integration-<base-36 time>-pass!`. On days
+  when the time has no digit, GoTrue's policy (letters and digits, Phase 3) refused it and all 19 tests
+  after sign-up failed. A fixed digit now.
+- Note: `npm run test:refresh` serves whatever `dist/` holds. Its two stale-deploy checks need a mock-mode
+  build (`VITE_DATA_MODE=mock npm run build`): with `.env.local` (api mode, signed out) `/app/billing`
+  redirects to sign-in before its file is requested. All 24 checks pass on a mock build.
+
+Phase 16 gate (all on the upgraded stack):
+- BE full suite **1081 passed, 2 skipped, 0 failed** (no backend change in P16-8).
+- FE typecheck ok; lint 0 errors (62 warnings, unchanged); **251/251** unit tests; `npm run build` ok;
+  `test:refresh` 24/24 (mock build).
+- Live, Docker stack: `security_probe.py` **70/70**; `npm run test:integration` **20/20**; the whole browser
+  suite `npm run test:e2e` **35/35 steps**: sign-up, chat, history, data, gallery, Explore, Predict,
+  assistant, reports, every dashboard feature, public links, a viewer colleague, exports, API keys,
+  webhooks, agents, tools, agreements, audit log, support, profile, billing, sign-out, sign-in. For these
+  runs only, GoTrue mailed to Mailpit and the API and worker used the echo AI provider; all restored and
+  checked afterwards.
