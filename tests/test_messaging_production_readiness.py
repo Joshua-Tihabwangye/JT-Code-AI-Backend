@@ -261,8 +261,18 @@ def test_validation_enforces_kafka_durability(monkeypatch, replicas, insync, exp
 @pytest.mark.django_db
 def test_kafka_outage_is_reported_but_keeps_api_pods_ready(client, settings, monkeypatch):
     settings.HEALTHCHECK_EXTERNAL_DEPENDENCIES = True
-    broker = SimpleNamespace(ensure_connection=lambda **_: None)
-    monkeypatch.setattr("apps.core.views.current_app", SimpleNamespace(connection_for_read=lambda: broker))
+
+    class Broker:  # the probe opens and closes the connection (a context manager)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def ensure_connection(self, **_):
+            return None
+
+    monkeypatch.setattr("apps.core.views.current_app", SimpleNamespace(connection_for_read=Broker))
 
     class DownAdmin:
         def __init__(self, config):

@@ -269,8 +269,9 @@ customer needs first.
 | P16-4 ☑ | **Settings → Audit log** (admins; filters; CSV export). Found 2026-11-24: a malformed `actor` filter or an impossible date answered 500; a date-only `end_date` dropped that day's own events (`parse_datetime` reads a bare date as midnight); the list never returned `outcome`. | BE tests (G9); repository + screen + unit tests; contract snapshot; live check |
 | P16-5 ☑ | **Consents: personal and tamper-proof; "Your agreements" in Profile.** Found 2026-11-25: consent records are personal, but the API scoped them to the workspace, so any editor could list, change or **delete** other members' records, while viewers could not read their own. Records are legal evidence and could be deleted. Terms/privacy could be "withdrawn" through `PATCH` without deleting the account. The client supplied the IP and user agent. Nothing acts on the optional consents (marketing, analytics, AI training, third-party), so no switches are added for them (they would promise what the system does not do). Backend: own records only, any role; no `DELETE`/`PUT`; terms/privacy are recorded at sign-up and not withdrawn here (409: delete the account); the server records IP and user agent; withdrawal stamps `withdrawn_at`. Frontend: a read-only "Your agreements" section in Profile | BE tests (G9); repository + section + unit tests; contract snapshot; live check |
 | P16-6 ☑ | **Automations, agents and agent runs** (list, create, run, history) | Same |
-| P16-7 | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
+| P16-7 ☑ | **Tools and MCP** (servers, tool credentials, policies, approvals queue) and **prompts** | Same |
 | P16-9 ☑ | **Supabase gateway re-resolves its upstreams.** Found 2026-11-25 during the P16-6 browser check: after `supabase-auth` was recreated, the gateway answered **502** to every `/auth/v1` call (sign-up and sign-in down) until the gateway restarted. nginx resolved `proxy_pass http://supabase-auth:9999/` once at start and kept the old container IP. Fix: Docker's resolver (`127.0.0.11`, 10 s) and variable upstreams; the path comes from `$request_uri` through `map`, so the client's encoding (e.g. `%2F` in storage object names) is passed through unchanged | `test_gateway_hardening` asserts no literal upstream host; live: recreate `supabase-auth`, auth answers without restarting the gateway |
+| P16-10 ☑ | **API leaks file descriptors (outage within hours).** Found 2026-11-25 by a live probe that answered 500 with `OSError: [Errno 24] Too many open files`. One uvicorn worker held 1023/1024 descriptors: 759 Redis sockets and 237 epoll pollers. Even idle, a worker gained about one descriptor per Docker health probe (every 15 s). Causes: (1) the readiness probe opened a Celery broker connection and never closed it (a socket and an epoll poller each time); (2) under ASGI Django creates a cache object per request context, and the stock `RedisCache` built a new connection pool for each and never closed it. Neither was collected under uvicorn. Fix: close the probe's connection (context manager, 3 s timeout); `apps.core.cache.SharedPoolRedisCache` shares pools per process; the chat stream closes its Redis subscription even when one step fails | Tests for each; live: worker descriptors stay flat while idle |
 | P16-8 | **Dependency majors:** zod 4, vitest 5, puppeteer-core 25 | `npm audit` 0 high/critical; FE-gate, `test:e2e` |
 
 Gate: FE-gate + build; BE-gate for any API change; `npm run test:integration` and `npm run test:e2e` on
@@ -1101,3 +1102,49 @@ unchanged); 247/247 tests.
 
 Note: a first full run died at 60 % when earlyoom killed VS Code processes (the operator's editor) on
 this 7 GB machine: 3 test workers plus the Docker stack. Full runs now use `-n 2`.
+
+### 2026-11-25: Phase 16, P16-7 ☑ (tools and MCP) and P16-10 ☑ (file descriptor leak)
+P16-7. The tools API needed no change: the catalogue per role, approvals decided by editors and admins,
+MCP servers only on public HTTPS (the egress rules), credentials encrypted, write-only and scoped to
+their workspace, and management admin-only. Frontend: Agents → Tools (`?tab=tools`):
+- approvals waiting for a decision (tool, summary, arguments, an optional note; approve or reject;
+  refreshed every 15 s);
+- the tool catalogue (which tools ask for approval or need a higher role);
+- for admins, MCP servers (connect, find tools, allow tools one by one, remove) and credentials
+  (provider, name, secret: shown never again; remove); for other members, an admin-only note.
+
+`ToolsRepository` in API and mock modes; texts in 20 languages. "List tools" became "Find tools": it
+translated as a noun ("tools of list"). The browser check found that a credential's name must be a slug
+(the server refused "E2E credential …"), so the form now sends the name as a slug and says so.
+
+Prompts were not given a screen: nothing in the code reads stored prompts (no agent, chat or job uses
+them), so a prompt library would be a feature that does nothing. The API stays.
+
+P16-10. A probe for P16-7 (an MCP server on 10.0.0.5) answered 500 with `OSError: [Errno 24] Too many open
+files`. One API worker held 1023 of 1024 descriptors: 759 Redis sockets and 237 epoll pollers. Idle, a
+worker gained about one descriptor per Docker health probe (every 15 s): an outage within hours in
+production, once every request failed. In-process tests did not show it, because they collect garbage
+explicitly; under uvicorn the dropped objects were not collected. Measured per process with `nsenter`/`ss`:
+- the readiness probe's Celery broker connection (`connection_for_read().ensure_connection()`) was never
+  closed: one broker socket and one epoll poller per probe. Now a context manager with a 3 s timeout;
+- under ASGI Django creates a cache object per request context, and the stock `RedisCache` built a new
+  connection pool for each and never closed it. `apps.core.cache.SharedPoolRedisCache` shares the pools
+  per process (redis-py pools are thread-safe and reset after a fork); `base.py` uses it;
+- the chat SSE stream now closes its Redis subscription and client even when one step fails.
+
+Live, after the fix: 16 health probes over 4 idle minutes left both workers at exactly 29 descriptors, 1
+Redis socket and 1 epoll each (before: +6 Redis sockets and +2 epoll every 2 minutes). After the full probe
+run: 34–36 descriptors per worker. Tests: `test_readiness_closes_the_broker_connection_it_opens` (fails
+without the fix) and `tests/test_shared_redis_cache.py` (3; the stock backend makes a pool per cache object,
+the new one exactly one).
+
+Tests and checks: FE Tools tab (4); 251/251 overall. Live: `security_probe.py` **70/70** (6 tools probes:
+the catalogue; MCP on loopback and on a private network refused; a credential stored, its secret never
+returned nor visible to another workspace). Browser: the Tools tab lists the catalogue and stores a
+credential whose secret does not appear on the page.
+
+Gate: BE full suite **1081 passed, 2 skipped, 0 failed** (`-n 2`). The first run caught two things, both
+fixed: the Kafka readiness test's stand-in broker was not a context manager, and the contract extractor
+could not read a computed approve/reject path (now two literal paths). Ruff ok (493 files);
+`makemigrations --check` no changes; contract 205 calls green. FE typecheck ok; lint 0 errors (62
+warnings, unchanged); 251/251 tests.

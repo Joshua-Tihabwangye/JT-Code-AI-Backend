@@ -18,6 +18,7 @@ penetration-surface table, run from outside the way an attacker would.
 * **Audit log:** admins read it; malformed filters are 400; the CSV export is scoped to the workspace.
 * **Consents:** personal, never deleted; terms are not created or withdrawn through the API.
 * **Agents:** runs need an idempotency key and stay in their workspace; automations answer cleanly.
+* **Tools:** MCP servers only on public HTTPS; credential secrets never returned or shared.
 * **Gateway:** ``/rest/v1`` and ``/auth/v1/admin`` are closed on the public port.
 * **Auth abuse:** a weak password is refused by GoTrue; repeated wrong-password sign-ins from one IP
   hit a rate limit.
@@ -374,6 +375,30 @@ def main() -> int:
         status in (201, 403),
         str(status),
     )
+
+    # --- Agent tools
+    print("tools")
+    status = http("GET", f"{API}/tools/", headers=auth_a)[0]
+    probe("a member reads the tool catalogue", status == 200, str(status))
+    for label, url in (("loopback", "https://localhost/mcp"), ("private network", "https://10.0.0.5/mcp")):
+        status = http(
+            "POST", f"{API}/mcp/servers/", {"name": "probe", "slug": f"p-{run}", "url": url}, auth_a
+        )[0]
+        probe(f"an MCP server on a {label} address is refused", status == 400, str(status))
+    status, _, credential = http(
+        "POST",
+        f"{API}/tool-credentials/",
+        {"provider": "mcp", "name": f"probe-{run}", "secret": f"s3cret-{run}"},
+        auth_a,
+    )
+    probe(
+        "a credential is stored and its secret never returned",
+        status == 201 and f"s3cret-{run}" not in json.dumps(credential),
+    )
+    listed = http("GET", f"{API}/tool-credentials/", headers=auth_a)[2]
+    probe("listing credentials never returns a secret", f"s3cret-{run}" not in json.dumps(listed))
+    listed_b = http("GET", f"{API}/tool-credentials/", headers=auth_b)[2]
+    probe("another workspace does not see the credential", f"probe-{run}" not in json.dumps(listed_b))
 
     # --- Gateway
     print("gateway")

@@ -383,6 +383,26 @@
     },
     {
       "method": "GET",
+      "path": "/mcp/servers/"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/mcp/servers/{param}/"
+    },
+    {
+      "method": "PATCH",
+      "path": "/mcp/servers/{param}/"
+    },
+    {
+      "method": "POST",
+      "path": "/mcp/servers/{param}/discover/"
+    },
+    {
+      "method": "GET",
       "path": "/organizations/"
     },
     {
@@ -460,6 +480,26 @@
     {
       "method": "POST",
       "path": "/support-cases/{param}/messages/"
+    },
+    {
+      "method": "GET",
+      "path": "/tool-approvals/"
+    },
+    {
+      "method": "GET",
+      "path": "/tool-credentials/"
+    },
+    {
+      "method": "POST",
+      "path": "/tool-credentials/"
+    },
+    {
+      "method": "DELETE",
+      "path": "/tool-credentials/{param}/"
+    },
+    {
+      "method": "GET",
+      "path": "/tools/"
     },
     {
       "method": "GET",

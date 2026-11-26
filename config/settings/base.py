@@ -157,7 +157,7 @@ def runtime_connection_settings(
 
     def redis_cache(key_prefix: str, timeout: int) -> dict[str, Any]:
         return {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "BACKEND": "apps.core.cache.SharedPoolRedisCache",
             "LOCATION": redis_url,
             "TIMEOUT": timeout,
             "OPTIONS": {"socket_connect_timeout": 3, "socket_timeout": 3},
